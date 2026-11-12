@@ -119,6 +119,10 @@ export const useSessionLifecycleMutation: {
   2,
   useSessionLifecycleMutationBody,
 );
+/**
+ * The sidebar lists other projects' conversations, so a change names its project as well as its
+ * session; the dual form takes the holder first and the project at the change site.
+ */
 function useSessionLifecycleMutationBody(projectId: string, holder: () => string) {
   const client = useQueryClient();
   return useMutation<

@@ -29,6 +29,7 @@ import {
 } from "./queries/mutations/project";
 import {
   useAgentsQuery,
+  useAllProjectSessions,
   useProjectSessionsQuery,
   useSkillsQuery,
   useWorkingSessions,
@@ -200,10 +201,24 @@ export function App() {
   const hideProjectMutation = useHideProjectMutation();
   const restoreProjectMutation = useRestoreProjectMutation();
   const createSessionMutation = useCreateSessionMutation(projectId ?? "");
-  const lifecycleMutation = useSessionLifecycleMutation(projectId ?? "", pageHolder);
+  const lifecycleMutation = useSessionLifecycleMutation(pageHolder);
   const sessionsQuery = useProjectSessionsQuery(projectId);
   const sessions = sessionsQuery.data?.active ?? [];
-  const archived = sessionsQuery.data?.archived ?? [];
+  /** One group per listed project: its conversations, read with each project's own query key. */
+  const groups = useAllProjectSessions(
+    projects.map((project) => ({ id: project.id, name: project.name })),
+  );
+  // No group yet means nothing to show: either everything is still loading, or a read failed.
+  // The selected project's own read leads the loading and failure states, as it did before.
+  const sessionsLoading =
+    groups.length === 0 && (sessionsQuery.isPending || projectsQuery.isPending);
+  const sessionsFailed =
+    groups.length === 0 &&
+    (sessionsQuery.isError || (projectsQuery.isSuccess && projects.length > 0));
+  const retrySessions = () => {
+    void sessionsQuery.refetch();
+    void projectsQuery.refetch();
+  };
   const working = useWorkingSessions(projectId);
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const [projectError, setProjectError] = useState<string | null>(null);
@@ -323,64 +338,63 @@ export function App() {
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const archiveSession = (id: string) =>
+  const archiveSession = (rowProjectId: string, id: string) =>
     runUiEffect(
       Effect.gen(function* () {
-        if (!isTruthy(projectId)) return;
-        return yield* Effect.gen(function* () {
-          const result = yield* uiPromise(() =>
-            lifecycleMutation.mutateAsync(SessionLifecycleChange.archive({ sessionId: id })),
-          );
-          if (!Predicate.isTagged(result, "completed")) return refreshPendingLifecycle(result);
-          setArchiveError(null);
-          const remaining = sessions.filter((item) => item.id !== id);
-          if (sessionId === id) void setLocation({ session: remaining[0]?.id ?? null });
-        }).pipe(
-          Effect.catchTag("UnknownError", (failure) =>
-            Effect.sync(() => setArchiveError(archiveErrorMessage(refusalOf(failure.cause)))),
+        const result = yield* uiPromise(() =>
+          lifecycleMutation(rowProjectId).mutateAsync(
+            SessionLifecycleChange.archive({ sessionId: id }),
           ),
         );
-      }),
+        if (!Predicate.isTagged(result, "completed")) return refreshPendingLifecycle(result);
+        setArchiveError(null);
+        const remaining = sessions.filter((item) => item.id !== id);
+        if (projectId === rowProjectId && sessionId === id)
+          void setLocation({ session: remaining[0]?.id ?? null });
+      }).pipe(
+        Effect.catchTag("UnknownError", (failure) =>
+          Effect.sync(() => setArchiveError(archiveErrorMessage(refusalOf(failure.cause)))),
+        ),
+      ),
     );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const deleteSession = (id: string) =>
+  const deleteSession = (rowProjectId: string, id: string) =>
     runUiEffect(
       Effect.gen(function* () {
-        if (!isTruthy(projectId)) return;
-        return yield* Effect.gen(function* () {
-          const result = yield* uiPromise(() =>
-            lifecycleMutation.mutateAsync(SessionLifecycleChange.delete({ sessionId: id })),
-          );
-          if (!Predicate.isTagged(result, "completed")) return refreshPendingLifecycle(result);
-          setArchiveError(null);
-          const remaining = sessions.filter((item) => item.id !== id);
-          if (sessionId === id) void setLocation({ session: remaining[0]?.id ?? null });
-        }).pipe(
-          Effect.catchTag("UnknownError", (failure) =>
-            Effect.sync(() => setArchiveError(archiveErrorMessage(refusalOf(failure.cause)))),
+        const result = yield* uiPromise(() =>
+          lifecycleMutation(rowProjectId).mutateAsync(
+            SessionLifecycleChange.delete({ sessionId: id }),
           ),
         );
-      }),
+        if (!Predicate.isTagged(result, "completed")) return refreshPendingLifecycle(result);
+        setArchiveError(null);
+        const remaining = sessions.filter((item) => item.id !== id);
+        if (projectId === rowProjectId && sessionId === id)
+          void setLocation({ session: remaining[0]?.id ?? null });
+      }).pipe(
+        Effect.catchTag("UnknownError", (failure) =>
+          Effect.sync(() => setArchiveError(archiveErrorMessage(refusalOf(failure.cause)))),
+        ),
+      ),
     );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const restoreSession = (id: string) =>
+  const restoreSession = (rowProjectId: string, id: string) =>
     runUiEffect(
       Effect.gen(function* () {
-        if (!isTruthy(projectId)) return;
-        return yield* Effect.gen(function* () {
-          const result = yield* uiPromise(() =>
-            lifecycleMutation.mutateAsync(SessionLifecycleChange.restore({ sessionId: id })),
-          );
-          if (!Predicate.isTagged(result, "completed")) return refreshPendingLifecycle(result);
-          setArchiveError(null);
-        }).pipe(
-          Effect.catchTag("UnknownError", (failure) =>
-            Effect.sync(() => setArchiveError(archiveErrorMessage(refusalOf(failure.cause)))),
+        const result = yield* uiPromise(() =>
+          lifecycleMutation(rowProjectId).mutateAsync(
+            SessionLifecycleChange.restore({ sessionId: id }),
           ),
         );
-      }),
+        if (!Predicate.isTagged(result, "completed")) return refreshPendingLifecycle(result);
+        setArchiveError(null);
+      }).pipe(
+        Effect.catchTag("UnknownError", (failure) =>
+          Effect.sync(() => setArchiveError(archiveErrorMessage(refusalOf(failure.cause)))),
+        ),
+      ),
     );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -761,20 +775,19 @@ export function App() {
             )}
             {projectId && (
               <SessionSection
-                sessions={sessions}
-                archived={archived}
+                groups={groups}
                 answering={working.answering}
                 boardRunning={working.boardRunning}
-                loading={sessionsQuery.isPending}
-                failed={sessionsQuery.isError}
-                onRetry={() => void sessionsQuery.refetch()}
+                loading={sessionsLoading}
+                failed={sessionsFailed}
+                onRetry={retrySessions}
                 projectId={projectId}
                 sessionId={sessionId}
                 archiveError={archiveError}
                 onCreate={(agent) => void createSession(agent)}
-                onArchive={(id) => void archiveSession(id)}
-                onDelete={(id) => void deleteSession(id)}
-                onRestore={(id) => void restoreSession(id)}
+                onArchive={archiveSession}
+                onDelete={deleteSession}
+                onRestore={restoreSession}
                 agents={slashAgents}
               />
             )}

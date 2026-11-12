@@ -656,6 +656,232 @@ const shownIn = (filter: PlaceFilter) => (session: Session) =>
     place: ({ place }) => sessionPlace(session) === place,
   });
 
+/** Conversations at work lead their project's group: answering, or running their board. */
+const working = (
+  session: Session,
+  answering: ReadonlySet<string>,
+  boardRunning: ReadonlySet<string>,
+) => answering.has(session.id) || boardRunning.has(session.id);
+
+/**
+ * One project's part of the conversation list: its header, place filter, groups and archive.
+ * The caller only mounts it for projects worth showing: with conversations, or selected.
+ */
+function ProjectSessionGroup({
+  group,
+  selected,
+  answering,
+  boardRunning,
+  label,
+  row,
+  onRestore,
+  onDeleteAsk,
+}: {
+  group: {
+    readonly projectId: string;
+    readonly name: string;
+    readonly sessions: ReadonlyArray<Session>;
+    readonly archived: ReadonlyArray<Session>;
+  };
+  /** The project whose page is open; its group is the one open, and the only one without rows. */
+  readonly selected: boolean;
+  readonly answering: ReadonlySet<string>;
+  readonly boardRunning: ReadonlySet<string>;
+  readonly label: (session: Session) => string;
+  readonly row: (session: Session) => React.ReactNode;
+  /** Puts an archived conversation back in the list, in its own project. */
+  readonly onRestore: (projectId: string, sessionId: string) => void;
+  /** Asks before deleting the conversation's source record. */
+  readonly onDeleteAsk: (ask: { readonly session: Session; readonly open: boolean }) => void;
+}) {
+  const { t } = useLingui();
+  const [placeValue, setPlaceValue] = useState(everyPlace);
+  const places = [
+    ...new Set(group.sessions.flatMap((session) => sessionPlace(session) ?? [])),
+  ].toSorted();
+  const filter = placeFilterOf(placeValue, places);
+  const shown = group.sessions.filter(shownIn(filter));
+  const atWork = shown.filter((session) => working(session, answering, boardRunning));
+  const rest = shown.filter((session) => !working(session, answering, boardRunning));
+  const everywhere = PlaceFilter.$is("all")(filter);
+  const everyPlaceLabel = t({
+    message: "모든 작업 위치",
+    comment: "Place filter option: conversations from every branch and worktree",
+  });
+  const checkoutLabel = t({
+    message: "저장소 본체",
+    comment: "Place filter option: conversations in the repository checkout, not a worktree",
+  });
+  const placeLabel = PlaceFilter.$match(filter, {
+    all: () => everyPlaceLabel,
+    checkout: () => checkoutLabel,
+    place: ({ place }) => place,
+  });
+  return (
+    <SidebarGroup>
+      <Collapsible defaultOpen={selected}>
+        <CollapsibleTrigger
+          className="group sticky top-0 z-10 flex h-8 w-full items-center gap-1 rounded-md bg-sidebar px-2 text-xs font-semibold text-foreground outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+          title={group.name}
+        >
+          <ChevronRightIcon className="size-3.5 shrink-0 transition-transform group-data-panel-open:rotate-90" />
+          <span className="min-w-0 flex-1 truncate text-left">{group.name}</span>
+          {selected && <Badge variant="secondary">{t`사용 중`}</Badge>}
+        </CollapsibleTrigger>
+        <CollapsibleContent className="flex flex-col gap-0.5">
+          {group.sessions.length === 0 ? (
+            <p className="px-4 py-2 text-xs text-muted-foreground">
+              <Trans>아직 대화가 없습니다.</Trans>
+            </p>
+          ) : (
+            <>
+              {places.length > 0 && (
+                <div className="px-2 py-1">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          variant={everywhere ? "ghost-muted" : "secondary"}
+                          size="sm"
+                          className="w-full justify-start"
+                          aria-label={t({
+                            message: `작업 위치: ${placeLabel}`,
+                            comment:
+                              "Place filter button; placeLabel is the branch or worktree shown",
+                          })}
+                          title={t({
+                            message: `작업 위치: ${placeLabel}`,
+                            comment:
+                              "Place filter button; placeLabel is the branch or worktree shown",
+                          })}
+                        />
+                      }
+                    >
+                      <GitBranchIcon />
+                      <span className="min-w-0 flex-1 truncate text-left">{placeLabel}</span>
+                      <ChevronDownIcon className="text-muted-foreground" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-64">
+                      <DropdownMenuGroup>
+                        <DropdownMenuLabel>
+                          <Trans comment="Place filter menu heading: a branch or worktree">
+                            작업 위치
+                          </Trans>
+                        </DropdownMenuLabel>
+                        <DropdownMenuRadioGroup
+                          value={placeValue}
+                          onValueChange={(value: string) => setPlaceValue(value)}
+                        >
+                          <DropdownMenuRadioItem value={everyPlace}>
+                            {everyPlaceLabel}
+                          </DropdownMenuRadioItem>
+                          <DropdownMenuRadioItem value={checkoutPlace}>
+                            {checkoutLabel}
+                          </DropdownMenuRadioItem>
+                          {places.map((place) => (
+                            <DropdownMenuRadioItem key={place} value={place} title={place}>
+                              <span className="min-w-0 flex-1 truncate">{place}</span>
+                            </DropdownMenuRadioItem>
+                          ))}
+                        </DropdownMenuRadioGroup>
+                      </DropdownMenuGroup>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              )}
+              {places.length > 0 && shown.length === 0 && (
+                <p className="px-2 py-1 text-xs text-muted-foreground">
+                  <Trans>이 작업 위치의 대화가 없습니다.</Trans>
+                </p>
+              )}
+              <SessionGroup
+                title={t({
+                  message: "진행 중",
+                  comment: "Conversation list section: conversations answering or running a board",
+                })}
+                count={atWork.length}
+                defaultOpen
+              >
+                {atWork.length === 0 ? (
+                  <p className="px-2 py-1 text-xs text-muted-foreground">
+                    <Trans>진행 중인 대화가 없습니다.</Trans>
+                  </p>
+                ) : (
+                  <SidebarMenu>{atWork.map(row)}</SidebarMenu>
+                )}
+              </SessionGroup>
+              <SessionGroup
+                title={t({
+                  message: "대화",
+                  comment: "Conversation list section: the conversations not at work",
+                })}
+                count={rest.length}
+                defaultOpen
+              >
+                {rest.length === 0 ? (
+                  <p className="px-2 py-1 text-xs text-muted-foreground">
+                    <Trans>다른 대화가 없습니다.</Trans>
+                  </p>
+                ) : (
+                  <SidebarMenu>{rest.map(row)}</SidebarMenu>
+                )}
+              </SessionGroup>
+              {group.archived.length > 0 && (
+                <SessionGroup
+                  title={t({
+                    message: "보관함",
+                    comment: "Conversation list section: archived conversations",
+                  })}
+                  count={group.archived.length}
+                >
+                  <SidebarMenu>
+                    {group.archived.map((session) => (
+                      <SidebarMenuItem key={session.id}>
+                        {/* An archived conversation is out of the list, so its row opens its actions. */}
+                        <DropdownMenu>
+                          <DropdownMenuTrigger
+                            render={
+                              <SidebarMenuButton
+                                title={t`목록에서만 뺀 대화입니다. 기억 검색에는 계속 나옵니다.`}
+                                aria-label={label(session)}
+                              />
+                            }
+                          >
+                            <span className="min-w-0 flex-1 truncate">{label(session)}</span>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent side="right" align="start">
+                            <DropdownMenuItem
+                              onClick={() => onRestore(session.projectId, session.id)}
+                            >
+                              <ArchiveRestoreIcon />{" "}
+                              <Trans comment="Menu item that brings the conversation back to the list">
+                                복원
+                              </Trans>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              variant="destructive"
+                              onClick={() => onDeleteAsk({ session, open: true })}
+                            >
+                              <Trash2Icon />{" "}
+                              <Trans comment="Menu item that deletes the conversation's source record">
+                                원본 삭제
+                              </Trans>
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </SidebarMenuItem>
+                    ))}
+                  </SidebarMenu>
+                </SessionGroup>
+              )}
+            </>
+          )}
+        </CollapsibleContent>
+      </Collapsible>
+    </SidebarGroup>
+  );
+}
+
 /** One section of the conversation list: a heading that folds it, with how many it holds. */
 function SessionGroup({
   title,
@@ -693,9 +919,13 @@ function SessionGroup({
   );
 }
 
+/**
+ * The sidebar lists every project's conversations as one collapsible group per project. A
+ * project with conversations is a group; one without is only visible while it is the selected
+ * project, so a fresh project keeps its new-conversation button and its empty message.
+ */
 export function SessionSection({
-  sessions,
-  archived,
+  groups,
   answering,
   boardRunning,
   loading,
@@ -710,17 +940,22 @@ export function SessionSection({
   onRestore,
   agents,
 }: {
-  sessions: ReadonlyArray<Session>;
-  archived: ReadonlyArray<Session>;
-  /** Conversations whose run is producing an answer now. */
+  /** One group per project worth showing: its name, and its conversations and archived ones. */
+  groups: ReadonlyArray<{
+    readonly projectId: string;
+    readonly name: string;
+    readonly sessions: ReadonlyArray<Session>;
+    readonly archived: ReadonlyArray<Session>;
+  }>;
+  /** Conversations whose run is producing an answer now, across every project. */
   answering: ReadonlySet<string>;
-  /** Conversations whose kanban board is running. */
+  /** Conversations whose kanban board is running, across every project. */
   boardRunning: ReadonlySet<string>;
-  /** The list has not arrived yet, so an empty one says nothing. */
+  /** No group's list has arrived yet, so an empty one says nothing. */
   loading: boolean;
-  /** The list could not be read; an empty one would say there are no conversations. */
+  /** Some list could not be read; missing groups would say there are no conversations. */
   failed?: boolean;
-  /** Reads the list again after it failed. */
+  /** Reads the failed lists again. */
   onRetry?: () => void;
   projectId: string;
   sessionId: string | null;
@@ -728,43 +963,19 @@ export function SessionSection({
   archiveError: string | null;
   /** Without an agent the conversation uses the app's model. */
   onCreate: (agent?: string) => void;
-  onArchive: (sessionId: string) => void;
-  onDelete: (sessionId: string) => void;
-  onRestore: (sessionId: string) => void;
+  onArchive: (projectId: string, sessionId: string) => void;
+  onDelete: (projectId: string, sessionId: string) => void;
+  onRestore: (projectId: string, sessionId: string) => void;
   /** Trusted external agents a conversation can talk to directly. */
   agents: readonly string[];
 }) {
   const { t } = useLingui();
   const label = sessionLabel(useHydrated());
-  const [placeValue, setPlaceValue] = useState(everyPlace);
   // The asked-about conversation stays while the dialog closes, so its title does not blank out.
   const [deleteAsk, setDeleteAsk] = useState<{
     readonly session: Session;
     readonly open: boolean;
   } | null>(null);
-  const places = [
-    ...new Set(sessions.flatMap((session) => sessionPlace(session) ?? [])),
-  ].toSorted();
-  const filter = placeFilterOf(placeValue, places);
-  const shown = sessions.filter(shownIn(filter));
-  // Conversations at work lead the list, in the list's own order; the rest follow under them.
-  const working = (session: Session) => answering.has(session.id) || boardRunning.has(session.id);
-  const atWork = shown.filter(working);
-  const rest = shown.filter((session) => !working(session));
-  const everywhere = PlaceFilter.$is("all")(filter);
-  const everyPlaceLabel = t({
-    message: "모든 작업 위치",
-    comment: "Place filter option: conversations from every branch and worktree",
-  });
-  const checkoutLabel = t({
-    message: "저장소 본체",
-    comment: "Place filter option: conversations in the repository checkout, not a worktree",
-  });
-  const placeLabel = PlaceFilter.$match(filter, {
-    all: () => everyPlaceLabel,
-    checkout: () => checkoutLabel,
-    place: ({ place }) => place,
-  });
   const menuLabel = (session: Session) =>
     t({
       message: `${ph({ title: label(session) })} 메뉴`,
@@ -774,18 +985,19 @@ export function SessionSection({
   const row = (session: Session) => (
     <SidebarMenuItem key={session.id}>
       <SidebarMenuButton
-        isActive={session.id === sessionId}
+        isActive={session.id === sessionId && session.projectId === projectId}
         render={
           <Link
-            to={`/?project=${encodeURIComponent(projectId)}&session=${encodeURIComponent(session.id)}`}
+            to={`/?project=${encodeURIComponent(session.projectId)}&session=${encodeURIComponent(session.id)}`}
             preventScrollReset
-            aria-current={session.id === sessionId ? "page" : undefined}
+            aria-current={
+              session.id === sessionId && session.projectId === projectId ? "page" : undefined
+            }
           />
         }
       >
         <span className="min-w-0 flex-1 truncate">{label(session)}</span>
-        {/* Only a separate worktree is worth a chip; a filtered list is all one place. */}
-        {everywhere && session.worktreePath !== null && (
+        {session.worktreePath !== null && (
           <Badge
             variant="outline"
             className="max-w-24 shrink-0"
@@ -799,7 +1011,7 @@ export function SessionSection({
             <BotIcon /> {session.agent}
           </Badge>
         )}
-        {working(session) && (
+        {working(session, answering, boardRunning) && (
           <span className="flex shrink-0 text-muted-foreground">
             <Spinner
               aria-label={
@@ -826,7 +1038,7 @@ export function SessionSection({
         </DropdownMenuTrigger>
         <DropdownMenuContent side="right" align="start">
           <DropdownMenuItem
-            onClick={() => onArchive(session.id)}
+            onClick={() => onArchive(session.projectId, session.id)}
             title={t`실행 중이면 안전하게 중단하고 기억은 남깁니다`}
           >
             <ArchiveIcon />{" "}
@@ -906,58 +1118,6 @@ export function SessionSection({
           </ButtonGroup>
         </div>
       </div>
-      {/* The place filter sits on its own row under the header, away from the new-conversation
-          action, and reads as a select: it always names the place shown, with a chevron. */}
-      {places.length > 0 && (
-        <div className="px-2 pb-1">
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  variant={everywhere ? "ghost-muted" : "secondary"}
-                  size="sm"
-                  className="w-full justify-start"
-                  aria-label={t({
-                    message: `작업 위치: ${placeLabel}`,
-                    comment: "Place filter button; placeLabel is the branch or worktree shown",
-                  })}
-                  title={t({
-                    message: `작업 위치: ${placeLabel}`,
-                    comment: "Place filter button; placeLabel is the branch or worktree shown",
-                  })}
-                />
-              }
-            >
-              <GitBranchIcon />
-              <span className="min-w-0 flex-1 truncate text-left">{placeLabel}</span>
-              <ChevronDownIcon className="text-muted-foreground" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-64">
-              <DropdownMenuGroup>
-                <DropdownMenuLabel>
-                  <Trans comment="Place filter menu heading: a branch or worktree">작업 위치</Trans>
-                </DropdownMenuLabel>
-                <DropdownMenuRadioGroup
-                  value={placeValue}
-                  onValueChange={(value: string) => setPlaceValue(value)}
-                >
-                  <DropdownMenuRadioItem value={everyPlace}>
-                    {everyPlaceLabel}
-                  </DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value={checkoutPlace}>
-                    {checkoutLabel}
-                  </DropdownMenuRadioItem>
-                  {places.map((place) => (
-                    <DropdownMenuRadioItem key={place} value={place} title={place}>
-                      <span className="min-w-0 flex-1 truncate">{place}</span>
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      )}
       {archiveError && (
         <Alert variant="destructive" className="mx-2 mb-2 w-auto">
           <AlertDescription>{archiveError}</AlertDescription>
@@ -977,98 +1137,28 @@ export function SessionSection({
             <Trans>대화 목록을 불러오지 못했습니다.</Trans>
           </LoadFailed>
         )}
-        {!loading && !failed && sessions.length === 0 && (
+        {/* One project group after another: same heading shape, that project's conversations.
+            A project without conversations is only worth a group while it is the selected one,
+            so a fresh project keeps its new-conversation button and other empty ones stay out. */}
+        {groups
+          .filter((group) => group.sessions.length > 0 || group.projectId === projectId)
+          .map((group) => (
+            <ProjectSessionGroup
+              key={group.projectId}
+              group={group}
+              selected={group.projectId === projectId}
+              answering={answering}
+              boardRunning={boardRunning}
+              label={label}
+              row={row}
+              onRestore={onRestore}
+              onDeleteAsk={setDeleteAsk}
+            />
+          ))}
+        {!loading && !failed && groups.length === 0 && (
           <p className="px-4 py-2 text-xs text-muted-foreground">
             <Trans>아직 대화가 없습니다.</Trans>
           </p>
-        )}
-        {sessions.length > 0 && shown.length === 0 && (
-          <p className="px-4 py-2 text-xs text-muted-foreground">
-            <Trans>이 작업 위치의 대화가 없습니다.</Trans>
-          </p>
-        )}
-        {/* Three sections of one rank: same heading, same rows, one after another. */}
-        {sessions.length > 0 && shown.length > 0 && (
-          <>
-            <SessionGroup
-              title={t({
-                message: "진행 중",
-                comment: "Conversation list section: conversations answering or running a board",
-              })}
-              count={atWork.length}
-              defaultOpen
-            >
-              {atWork.length === 0 ? (
-                <p className="px-2 py-1 text-xs text-muted-foreground">
-                  <Trans>진행 중인 대화가 없습니다.</Trans>
-                </p>
-              ) : (
-                <SidebarMenu>{atWork.map(row)}</SidebarMenu>
-              )}
-            </SessionGroup>
-            <SessionGroup
-              title={t({
-                message: "대화",
-                comment: "Conversation list section: the conversations not at work",
-              })}
-              count={rest.length}
-              defaultOpen
-            >
-              {rest.length === 0 ? (
-                <p className="px-2 py-1 text-xs text-muted-foreground">
-                  <Trans>다른 대화가 없습니다.</Trans>
-                </p>
-              ) : (
-                <SidebarMenu>{rest.map(row)}</SidebarMenu>
-              )}
-            </SessionGroup>
-          </>
-        )}
-        {archived.length > 0 && (
-          <SessionGroup
-            title={t({
-              message: "보관함",
-              comment: "Conversation list section: archived conversations",
-            })}
-            count={archived.length}
-          >
-            <SidebarMenu>
-              {archived.map((session) => (
-                <SidebarMenuItem key={session.id}>
-                  {/* An archived conversation is out of the list, so its row opens its actions. */}
-                  <DropdownMenu>
-                    <DropdownMenuTrigger
-                      render={
-                        <SidebarMenuButton
-                          title={t`목록에서만 뺀 대화입니다. 기억 검색에는 계속 나옵니다.`}
-                          aria-label={menuLabel(session)}
-                        />
-                      }
-                    >
-                      <span className="min-w-0 flex-1 truncate">{label(session)}</span>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent side="right" align="start">
-                      <DropdownMenuItem onClick={() => onRestore(session.id)}>
-                        <ArchiveRestoreIcon />{" "}
-                        <Trans comment="Menu item that brings the conversation back to the list">
-                          복원
-                        </Trans>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        variant="destructive"
-                        onClick={() => setDeleteAsk({ session, open: true })}
-                      >
-                        <Trash2Icon />{" "}
-                        <Trans comment="Menu item that deletes the conversation's source record">
-                          원본 삭제
-                        </Trans>
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SessionGroup>
         )}
       </SidebarContent>
       <AlertDialog
@@ -1094,7 +1184,7 @@ export function SessionSection({
             <AlertDialogAction
               variant="destructive"
               onClick={() => {
-                if (deleteAsk !== null) onDelete(deleteAsk.session.id);
+                if (deleteAsk !== null) onDelete(deleteAsk.session.projectId, deleteAsk.session.id);
                 setDeleteAsk((current) => (current === null ? null : { ...current, open: false }));
               }}
             >

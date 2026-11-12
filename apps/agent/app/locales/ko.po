@@ -3145,6 +3145,7 @@ msgstr "사용 안 함"
 #. Badge: image generation is switched on
 #: app/entry/navigation/account-profiles.tsx
 #: app/entry/navigation/compatible-accounts.tsx
+#: app/entry/navigation/sidebar.tsx
 #: app/entry/settings/pages/image.tsx
 msgid "사용 중"
 msgstr "사용 중"

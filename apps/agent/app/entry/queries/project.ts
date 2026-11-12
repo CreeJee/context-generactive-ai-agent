@@ -1,6 +1,7 @@
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { Effect, Function as EffectFunction, Iterable } from "effect";
-import { queryOptions, useQuery, useSuspenseQuery } from "@tanstack/react-query";
+import { queryOptions, useQueries, useQuery, useSuspenseQuery } from "@tanstack/react-query";
+import type { Session } from "../api";
 import { AgentTrustState, McpServerState, api } from "../api";
 import { appQueryKeys } from "./keys";
 
@@ -72,6 +73,43 @@ export function useProjectSessionsQuery(projectId: string | null) {
   return useQuery({
     ...projectQueries.sessions(projectId ?? ""),
     enabled: projectId !== null,
+  });
+}
+
+/** What the sidebar needs to name one project's group and fill it. */
+export type ProjectSessions = {
+  readonly projectId: string;
+  readonly name: string;
+  readonly sessions: ReadonlyArray<Session>;
+  readonly archived: ReadonlyArray<Session>;
+};
+
+/**
+ * The sidebar's groups read every listed project's conversations, not only the selected one's.
+ * Each project's read keeps its own `appQueryKeys.project.sessions` key, so events and
+ * lifecycle mutations keep invalidating exactly the projects they touched. A project whose read
+ * is still under way contributes no group; the caller totals the misses for its loading and
+ * failure states. The caller also decides which groups are worth showing: a project without
+ * conversations is only the selected project's group, so the others leave the list to it.
+ */
+export function useAllProjectSessions(
+  projects: ReadonlyArray<{ readonly id: string; readonly name: string }>,
+): ReadonlyArray<ProjectSessions> {
+  const reads = useQueries({
+    queries: projects.map((project) => projectQueries.sessions(project.id)),
+  });
+  return projects.flatMap((project, index): Array<ProjectSessions> => {
+    const read = reads[index];
+    // A read still under way or failed contributes nothing; its group just does not exist yet.
+    if (read === undefined || !read.isSuccess || read.data === undefined) return [];
+    return [
+      {
+        projectId: project.id,
+        name: project.name,
+        sessions: read.data.active,
+        archived: read.data.archived,
+      },
+    ];
   });
 }
 

@@ -8,17 +8,28 @@ import { render } from "vitest-browser-react";
 import { describe, expect } from "vite-plus/test";
 import "../../app.css";
 import { AccountLoginState, ProviderAuthState } from "../api";
+import type { Session } from "../api";
 import { AccountModelPanel } from "./account-model-panel";
 import { AccountManagerList, QuotaStatus } from "./account-profiles";
 import { AccountEntry, AccountSwitcherMenu } from "./account-switcher";
 import { CompatibleAccountsList } from "./compatible-accounts";
 import type { CompatibleAccountChange } from "./compatible-client";
-import { ModelSection, ProjectSection } from "./sidebar";
+import { ModelSection, ProjectSection, SessionSection } from "./sidebar";
+import { SidebarProvider } from "../../components/ui/sidebar";
 
 /** Renders under the app's Lingui instance, which the test setup activates in Korean. */
 const withI18n = {
   wrapper: ({ children }: { children: ReactNode }) => (
     <I18nProvider i18n={i18n}>{children}</I18nProvider>
+  ),
+};
+
+/** SessionSection draws SidebarMenuButtons, which need the sidebar context. */
+const withSidebar = {
+  wrapper: ({ children }: { children: ReactNode }) => (
+    <I18nProvider i18n={i18n}>
+      <SidebarProvider>{children}</SidebarProvider>
+    </I18nProvider>
   ),
 };
 
@@ -478,6 +489,231 @@ describe("sidebar disclosures", () => {
         },
         { intent: "create", baseUrl: "https://api.example.com/v1" },
       ]);
+    }),
+  );
+
+  /** A conversation row the sidebar groups by its project, as the sessions list reads it. */
+  const sessionOf = (projectId: string, id: string, title: string): Session => ({
+    id,
+    projectId,
+    title,
+    createdAt: "2026-10-01T09:00:00.000Z",
+    agent: null,
+    archivedAt: null,
+    importedFrom: null,
+    worktreePath: null,
+    branch: null,
+  });
+
+  const group = (
+    projectId: string,
+    name: string,
+    sessions: Session[],
+    archived: Session[] = [],
+  ) => ({
+    projectId,
+    name,
+    sessions,
+    archived,
+  });
+
+  it.live("each listed project is a collapsible group with its own conversations", () =>
+    Effect.gen(function* () {
+      const screen = yield* sdkCall(() =>
+        render(
+          <div className="w-72">
+            <SessionSection
+              groups={[
+                group("alpha", "Alpha", [sessionOf("alpha", "a1", "알파 대화")]),
+                group("beta", "Beta", [
+                  sessionOf("beta", "b1", "베타 질문"),
+                  sessionOf("beta", "b2", "베타 후속"),
+                ]),
+                // No sessions: only the selected project is shown as a group.
+                group("gamma", "Gamma", []),
+              ]}
+              answering={new Set()}
+              boardRunning={new Set()}
+              loading={false}
+              projectId="gamma"
+              sessionId={null}
+              archiveError={null}
+              onCreate={() => {}}
+              onArchive={() => {}}
+              onDelete={() => {}}
+              onRestore={() => {}}
+              agents={[]}
+            />
+          </div>,
+          withSidebar,
+        ),
+      );
+
+      yield* sdkCall(() =>
+        expect.element(screen.getByRole("button", { name: "Alpha" })).toBeVisible(),
+      );
+      yield* sdkCall(() =>
+        expect.element(screen.getByRole("button", { name: "Beta" })).toBeVisible(),
+      );
+      // Gamma has no conversations, so its group exists only while it is the selected project.
+      yield* sdkCall(() =>
+        expect.element(screen.getByRole("button", { name: "Gamma" })).toBeVisible(),
+      );
+      yield* sdkCall(() =>
+        expect.element(screen.getByRole("link", { name: "알파 대화" })).toBeVisible(),
+      );
+      yield* sdkCall(() =>
+        expect.element(screen.getByRole("link", { name: "베타 질문" })).toBeVisible(),
+      );
+    }),
+  );
+
+  it.live("a project without conversations is a group only while it is the selected project", () =>
+    Effect.gen(function* () {
+      const screen = yield* sdkCall(() =>
+        render(
+          <div className="w-72">
+            <SessionSection
+              groups={[group("gamma", "Gamma", [])]}
+              answering={new Set()}
+              boardRunning={new Set()}
+              loading={false}
+              projectId="gamma"
+              sessionId={null}
+              archiveError={null}
+              onCreate={() => {}}
+              onArchive={() => {}}
+              onDelete={() => {}}
+              onRestore={() => {}}
+              agents={[]}
+            />
+          </div>,
+          withSidebar,
+        ),
+      );
+
+      // The selected project without conversations keeps its group and its empty message.
+      yield* sdkCall(() =>
+        expect.element(screen.getByRole("button", { name: "Gamma" })).toBeVisible(),
+      );
+      yield* sdkCall(() => expect.element(screen.getByText("아직 대화가 없습니다.")).toBeVisible());
+      yield* sdkCall(() =>
+        expect.element(screen.getByRole("button", { name: "새 대화" })).toBeVisible(),
+      );
+    }),
+  );
+
+  it.live("a non-selected project without conversations shows no group", () =>
+    Effect.gen(function* () {
+      const screen = yield* sdkCall(() =>
+        render(
+          <div className="w-72">
+            <SessionSection
+              groups={[
+                group("alpha", "Alpha", [sessionOf("alpha", "a1", "알파 대화")]),
+                // Read fine, but empty and not the selected project: it is not worth a group.
+                group("gamma", "Gamma", []),
+              ]}
+              answering={new Set()}
+              boardRunning={new Set()}
+              loading={false}
+              projectId="alpha"
+              sessionId="a1"
+              archiveError={null}
+              onCreate={() => {}}
+              onArchive={() => {}}
+              onDelete={() => {}}
+              onRestore={() => {}}
+              agents={[]}
+            />
+          </div>,
+          withSidebar,
+        ),
+      );
+
+      yield* sdkCall(() =>
+        expect.element(screen.getByRole("button", { name: "Alpha" })).toBeVisible(),
+      );
+      yield* sdkCall(() =>
+        expect.element(screen.getByRole("button", { name: "Gamma" })).not.toBeInTheDocument(),
+      );
+      yield* sdkCall(() =>
+        expect.element(screen.getByText("아직 대화가 없습니다.")).not.toBeInTheDocument(),
+      );
+    }),
+  );
+
+  it.live("every conversation row links to its own project and session", () =>
+    Effect.gen(function* () {
+      const screen = yield* sdkCall(() =>
+        render(
+          <div className="w-72">
+            <SessionSection
+              groups={[
+                group("alpha", "Alpha", [sessionOf("alpha", "a1", "알파 대화")]),
+                group("beta", "Beta", [sessionOf("beta", "b1", "베타 질문")]),
+              ]}
+              answering={new Set()}
+              boardRunning={new Set()}
+              loading={false}
+              // The page is on beta, so the row of alpha must still open alpha's conversation.
+              projectId="beta"
+              sessionId="b1"
+              archiveError={null}
+              onCreate={() => {}}
+              onArchive={() => {}}
+              onDelete={() => {}}
+              onRestore={() => {}}
+              agents={[]}
+            />
+          </div>,
+          withSidebar,
+        ),
+      );
+
+      const alpha = screen.getByRole("link", { name: "알파 대화" });
+      expect(alpha.element().getAttribute("href")).toBe("/?project=alpha&session=a1");
+      const beta = screen.getByRole("link", { name: "베타 질문" });
+      expect(beta.element().getAttribute("href")).toBe("/?project=beta&session=b1");
+      // The conversation of the page in use is marked as the current one.
+      expect(beta.element().getAttribute("aria-current")).toBe("page");
+      expect(alpha.element().getAttribute("aria-current")).toBeNull();
+    }),
+  );
+
+  it.live("archiving and deleting name the conversation's own project", () =>
+    Effect.gen(function* () {
+      const asked: string[] = [];
+      const screen = yield* sdkCall(() =>
+        render(
+          <div className="w-72">
+            <SessionSection
+              groups={[group("alpha", "Alpha", [sessionOf("alpha", "a1", "알파 대화")])]}
+              answering={new Set()}
+              boardRunning={new Set()}
+              loading={false}
+              projectId="beta"
+              sessionId={null}
+              archiveError={null}
+              onCreate={() => {}}
+              onArchive={(projectId, sessionId) =>
+                void asked.push(`archive:${projectId}:${sessionId}`)
+              }
+              onDelete={(projectId, sessionId) =>
+                void asked.push(`delete:${projectId}:${sessionId}`)
+              }
+              onRestore={() => {}}
+              agents={[]}
+            />
+          </div>,
+          withSidebar,
+        ),
+      );
+
+      const row = screen.getByRole("listitem", { name: /알파 대화/u });
+      yield* sdkCall(() => row.getByRole("button", { name: "알파 대화 메뉴" }).click());
+      yield* sdkCall(() => screen.getByRole("menuitem", { name: "보관하기" }).click());
+      expect(asked).toEqual(["archive:alpha:a1"]);
     }),
   );
 });
