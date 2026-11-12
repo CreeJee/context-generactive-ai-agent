@@ -16,10 +16,12 @@ it.effect("an attempt's unsettled tool calls become rows in the order they start
     db.exec(`PRAGMA user_version = ${index}`);
     db.exec(`
       INSERT INTO projects (id, root, name, created_at) VALUES ('p', '/test', 'test', 'old');
+      -- A live conversation's task: a later step drops those whose conversation was deleted.
+      INSERT INTO sessions (id, project_id, created_at) VALUES ('s', 'p', 'old');
       INSERT INTO work_tasks
-        (id, project_id, parent_run_id, parent_tool_call_id, agent_name, status, title, request,
-         created_at, updated_at)
-        VALUES ('task', 'p', 'parent', 'call', 'helper', 'running', 'Task', 'Do it', 1, 1);
+        (id, project_id, origin_session_id, parent_run_id, parent_tool_call_id, agent_name, status,
+         title, request, created_at, updated_at)
+        VALUES ('task', 'p', 's', 'parent', 'call', 'helper', 'running', 'Task', 'Do it', 1, 1);
       INSERT INTO agent_invocations
         (id, task_id, parent_run_id, parent_tool_call_id, kind, status, message,
          idempotency_key, created_at)

@@ -77,8 +77,8 @@ active attempts occur, or recovery/purge jobs remain stuck.
 
 ## Compatibility and backfill
 
-- Existing Work Trace rows migrate in-place; origin session references become nullable while
-  project-owned provenance remains.
+- Existing Work Trace rows migrate in-place. Rows a deleted conversation left behind, with a
+  `NULL` origin, are removed by migration.
 - Turning exposure off never backfills, purges, or rewrites records.
 - Destructive privacy purge and retention policy are handled by the archive/delete lifecycle, not by
   the release switch.
@@ -99,10 +99,9 @@ reversible. Delete is not reversible:
   clears request/title/agent linkage, and retains a payload-free Task/Attempt identity.
 - Conversation deletion first applies Task deletion to every child, then removes transcript nodes,
   queues, approvals, workflow state, chat state, subagent rows, FTS entries, and unreferenced image
-  blobs. Project-owned Task tombstones, lifecycle operations, and count-only purge receipts remain.
-  No page shows them; they stay as rows only.
-- Nullable `origin_session_id` fields become `NULL`, so retained rows explicitly say that their
-  source conversation was deleted rather than pointing at a missing row.
+  blobs. It then removes the conversation's Work Trace: Task tombstones, attempts, invocations,
+  events, artifacts, notifications, and the Tasks' lifecycle operations and receipts. Only the
+  conversation's own lifecycle operation and its count-only purge receipt remain.
 - Parent notifications use stable operation-derived idempotency keys and distinguish `archived` from
   `deleted`.
 

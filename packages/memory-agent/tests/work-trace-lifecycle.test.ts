@@ -10,7 +10,7 @@ import {
   ResumeRequest,
   WorkTraceStore,
 } from "../src/work-trace/store.ts";
-import { sqlGet, sqlRun } from "./support/sql.ts";
+import { sqlAll, sqlGet, sqlRun } from "./support/sql.ts";
 
 const stringifyJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
@@ -336,7 +336,7 @@ describe("Work Trace task lifecycle", () => {
   );
 
   it.effect(
-    "deletes conversation-owned transcript state after task tombstones while keeping project provenance",
+    "deletes conversation-owned transcript state and its Work Trace after task tombstones",
     () =>
       run(
         Effect.gen(function* () {
@@ -429,17 +429,23 @@ describe("Work Trace task lifecycle", () => {
               "SELECT count(*) AS count FROM chat_thread_messages WHERE thread_id = 's1'",
             ),
           ).toEqual({ count: 0 });
-          expect(
-            yield* sqlGet("SELECT origin_session_id FROM work_tasks WHERE id = ?", handle.taskId),
-          ).toEqual({ origin_session_id: null });
+          // No task, attempt, event or task lifecycle record of the conversation stays.
           expect(
             yield* sqlGet(
-              "SELECT deleted_at IS NOT NULL AS deleted FROM work_tasks WHERE id = ?",
-              handle.taskId,
+              `SELECT (SELECT count(*) FROM work_tasks) + (SELECT count(*) FROM agent_run_attempts)
+                 + (SELECT count(*) FROM agent_invocations) + (SELECT count(*) FROM run_events)
+                 + (SELECT count(*) FROM parent_notifications) AS count`,
             ),
-          ).toEqual({ deleted: 1 });
-          expect(yield* sqlGet("SELECT count(*) AS count FROM purge_receipts")).toEqual({
-            count: 2,
+          ).toEqual({ count: 0 });
+          // Only the conversation's own count-only receipt stays.
+          expect(
+            yield* sqlAll(
+              `SELECT o.target_kind, json_extract(r.purged_counts, '$.tasks') AS tasks
+               FROM purge_receipts r JOIN lifecycle_operations o ON o.id = r.operation_id`,
+            ),
+          ).toEqual([{ target_kind: "session", tasks: 1 }]);
+          expect(yield* sqlGet("SELECT count(*) AS count FROM lifecycle_operations")).toEqual({
+            count: 1,
           });
           // The node's insert and its delete are journaled, so the lexical index drops it too.
           expect(

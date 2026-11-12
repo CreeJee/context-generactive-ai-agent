@@ -1414,6 +1414,13 @@ const make = Effect.gen(function* () {
     yield* run(sql`DELETE FROM memory_graph_suppressed_nodes WHERE node_seq IN (${seqs})`);
     const nodes = (yield* run(sql`DELETE FROM nodes WHERE session_id = ${sessionId}`)).changes;
     yield* run(sql`DELETE FROM background_tasks WHERE session_id = ${sessionId}`);
+    // Its Work Trace goes with it, also the tombstones of the tasks deleted above: no page shows a
+    // deleted conversation's tasks. Their attempts, events, artifacts and notifications cascade, and
+    // so do the receipts of their lifecycle operations.
+    const tasks = (yield* run(sql`DELETE FROM work_tasks WHERE origin_session_id = ${sessionId}`))
+      .changes;
+    yield* run(sql`DELETE FROM lifecycle_operations
+      WHERE target_kind = 'task' AND origin_session_id = ${sessionId}`);
     const threadIds = [sessionId, ...subagentRows.map((row) => `subagent-${row.id}`)];
     yield* Effect.forEach(
       threadIds,
@@ -1446,8 +1453,13 @@ const make = Effect.gen(function* () {
     yield* run(sql`DELETE FROM turn_summary_blocks WHERE session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM subagents WHERE session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM sessions WHERE id = ${sessionId}`);
-    const purgedCounts = yield* encodeJson({ nodes, subagents: subagentRows.length, goals });
-    const retainedKinds = yield* encodeJson(["task_tombstones", "purge_receipts"]);
+    const purgedCounts = yield* encodeJson({
+      nodes,
+      subagents: subagentRows.length,
+      goals,
+      tasks,
+    });
+    const retainedKinds = yield* encodeJson(["purge_receipts"]);
     yield* run(sql`INSERT INTO purge_receipts
       (id, operation_id, project_id, target_kind, target_id, policy_version,
        purged_counts, retained_kinds, completed_at)
@@ -1615,9 +1627,7 @@ const make = Effect.gen(function* () {
             taskId: operation.target_id,
             kind: operation.intent === "delete" ? "deleted" : "archived",
             summary:
-              operation.intent === "delete"
-                ? "Subagent task deleted; adopted project knowledge was retained"
-                : "Subagent task archived",
+              operation.intent === "delete" ? "Subagent task deleted" : "Subagent task archived",
             idempotencyKey: `lifecycle:${operation.id}:${operation.intent}`,
             payload: { operationId: operation.id, receiptId },
           }),

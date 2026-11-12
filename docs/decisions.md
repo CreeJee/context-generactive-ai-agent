@@ -5017,4 +5017,19 @@
   - "실시간 / 전체 기록" 전환과 프로젝트 trace(`GET /api/projects/:project/trace`, `.../trace/tasks/:task`, `AgentChat.projectTraceTree`·`projectTraceTask`, 저장소의 `projectTaskTree`·`projectTaskDetail`·`projectLatestCursor`)를 지운다. 패널은 대화가 열려 있을 때만 그린다.
   - 사용자가 고른 작업은 끝나도 상세에 그대로 남는다. 목록에서는 빠진다. 고른 작업이 없으면 첫 진행 중 작업의 상세를 보인다. 대화 안 작업 카드에서 끝난 작업을 열어도 그 상세를 보인다.
   - 작업 상세는 세션 trace 키 아래의 쿼리라 trace 이벤트가 오면 목록과 함께 다시 읽는다.
-  - 대화를 지운 뒤 남는 Work Trace 행(`origin_session_id`가 NULL인 task 묘비)은 그대로 두지만 이제 어떤 화면도 보이지 않는다.
+  - 대화를 지운 뒤 남던 Work Trace 행은 "지운 대화의 Work Trace도 같이 지운다 (2026-11-12)"에서 지운다.
+
+## 지운 대화의 Work Trace도 같이 지운다 (2026-11-12)
+
+- 계기: Work Trace가 진행 중인 작업만 보이게 되자, 대화를 지운 뒤 남던 task 묘비(`origin_session_id`가 NULL)는 어떤 화면도 보이지 않는 행이 됐다. 사용자: 지우자.
+- 결정: 대화 삭제(`purgeSession`)가 그 대화의 Work Trace를 함께 지운다. task 묘비와 attempt·invocation·이벤트·산출물·알림, task의 lifecycle operation과 영수증이 대상이다. 대화 자신의 lifecycle operation과 개수만 담은 영수증만 남고, 영수증 `purged_counts`에 지운 task 수(`tasks`)를 적는다.
+  - 대화 삭제 전에 각 task를 지우는 단계(살아 있는 하위 에이전트를 멈추고 묘비로 만든다)는 그대로 둔다. 멈추는 순서를 지키기 위해서다.
+  - 마이그레이션이 이미 남아 있던 행(origin이 NULL이거나 없는 대화를 가리키는 task)을 같은 범위로 지운다.
+  - Goal 기록을 대화와 함께 지운 "Goal을 실행한 대화를 지우면 Goal 기록도 같이 지운다 (2026-10-25)"와 같은 방향이다.
+
+## 파일을 쓰는 native 명령은 reply 기한을 15초로 둔다 (2026-11-12)
+
+- 계기: 2026-11-11 19:28 dev에서 `save`가 2초 reply 기한을 넘겨 `request-timeout`이 났고, 벡터 색인이 재시작 전까지 멈췄다. 부하 테스트(768차원 78,280개, 32MB)에서 다른 프로세스가 디스크 쓰기와 `sync`를 계속하는 동안 207회 중 1회 같은 실패가 재현됐다. 그 `save`는 3.9초였고 거의 전부 파일 쓰기였다(`fsync` 78ms). 평소 `save`는 27ms다.
+- 결정: `save`·`lexical-apply`·`lexical-reset`의 reply 기한을 2초에서 15초(`writeTimeout`)로 늘린다. 이 기한은 멈춘 worker를 가려내는 것이다. 디스크가 늦어 오판하면 벡터 색인이 owner를 다시 열 때까지 멈추고, 진짜 멈춘 worker를 늦게 알아채는 비용은 실패가 조금 늦는 것뿐이라, 시작 기한(`startupTimeout`)처럼 응답하지 않는 worker만 가린다. 메모리만 다루는 `add`·`remove`·`reset`·`validate`·`vector-search`는 2초 그대로다.
+- 버린 안: publish마다 저장하지 않고 몇 초에 한 번 모아 저장하기. `node_vectors`에는 벡터 본체가 없고, 시작할 때 인덱스 크기가 `node_vectors`와 다르면 인덱스를 비우고 다시 임베딩한다. commit 뒤 저장 전에 프로세스가 끝나면 17만 벡터를 전부 다시 임베딩하게 된다. commit도 저장까지 미루면 피할 수 있지만, 그동안 chunk 매핑이 없어 검색이 그 벡터를 버리는 등 publish의 의미가 바뀌어 따로 정한다.
+- 남은 것: 실패한 update로 멈춘 게이트는 여전히 owner를 다시 열 때(백엔드 재시작)까지 풀리지 않는다.

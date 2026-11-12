@@ -807,6 +807,31 @@ export const backgroundTasksMigration = `
   DROP TABLE background_task_results;
 `;
 
+export const deletedConversationTraceMigration = `
+  -- A deleted conversation's Work Trace goes with it (decisions.md "지운 대화의 Work Trace도 같이
+  -- 지운다 (2026-11-12)"). The tasks a deletion left, with no origin conversation, go now; the
+  -- conversation-level lifecycle operations and their count-only receipts stay.
+  CREATE TEMP TABLE orphaned_tasks AS
+    SELECT id FROM work_tasks
+      WHERE origin_session_id IS NULL OR origin_session_id NOT IN (SELECT id FROM sessions);
+  CREATE TEMP TABLE orphaned_operations AS
+    SELECT id FROM lifecycle_operations
+      WHERE target_kind = 'task' AND target_id IN (SELECT id FROM orphaned_tasks);
+  DELETE FROM run_events WHERE task_id IN (SELECT id FROM orphaned_tasks);
+  DELETE FROM work_artifacts WHERE task_id IN (SELECT id FROM orphaned_tasks);
+  DELETE FROM parent_notifications WHERE task_id IN (SELECT id FROM orphaned_tasks);
+  DELETE FROM purge_receipts WHERE operation_id IN (SELECT id FROM orphaned_operations)
+    OR (target_kind = 'task' AND target_id IN (SELECT id FROM orphaned_tasks));
+  DELETE FROM lifecycle_operations WHERE id IN (SELECT id FROM orphaned_operations);
+  DELETE FROM attempt_pending_tool_calls WHERE attempt_id IN (SELECT id FROM agent_run_attempts
+    WHERE task_id IN (SELECT id FROM orphaned_tasks));
+  DELETE FROM agent_run_attempts WHERE task_id IN (SELECT id FROM orphaned_tasks);
+  DELETE FROM agent_invocations WHERE task_id IN (SELECT id FROM orphaned_tasks);
+  DELETE FROM work_tasks WHERE id IN (SELECT id FROM orphaned_tasks);
+  DROP TABLE orphaned_operations;
+  DROP TABLE orphaned_tasks;
+`;
+
 /**
  * Ordered schema steps. `PRAGMA user_version` records how many have been applied.
  * Append new steps; never edit an applied one.
@@ -2947,6 +2972,7 @@ export const migrations: readonly string[] = [
   DROP TABLE final_answer_claims;
   `,
   backgroundTasksMigration,
+  deletedConversationTraceMigration,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.
