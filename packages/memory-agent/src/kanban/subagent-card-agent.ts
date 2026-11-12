@@ -30,7 +30,9 @@ import {
 } from "./card-agent.ts";
 import { cardToolProject, type CardWorktree } from "./worktree.ts";
 import { CardFailure, VerdictFailure, type AgentFailureCode } from "./failures.ts";
-import { logFailure } from "../runtime/logged-failures.ts";
+import { fallbackLogged, logFailure } from "../runtime/logged-failures.ts";
+import { PlanNodes } from "../workflow/plan-nodes.ts";
+import { Workflows } from "../workflow/workflow.ts";
 import { boardRunId } from "./board-run.ts";
 
 /**
@@ -142,10 +144,35 @@ const make = Effect.gen(function* () {
   const mcpServers = yield* McpServers;
   const skillTools = yield* SkillTools;
   const crypto = yield* SecureRandom.SecureRandom;
+  const workflows = yield* Workflows;
+  const planNodes = yield* PlanNodes;
 
-  /** The memory tools of the card's project; the name lists keep only `read_evidence`. */
+  /**
+   * The memory tools of the card's project, reading tool results of the Goal's conversation and its
+   * card sessions; the name lists keep only `read_evidence` and `read_tool_result`.
+   */
   const evidenceTools = (projectId: string, sessionId: string) =>
     memoryTools.toolsFor({ projectId, sessionId }, "project");
+
+  /**
+   * The memory node of the Plan version the session runs as an attempt starts: where a card
+   * session's work comes from. A running card cannot be edited, so it is the version the card
+   * follows. None when there is no Plan or it could not be recorded.
+   */
+  const planOrigin = (sessionId: string) =>
+    workflows.get(sessionId).pipe(
+      Effect.flatMap((state) =>
+        Option.match(Option.fromNullishOr(state.plan), {
+          onNone: () => Effect.succeedNone,
+          onSome: (plan) =>
+            Effect.map(
+              planNodes.forVersion(sessionId, plan.version),
+              Option.map((node) => node.id),
+            ),
+        }),
+      ),
+      fallbackLogged("Card Plan version not recorded", Option.none<string>),
+    );
 
   /**
    * The read-only tools of the project's trusted MCP servers, which run for the project's main
@@ -210,10 +237,12 @@ const make = Effect.gen(function* () {
               ...listed("Since your last run", run.notes),
               cardText(run.card),
             ].join("\n\n");
+            const origin = yield* planOrigin(run.sessionId);
             const outcome = yield* subagents.runAttempt(
               {
                 project,
                 sessionId: run.sessionId,
+                origin: Effect.succeed(origin),
                 runId: boardRunId(run.goalInstanceId, run.card.id, run.attemptNo),
                 selection: chosen,
                 tools: [
@@ -297,10 +326,12 @@ const make = Effect.gen(function* () {
             ...mcp.tools,
             recorder.runTool,
           ];
+          const origin = yield* planOrigin(input.sessionId);
           const outcome = yield* subagents.runAttempt(
             {
               project,
               sessionId: input.sessionId,
+              origin: Effect.succeed(origin),
               runId,
               selection: chosen,
               tools,

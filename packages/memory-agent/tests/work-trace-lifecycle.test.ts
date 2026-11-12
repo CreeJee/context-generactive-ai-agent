@@ -355,6 +355,22 @@ describe("Work Trace task lifecycle", () => {
          VALUES ('user-1', 'p1', 's1', 'parent-1', 'user', 'private lifecycle phrase', '{}', ?)`,
             DateTime.formatIso(DateTime.makeUnsafe(0)),
           );
+          // The subagent's own session and what it recorded go with the conversation.
+          yield* sqlRun(
+            `INSERT INTO sessions (id, project_id, title, created_at, parent_session_id)
+             VALUES ('subagent-agent-1', 'p1', NULL, ?, 's1')`,
+            DateTime.formatIso(DateTime.makeUnsafe(0)),
+          );
+          yield* sqlRun(
+            `INSERT INTO nodes (id, project_id, session_id, run_id, kind, text, detail, created_at)
+         VALUES ('child-1', 'p1', 'subagent-agent-1', 'child-run', 'assistant', 'child answer', '{}', ?)`,
+            DateTime.formatIso(DateTime.makeUnsafe(0)),
+          );
+          yield* sqlRun(
+            `INSERT INTO edges (from_id, to_id, kind, origin, weight, created_at)
+         VALUES ('child-1', 'user-1', 'reply', 'structure', 1, ?)`,
+            DateTime.formatIso(DateTime.makeUnsafe(0)),
+          );
           // Another conversation's node, linked to this one and imported like it, stays.
           yield* sqlRun(
             "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s2', 'p1', NULL, ?)",
@@ -412,11 +428,15 @@ describe("Work Trace task lifecycle", () => {
             "delete",
           );
 
-          expect(yield* sqlGet("SELECT count(*) AS count FROM sessions WHERE id = 's1'")).toEqual({
-            count: 0,
-          });
           expect(
-            yield* sqlGet("SELECT count(*) AS count FROM nodes WHERE session_id = 's1'"),
+            yield* sqlGet(
+              "SELECT count(*) AS count FROM sessions WHERE id IN ('s1', 'subagent-agent-1')",
+            ),
+          ).toEqual({ count: 0 });
+          expect(
+            yield* sqlGet(
+              "SELECT count(*) AS count FROM nodes WHERE session_id IN ('s1', 'subagent-agent-1')",
+            ),
           ).toEqual({ count: 0 });
           expect(
             yield* sqlGet("SELECT count(*) AS count FROM queued_messages WHERE session_id = 's1'"),

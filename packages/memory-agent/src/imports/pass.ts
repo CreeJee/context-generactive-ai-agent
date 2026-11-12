@@ -279,7 +279,7 @@ const make = (home: string) =>
       Result: Schema.Struct({ count: Schema.Finite }),
       execute: (projectId) => sql`SELECT
         (SELECT count(*) FROM sessions s WHERE s.project_id = ${projectId}
-          AND NOT EXISTS (SELECT 1 FROM imported_sessions i WHERE i.session_id = s.id))
+          AND s.parent_session_id IS NULL AND NOT EXISTS (SELECT 1 FROM imported_sessions i WHERE i.session_id = s.id))
         + (SELECT count(*) FROM nodes WHERE project_id = ${projectId} AND session_id IS NULL)
         AS count`,
     });

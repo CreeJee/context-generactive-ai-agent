@@ -77,14 +77,22 @@ export const createResultPageReader = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const failed = (cause: unknown) =>
     ResultPageReadFailed.make({ reason: ResultPageReadReason.cases.ReadFailed.make({ cause }) });
+  /**
+   * The sessions whose results `sessionId` reads: its own tree, the top-level session and its
+   * subagents' sessions. A subagent reads what its parent read, and the parent what it delegated.
+   */
+  const tree = (sessionId: string) => sql`SELECT t.id FROM sessions s JOIN sessions t
+    ON t.id = coalesce(s.parent_session_id, s.id)
+      OR t.parent_session_id = coalesce(s.parent_session_id, s.id)
+    WHERE s.id = ${sessionId}`;
   const metadata = (id: string, projectId: string, sessionId: string) =>
     sql`SELECT length(CAST(text AS BLOB)) AS size FROM nodes
       WHERE id = ${id} AND kind = 'tool_result' AND project_id = ${projectId}
-        AND session_id = ${sessionId}`.pipe(Effect.mapError(failed));
+        AND session_id IN (${tree(sessionId)})`.pipe(Effect.mapError(failed));
   const block = (start: number, length: number, id: string, projectId: string, sessionId: string) =>
     sql`SELECT substr(CAST(text AS BLOB), ${start}, ${length}) AS bytes FROM nodes
       WHERE id = ${id} AND kind = 'tool_result' AND project_id = ${projectId}
-        AND session_id = ${sessionId}`.pipe(Effect.mapError(failed));
+        AND session_id IN (${tree(sessionId)})`.pipe(Effect.mapError(failed));
   const cache = yield* Ref.make<Cache>({ generation: 0, indexes: [] });
   /** Caches the index; past 32 entries, the earliest cached go first. */
   const withIndex = (state: Cache, id: string, index: TextIndex): Cache => ({

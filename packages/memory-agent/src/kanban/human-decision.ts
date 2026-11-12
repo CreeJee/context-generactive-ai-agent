@@ -338,7 +338,8 @@ const make = Effect.gen(function* () {
   const projectSessions = SqlSchema.findAll({
     Request: Schema.String,
     Result: SessionRow,
-    execute: (projectId) => sql`SELECT id, title FROM sessions WHERE project_id = ${projectId}`,
+    execute: (projectId) =>
+      sql`SELECT id, title FROM sessions WHERE project_id = ${projectId} AND parent_session_id IS NULL`,
   });
 
   const decoded = (execution: StoredExecution) =>

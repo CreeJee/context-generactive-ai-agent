@@ -3036,6 +3036,13 @@ export const migrations: readonly string[] = [
   `,
   memoryNoteKindsMigration,
   `
+  -- A subagent's conversation is a session of its own under the session that started it: a chat's
+  -- subagent, a card's agent or its verifier. Its id is the subagent's thread id. Only top-level
+  -- sessions are listed; the parent's deletion takes its children along.
+  ALTER TABLE sessions ADD COLUMN parent_session_id TEXT REFERENCES sessions(id);
+  CREATE INDEX sessions_parent ON sessions(parent_session_id) WHERE parent_session_id IS NOT NULL;
+  `,
+  `
   -- A message one conversation leaves another conversation of the same project (decisions.md
   -- "세션 dispatch는 표에 영속으로 저장한다"). A row waits until the target conversation's next run
   -- delivers it, and the app restarts never lose one. BTW threads and subagent threads are not

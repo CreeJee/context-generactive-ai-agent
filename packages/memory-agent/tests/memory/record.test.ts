@@ -66,7 +66,7 @@ const recordedSkillResult = Effect.fnUntraced(function* (result: JsonValue) {
         projectId: project.id,
         sessionId: session.id,
         runId,
-        userNodeId: Effect.succeed(user.id),
+        replyTo: Effect.succeedSome(user.id),
       }),
     ],
   });
@@ -98,7 +98,7 @@ testAgent()("Recorder", (it) => {
             projectId: project.id,
             sessionId: session.id,
             runId,
-            userNodeId: Effect.succeed(user.id),
+            replyTo: Effect.succeedSome(user.id),
           }),
         ],
       });
@@ -209,7 +209,7 @@ testAgent()("Recorder", (it) => {
                 projectId: project.id,
                 sessionId: session.id,
                 runId,
-                userNodeId: Effect.succeed(user.id),
+                replyTo: Effect.succeedSome(user.id),
               }),
             ],
           });
@@ -241,7 +241,7 @@ testAgent()("Recorder", (it) => {
             projectId: project.id,
             sessionId: session.id,
             runId,
-            userNodeId: Effect.succeed(user.id),
+            replyTo: Effect.succeedSome(user.id),
           }),
         ],
       });
@@ -281,8 +281,9 @@ testAgent()("Recorder", (it) => {
             projectId: project.id,
             sessionId: entry.session.id,
             runId: entry.runId,
-            userNodeId: Ref.update(reads, (count) => count + 1).pipe(
+            replyTo: Ref.update(reads, (count) => count + 1).pipe(
               Effect.andThen(Ref.get(currentUserId)),
+              Effect.asSome,
             ),
           });
           expect(yield* Ref.get(reads)).toBe(0);

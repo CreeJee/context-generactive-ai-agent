@@ -1530,7 +1530,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               yield* events.publishSession(sessionId, "relayed-approvals");
               return approved;
             });
-          const binding = { projectId, sessionId, runId, userNodeId, externalAgent: answeredBy };
+          const binding = {
+            projectId,
+            sessionId,
+            runId,
+            replyTo: Effect.asSome(userNodeId),
+            externalAgent: answeredBy,
+          };
           const conversation = withPageTurns(
             yield* runStore.thread(sessionId),
             yield* pageTurns(messages),
@@ -1950,7 +1956,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               () => [],
             )
           : [];
-        const answers = { projectId, sessionId, runId, userNodeId };
+        const answers = { projectId, sessionId, runId, replyTo: Effect.asSome(userNodeId) };
         const readOnly = workflowReadOnly || reportSource !== null;
         /** What a report session gets instead: it never connects or loads anything more. */
         const unlessReport = <A, E, R>(effect: Effect.Effect<A, E, R>, none: NoInfer<A>) =>

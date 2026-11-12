@@ -67,7 +67,6 @@ const programCallable = {
   cancel_background_task: false,
   run_subagent: false,
   resume_subagent: false,
-  read_subagent_tool_result: true,
   get_subagent_reports: false,
   list_report_evidence: true,
   read_report_item: true,

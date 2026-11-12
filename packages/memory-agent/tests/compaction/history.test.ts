@@ -93,6 +93,49 @@ testAgent()("compaction over recorded history", (it) => {
   );
 
   it.effect(
+    "read_tool_result opens a subagent's results from its parent and the parent's from it, not a stranger's",
+    () =>
+      Effect.gen(function* () {
+        const parent = yield* freshSession;
+        const other = yield* freshSession;
+        const nodes = yield* Nodes;
+        // A subagent's session under each conversation, as a delegated run makes it.
+        const childOf = Effect.fnUntraced(function* (at: typeof parent, name: string) {
+          yield* sqlRun(
+            `INSERT INTO sessions (id, project_id, created_at, parent_session_id)
+             VALUES (?, ?, 'now', ?)`,
+            name,
+            at.projectId,
+            at.sessionId,
+          );
+          return { projectId: at.projectId, sessionId: name };
+        });
+        const child = yield* childOf(parent, `subagent-${parent.sessionId}-a`);
+        const sibling = yield* childOf(parent, `subagent-${parent.sessionId}-b`);
+        const stranger = yield* childOf(other, `subagent-${other.sessionId}`);
+        const result = (at: typeof parent) =>
+          nodes.append({ ...at, kind: "tool_result", text: `result of ${at.sessionId}` });
+        const [parentResult, childResult, siblingResult, strangerResult] = yield* Effect.all([
+          result(parent),
+          result(child),
+          result(sibling),
+          result(stranger),
+        ]);
+        const memoryTools = yield* MemoryTools;
+        const opens = (at: typeof parent, id: string) =>
+          Effect.map(callTool(memoryTools.toolsFor(at), "read_tool_result", { id }), (page) =>
+            Schema.is(Schema.Struct({ text: Schema.String }))(page),
+          );
+        expect(yield* opens(parent, childResult.id)).toBe(true);
+        expect(yield* opens(child, parentResult.id)).toBe(true);
+        expect(yield* opens(child, siblingResult.id)).toBe(true);
+        expect(yield* opens(parent, strangerResult.id)).toBe(false);
+        expect(yield* opens(child, strangerResult.id)).toBe(false);
+        expect(yield* opens(stranger, childResult.id)).toBe(false);
+      }),
+  );
+
+  it.effect(
     "clears answered tool output once a later run has answered, and keeps the latest whole",
     () =>
       Effect.gen(function* () {

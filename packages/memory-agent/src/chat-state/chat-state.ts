@@ -44,7 +44,7 @@ const make = Effect.gen(function* () {
     execute: () => sql`
       SELECT sessions.id FROM sessions
       LEFT JOIN chat_threads ON chat_threads.thread_id = sessions.id
-      WHERE chat_threads.thread_id IS NULL
+      WHERE chat_threads.thread_id IS NULL AND sessions.parent_session_id IS NULL
       ORDER BY sessions.created_at, sessions.id`,
   });
   const missingThread = SqlSchema.findOneOption({

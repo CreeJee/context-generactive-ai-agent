@@ -34,7 +34,6 @@ export const builtinToolEffects = {
   cancel_background_task: "effectful",
   run_subagent: "effectful",
   resume_subagent: "effectful",
-  read_subagent_tool_result: "read",
   get_subagent_reports: "read",
   // Report-session evidence tools only perform scoped SELECTs and redaction.
   list_report_evidence: "read",
@@ -58,6 +57,8 @@ export const builtinToolEffects = {
 const retiredToolEffects = {
   // Replaced by get_subagent_reports with one attempt.
   get_subagent_report: "read",
+  // Replaced by read_tool_result: a subagent's session is recorded in memory like any other.
+  read_subagent_tool_result: "read",
   // Replaced by save_code_skill, which also saves ts skills.
   save_shell_skill: "effectful",
   // Replaced by completion notifications and their follow-up; it only read status.

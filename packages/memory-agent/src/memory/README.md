@@ -26,7 +26,7 @@
 - `Interpretations` / `Interpretation` / `InterpretedKind` / `InterpretationStoreFailed` — LLM 해석 결론 저장소(`record`, `targeting(targetIds, status)`). 상태는 applied·unconfirmed
 - `Interpreter` / `InterpretationFailed` — llm-interpret 서비스(`Interpreter.layer(automatic = true)`). 저장된 발화를 topic·correction·relation edge로 바꾼다. 실패 reason은 `model_call_failed` 또는 `unreadable_answer`
 - `interpretInstructions` / `normalizeTopic` — 해석 모델의 시스템 지시문, topic 라벨 정규화(한 줄, 앞뒤 공백 제거, 최대 60자)
-- `Recorder` / `makeRecordingHook` / `RunBinding` — 채팅 run을 메모리 노드로 바꾸는 서비스(`Recorder.layer`)와 Effect AI run의 `RunHook`을 만드는 함수(`Nodes`·`PermissionReviews` 필요)
+- `Recorder` / `makeRecordingHook` / `RunBinding` — 채팅 run을 메모리 노드로 바꾸는 서비스(`Recorder.layer`)와 Effect AI run의 `RunHook`을 만드는 함수(`Nodes`·`PermissionReviews` 필요). `RunBinding.replyTo`는 run이 답하는 node다. 메인 대화는 사용자 턴, 하위 에이전트 세션은 지시가 나온 부모 쪽 node이고, 없으면 assistant node에 `reply` edge를 달지 않는다
 - `MemoryGraphMaintenance` / `MemoryGraphRepairFailed` — 이전 버전이 잘못 쓴 링크를 자동으로 고치는 로컬 수리 서비스(`MemoryGraphMaintenance.layer`)와 그 실패 오류
 - `latestResolver` / `ChainReads` / `LatestEvidence` / `LatestHead` / `BranchHead` / `AppliedChange` / `ChainSource` / `ChangeRelation` — owner 저장소 읽기를 통해 한 발화에 기록된 변경이 어디서 끝나는지 해석한다
 - `createResultPageReader` / `ResultPageReadFailed` — append-only 노드 텍스트를 블록 캐시·텍스트 인덱스로 페이지 단위로 읽는 리더와 그 실패 오류

@@ -5,6 +5,7 @@ import { RelayedApprovals } from "../../src/approvals/relayed.ts";
 import { ApprovalRequester } from "../../src/approvals/relayed-state.ts";
 import { PermissionReviews } from "../../src/permissions/reviews.ts";
 import type { PermissionMode } from "../../src/projects/projects.ts";
+import { Sessions } from "../../src/sessions/sessions.ts";
 import { Subagents, subagentThreadId } from "../../src/subagents/subagents.ts";
 import { ResumeRequest } from "../../src/work-trace/store.ts";
 import { selectTestModel } from "../support/provider.ts";
@@ -100,13 +101,11 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         expect(childStart?.system.some((prompt) => prompt.includes("Current workflow"))).toBe(
           false,
         );
-        expect(childStart?.toolNames).toContain("read_subagent_tool_result");
-        // The only child-specific tool reads bounded pages of that child's own persisted results.
-        expect(
-          childStart?.toolNames.every(
-            (name) => name === "read_subagent_tool_result" || parentStart?.toolNames.includes(name),
-          ),
-        ).toBe(true);
+        // A child has no tool of its own: read_tool_result reads its results as the parent's do.
+        expect(childStart?.toolNames).toContain("read_tool_result");
+        expect(childStart?.toolNames.every((name) => parentStart?.toolNames.includes(name))).toBe(
+          true,
+        );
         // The parent's conversation is not copied into the child.
         expect(
           childStart?.history.some(
@@ -118,6 +117,31 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         ).toBe(false);
         const transcript = yield* subagents.transcript(sessionId, child!.id);
         expect(transcript?.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+        // The child's conversation is a session of its own under the parent's, kept in memory. Its
+        // task is the parent's words, not the user's: it has no user node, and its answer replies to
+        // the parent's call that gave the task.
+        const childSessionId = subagentThreadId(child!.id);
+        expect(
+          yield* sqlGet("SELECT parent_session_id FROM sessions WHERE id = ?", childSessionId),
+        ).toEqual({ parent_session_id: sessionId });
+        expect(
+          yield* sqlAll("SELECT kind FROM nodes WHERE session_id = ? ORDER BY seq", childSessionId),
+        ).toEqual([{ kind: "assistant" }]);
+        expect(
+          yield* sqlGet(
+            `SELECT c.session_id, json_extract(c.detail, '$.toolName') AS tool_name
+             FROM nodes a JOIN edges e ON e.from_id = a.id AND e.kind = 'reply'
+             JOIN nodes c ON c.id = e.to_id
+             WHERE a.session_id = ?`,
+            childSessionId,
+          ),
+        ).toEqual({ session_id: sessionId, tool_name: "run_subagent" });
+        // Only the parent is listed.
+        expect(
+          (yield* current(Effect.flatMap(Sessions, (sessions) => sessions.list(project.id)))).map(
+            (session) => session.id,
+          ),
+        ).toEqual([sessionId]);
         const trace = yield* Schema.decodeUnknownEffect(TraceSummary)(
           yield* sqlGet(
             `SELECT t.id AS task_id, a.id AS attempt_id,

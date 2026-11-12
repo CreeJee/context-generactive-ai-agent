@@ -26,10 +26,11 @@ export interface RunBinding {
   readonly sessionId: string;
   readonly runId: string;
   /**
-   * The user turn this run answers. Assistant nodes get a `reply` edge to it. A Goal run admits its
-   * turn after the run is prepared, so the turn is read when a node needs it.
+   * The node this run answers: the user turn, or in a subagent's session the parent's node its
+   * task came from. Assistant nodes get a `reply` edge to it; none gives them no edge. A Goal run
+   * admits its turn after the run is prepared, so it is read when a node needs it.
    */
-  readonly userNodeId: Effect.Effect<string>;
+  readonly replyTo: Effect.Effect<Option.Option<string>>;
   /** Set when an external ACP agent answers instead of the app's model. */
   readonly externalAgent?: string;
 }
@@ -131,14 +132,14 @@ const recorderFor = Effect.fnUntraced(function* (binding: RunBinding) {
 
   /** The text has been through `hide` already. */
   const appendAssistant = (text: string, partial?: { reason: string }) =>
-    Effect.flatMap(binding.userNodeId, (userNodeId) =>
+    Effect.flatMap(binding.replyTo, (replyTo) =>
       nodes.append({
         ...base,
         kind: "assistant",
         text,
         detail:
           partial !== undefined ? { ...source, partial: true, reason: partial.reason } : source,
-        links: [{ kind: "reply", nodeId: userNodeId }],
+        links: Option.toArray(Option.map(replyTo, (nodeId) => ({ kind: "reply", nodeId }))),
       }),
     );
 

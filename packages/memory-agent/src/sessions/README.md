@@ -15,7 +15,7 @@
 - `Sessions.create(projectId, title?, agent?)` — 프로젝트 존재 확인(ProjectNotFound) 뒤 UUIDv4 id·현재 ISO 시각으로 INSERT
 - `Sessions.createImported(projectId, title, createdAt, transcript, origin)` — 다른 도구 transcript에서 옮긴 대화를 원래 시작 시각으로 INSERT하고, 같은 transaction에서 transcript 매핑(`imported_sessions`)을 쓴다 (프로젝트 확인 없음)
 - `Sessions.recordOrigin(id, origin)` — worktree_path·branch를 coalesce로 비어 있을 때만 채움
-- `Sessions.list(projectId, archived = false)` — created_at DESC, id 순; archived=true면 보관된 것만
+- `Sessions.list(projectId, archived = false)` — created_at DESC, id 순; archived=true면 보관된 것만. 하위 에이전트 세션(`parent_session_id`가 있는 행)은 목록에 넣지 않는다
 - `Sessions.setArchived(id, archived)` — archived_at을 현재 시각 또는 null로 바꾸고 세션 반환
 - `SessionLeases` — Context.Service("memory-agent/sessions/leases/SessionLeases"); `SessionLeases.layer(ttlMs = defaultLeaseTtlMs)`는 주기 sweep fiber를 forkScoped로 띄움
 - `makeLeases(ttlMs)` — Ref 기반 lease 저장소 생성; sweepExpired·onExpired·view·claim·release·permits 반환

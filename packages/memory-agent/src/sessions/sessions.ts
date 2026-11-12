@@ -122,7 +122,8 @@ const make = Effect.gen(function* () {
     Result: SessionRow,
     execute: ({ projectId, archived }) => sql`
       SELECT ${columns} FROM sessions
-      WHERE project_id = ${projectId} AND archived_at IS ${sql.literal(archived ? "NOT NULL" : "NULL")}
+      WHERE project_id = ${projectId} AND parent_session_id IS NULL
+        AND archived_at IS ${sql.literal(archived ? "NOT NULL" : "NULL")}
       ORDER BY created_at DESC, id`,
   });
   const archive = SqlSchema.findOneOption({
@@ -185,7 +186,10 @@ const make = Effect.gen(function* () {
           branch = coalesce(branch, ${origin.branch})
         WHERE id = ${id}`),
 
-    /** Newest first. Archived conversations are listed only when asked for, and then only they are. */
+    /**
+     * Newest first. Archived conversations are listed only when asked for, and then only they are.
+     * A subagent's session is shown with the session that started it, not here.
+     */
     list: (projectId: string, archived = false) =>
       Effect.flatMap(list({ projectId, archived }), (rows) => Effect.forEach(rows, withTitle)),
 

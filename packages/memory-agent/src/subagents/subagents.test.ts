@@ -1,14 +1,15 @@
 import { it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, HashMap, Iterable } from "effect";
 import { expect } from "vite-plus/test";
 import {
   budgetFor,
+  type CompactionSources,
   type CompactionState,
   type ConversationMessage,
   compactEffect,
   estimateConversation,
 } from "../agent/compaction.ts";
-import { childCompactionSources, childFailureOf } from "./subagents.ts";
+import { childFailureOf, recordedOnly } from "./subagents.ts";
 
 const noCompaction: CompactionState = {
   manual: { clearedThrough: 0, summarizedTurns: 0 },
@@ -27,7 +28,27 @@ const read = (id: string, characters: number): ConversationMessage[] => [
   { role: "tool", toolCallId: id, content: "x".repeat(characters) },
 ];
 
-/** A child's request as the conversation's compaction makes it, from the child's saved transcript. */
+/**
+ * What the child's session recorded of `saved`: each tool result is a memory node, named here
+ * `node-<call id>`.
+ */
+const recordedIn = (saved: ReadonlyArray<ConversationMessage>): CompactionSources => ({
+  toolResultIds: (toolCallIds) =>
+    Effect.succeed(
+      HashMap.fromIterable(
+        Iterable.map(
+          Iterable.filter(toolCallIds, (id) =>
+            saved.some((message) => message.role === "tool" && message.toolCallId === id),
+          ),
+          (id) => [id, `node-${id}`] as const,
+        ),
+      ),
+    ),
+  nodeTexts: () => Effect.succeed(HashMap.empty()),
+  pointers: recordedOnly,
+});
+
+/** A child's request as the conversation's compaction makes it, from the child's own session. */
 const compacted = (
   messages: ReadonlyArray<ConversationMessage>,
   saved: ReadonlyArray<ConversationMessage>,
@@ -37,7 +58,7 @@ const compacted = (
     compactEffect({
       messages,
       state: noCompaction,
-      sources: childCompactionSources(Effect.succeed(saved)),
+      sources: recordedIn(saved),
       budget: budgetFor(window),
     }),
     ({ messages: sent }) => sent,
@@ -52,16 +73,14 @@ it.effect("a child's run past the window's budget leaves its oldest results out"
 
     const sent = yield* compacted(messages, messages, 10_000);
     expect(estimateConversation(sent)).toBeLessThanOrEqual(budgetFor(10_000).leaveOutAt / 2);
-    // The task and every call stay; the oldest results point at the saved transcript.
+    // The task and every call stay; the oldest results point at their nodes in the child's session.
     expect(sent).toHaveLength(messages.length);
     expect(sent[0]).toEqual(messages[0]);
-    expect(sent[2]?.content).toBe(
-      "[Tool output cleared. Reread: read_subagent_tool_result toolCallId call-0]",
-    );
+    expect(sent[2]?.content).toBe("[Tool output cleared. Reread: read_evidence node-call-0]");
     // The latest step's result is what the child asked for to go on: it stays whole.
     expect(sent.at(-1)).toEqual(messages.at(-1));
 
-    // A result not saved yet cannot be read again, so it is not left out.
+    // A result not recorded yet cannot be read again, so it is not left out.
     expect(yield* compacted(messages, [], 10_000)).toEqual(messages);
     // Within the budget nothing changes.
     expect(yield* compacted(messages, messages, 100_000)).toEqual(messages);
@@ -82,7 +101,7 @@ it.effect(
         { role: "user", content: "third task" },
       ];
       const sent = yield* compacted(messages, messages, 100_000);
-      expect(sent[2]?.content).toContain("read_subagent_tool_result toolCallId first");
+      expect(sent[2]?.content).toContain("read_evidence node-first");
       // The latest answered task stays whole: the next request is usually about what it read.
       expect(sent[6]).toEqual(messages[6]);
     }),

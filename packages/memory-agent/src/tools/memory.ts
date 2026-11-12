@@ -64,7 +64,7 @@ const traceEvidence = {
 const readToolResult = {
   name: "read_tool_result",
   description:
-    "Read a bounded page of the saved, redacted original result behind a compact tool summary. Only tool results from this project and conversation are accessible; use nextOffset for later pages.",
+    "Read a bounded page of the saved, redacted original result behind a compact tool summary. Only tool results from this project's conversation and its subagents are accessible; use nextOffset for later pages.",
   parameters: readToolResultInput,
 } as const;
 

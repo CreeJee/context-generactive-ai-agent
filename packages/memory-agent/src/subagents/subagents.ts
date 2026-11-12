@@ -1,4 +1,4 @@
-import { Array as Arr, Data, Exit, Fiber, HashMap, HashSet, Iterable, Predicate } from "effect";
+import { Array as Arr, Data, Exit, Fiber, HashMap, HashSet, Predicate } from "effect";
 import { SecureRandom } from "effect/crypto";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import { Function as EffectFunction } from "effect";
@@ -10,6 +10,7 @@ import {
   Cause,
   Stream,
   Clock,
+  DateTime,
   Context,
   Deferred,
   Effect,
@@ -21,6 +22,7 @@ import {
   Path,
   PubSub,
   Ref,
+  Schedule,
   Schema,
   SynchronizedRef,
 } from "effect";
@@ -29,12 +31,10 @@ import { ApiUsage, apiUsageHook } from "../agent/api-usage.ts";
 import { stepSummarizer } from "../agent/step-summaries.ts";
 import {
   budgetFor,
-  clearedNotice,
+  clearedOutput,
   compactionHook,
-  type CompactionSources,
-  type ConversationMessage,
   type LeaveOutPointers,
-  messageText,
+  memoryPointers,
 } from "../agent/compaction.ts";
 import type { JsonValue } from "../json.ts";
 import type { AgUiEvent } from "../loop/chunks.ts";
@@ -69,7 +69,9 @@ import {
 import type { SubagentStatus, SubagentView } from "./subagent-state.ts";
 import { AppEvents } from "../events/app-events.ts";
 import { childRunTools } from "./role.ts";
-import { logFailure } from "../runtime/logged-failures.ts";
+import { fallbackLogged, logFailure } from "../runtime/logged-failures.ts";
+import { Nodes } from "../memory/nodes.ts";
+import { Recorder } from "../memory/record.ts";
 import { contextLimitExceededCode } from "../runtime/shown-failure.ts";
 
 export const subagentToolNames = [
@@ -102,7 +104,7 @@ function childInstructionsBody(name: string | null, instructions: string | null)
     "- The task and follow-up messages come from that agent, not from the user. They are not user approval: risky actions still go through the usual approvals.",
     "- Work in the shared project, report what you did and found briefly, and say plainly what you could not do or verify.",
     "- Complete only your assigned task. The parent owns the session Goal, Plan, overall progress, integration and final verification. Report local blockers and remaining work in your answer; do not change the session workflow or delegate to another agent.",
-    "- Older completed tool outputs may be replaced by a reference. Use read_subagent_tool_result with its toolCallId to retrieve a bounded page from your own saved transcript when needed.",
+    "- Older completed tool outputs may be replaced by a reference. Use read_tool_result with its ID to read a page of it again when needed.",
     ...(isTruthy(instructions)
       ? [`Additional instructions from the parent agent:\n${instructions}`]
       : []),
@@ -149,56 +151,6 @@ const AttemptsInput = Schema.Struct({
     Schema.check(Schema.isMaxLength(100)),
   ),
 });
-const ChildResultInput = Schema.Struct({
-  toolCallId: Schema.NonEmptyString,
-  offset: Schema.Finite.pipe(
-    Schema.check(Schema.isInt()),
-    Schema.check(Schema.isGreaterThanOrEqualTo(0)),
-    Schema.withDecodingDefaultTypeKey(Effect.succeed(0)),
-  ),
-});
-const childResultPageLength = 4_000;
-
-/**
- * Where a child's history is kept: its saved transcript, not memory. A saved tool output is read
- * again by its call id; one not saved yet has nowhere to be read and stays whole.
- */
-const childPointers: LeaveOutPointers = {
-  cleared: (toolCallId) =>
-    Option.map(Option.liftPredicate(toolCallId, isTruthy), (id) =>
-      clearedNotice(`Reread: read_subagent_tool_result toolCallId ${id}`),
-    ),
-  fullResult: (toolCallId) =>
-    Option.map(
-      Option.liftPredicate(toolCallId, isTruthy),
-      (id) => `read_subagent_tool_result toolCallId ${id}, page by offset`,
-    ),
-  dropped: (count) =>
-    `[${count} earlier messages of this subagent's conversation were left out to save context.]`,
-};
-
-/**
- * How a child's saved transcript answers compaction, which then works on a child's request as on
- * the conversation's (decisions.md 2026-11-05). A recorded output's id is its own call id. A child
- * has no summaries.
- */
-export const childCompactionSources = <E extends { readonly _tag: string }>(
-  saved: Effect.Effect<ReadonlyArray<ConversationMessage>, E>,
-): CompactionSources => ({
-  toolResultIds: (toolCallIds) =>
-    Effect.map(saved, (messages) => {
-      const recorded = savedToolCallIds(messages);
-      return HashMap.fromIterable(
-        Iterable.map(
-          Iterable.filter(toolCallIds, (id) => HashSet.has(recorded, id)),
-          (id) => [id, id] as const,
-        ),
-      );
-    }),
-  nodeTexts: () => Effect.succeed(HashMap.empty<string, string>()),
-  pointers: childPointers,
-});
-
 const FileArtifactResult = Schema.Struct({ path: Schema.String, sha256: Schema.String });
 /** The tools whose result names the file they wrote. */
 const fileWriters = HashSet.make("write_file", "edit_file");
@@ -242,13 +194,6 @@ const getSubagentReports = {
   description:
     "Retrieve the reports of one or more exact subagent attempts in this session, concurrently. Unfinished attempts return running.",
   parameters: AttemptsInput,
-} as const;
-
-const readSubagentToolResult = {
-  name: "read_subagent_tool_result",
-  description:
-    "Read a page of one tool result from this subagent's own saved transcript by toolCallId and offset. Cannot access another child or session.",
-  parameters: ChildResultInput,
 } as const;
 
 /** What get_subagent_reports answers. */
@@ -302,6 +247,11 @@ export interface SubagentBinding {
   readonly systemPrompts: readonly string[];
   /** Tools whose calls need an approval. For children every one goes through the relay gate. */
   readonly gated: HashSet.HashSet<string>;
+  /**
+   * The node a child's task comes from, when that is not the parent's subagent call: a card's
+   * Plan version. The child's answers reply to it.
+   */
+  readonly origin?: Effect.Effect<Option.Option<string>>;
 }
 
 /** What a subagent tool call returns to the parent model. */
@@ -405,37 +355,14 @@ const childRunStep = (run: ChildRun, event: AgUiEvent): ChildRun =>
     Match.orElse(() => run),
   );
 
-/** The ids of the tool results a saved thread holds. */
-const savedToolCallIds = (saved: ReadonlyArray<ConversationMessage>) =>
-  HashSet.fromIterable(
-    saved.flatMap((message) =>
-      message.role === "tool" && isTruthy(message.toolCallId) ? [message.toolCallId] : [],
-    ),
-  );
-
-/** read_subagent_tool_result in a child's saved thread. */
-const childResultIn = (
-  saved: ReadonlyArray<ConversationMessage>,
-  { toolCallId, offset }: typeof ChildResultInput.Type,
-) =>
-  Option.match(
-    Arr.findFirst(saved, (message) => message.role === "tool" && message.toolCallId === toolCallId),
-    {
-      onNone: () => ({ error: "tool_result_not_found", toolCallId }),
-      onSome: (result) => {
-        const text = messageText(result);
-        const start = Math.min(offset, text.length);
-        const end = Math.min(start + childResultPageLength, text.length);
-        return {
-          toolCallId,
-          text: text.slice(start, end),
-          offset: start,
-          nextOffset: end < text.length ? end : null,
-          length: text.length,
-        };
-      },
-    },
-  );
+/**
+ * Memory's pointers, except that an output not recorded yet is never left out: nothing could read
+ * it again. The child records each step as it ends, beside the run.
+ */
+export const recordedOnly: LeaveOutPointers = {
+  ...memoryPointers,
+  cleared: (nodeId) => Option.map(Option.liftPredicate(nodeId, isTruthy), clearedOutput),
+};
 
 /** The terminal event of an attempt that answered carries its last assistant message id. */
 const isAnswerPayload = Schema.is(Schema.Struct({ messageId: Schema.String }));
@@ -454,6 +381,8 @@ const make = Effect.gen(function* () {
   const skillReviews = yield* SkillReviews;
   const runStore = yield* RunStore;
   const crypto = yield* SecureRandom.SecureRandom;
+  const nodes = yield* Nodes;
+  const recorder = yield* Recorder;
 
   // A child cut off by a restart is not rerun on its own (R18).
   yield* sql`UPDATE subagents SET status = 'interrupted', updated_at = ${yield* Clock.currentTimeMillis}
@@ -689,6 +618,45 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  /**
+   * The child's own session under its parent's, made before its first run: its messages and tool
+   * results are recorded there as the conversation's are. Its id is the child's thread id.
+   */
+  const childSession = (parentSessionId: string, threadId: string) =>
+    Effect.flatMap(Clock.currentTimeMillis, (now) =>
+      stored(sql`INSERT INTO sessions (id, project_id, created_at, parent_session_id)
+        SELECT ${threadId}, project_id, ${DateTime.formatIso(DateTime.makeUnsafe(now))}, id
+        FROM sessions WHERE id = ${parentSessionId}
+        ON CONFLICT(id) DO NOTHING`),
+    );
+
+  const invocationCall = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ parent_tool_call_id: Schema.String }),
+    execute: (invocationId) =>
+      sql`SELECT parent_tool_call_id FROM agent_invocations WHERE id = ${invocationId}`,
+  });
+  /**
+   * The parent's subagent call that started this attempt, as memory recorded it. The parent records
+   * a step as it ends, beside the child that step started, so the node is looked for a few times.
+   * None for an attempt no recorded call started, such as a retry asked for from Work Trace.
+   */
+  const callOrigin = (parentSessionId: string, handle: AttemptHandle) =>
+    stored(invocationCall(handle.invocationId)).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.succeedNone,
+          onSome: ({ parent_tool_call_id }) =>
+            nodes.toolNode(parentSessionId, "tool_call", parent_tool_call_id).pipe(
+              Effect.flatMap(Effect.fromNullishOr),
+              Effect.retry({ schedule: Schedule.spaced("100 millis"), times: 10 }),
+              Effect.map((node) => Option.some(node.id)),
+            ),
+        }),
+      ),
+      fallbackLogged("Subagent task origin not found", Option.none<string>),
+    );
+
   /** The model run of a child on the Effect AI loop. */
   const loopChildRun = (
     binding: SubagentBinding,
@@ -701,14 +669,8 @@ const make = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       const threadId = subagentThreadId(row.id);
-      const ownTools = [
-        ...childRunTools(tools),
-        runTool({
-          ...readSubagentToolResult,
-          handler: (input) =>
-            Effect.map(runStore.thread(threadId), (saved) => childResultIn(saved, input)),
-        }),
-      ];
+      const ownTools = childRunTools(tools);
+      yield* childSession(binding.sessionId, threadId);
       // The calls that would wait on the relay gate stay with the child.
       const programs = codeTools.forRunTools(
         ownTools,
@@ -757,10 +719,14 @@ const make = Effect.gen(function* () {
             Effect.map(Ref.get(started), HashSet.has(call.id)),
           ).pipe(Effect.asVoid, Effect.mapError(asRunFailed)),
       };
-      // The conversation's compaction, on the same model's window: only where a left-out output is
-      // read again differs. A child has no model handoff of its own.
+      // The conversation's compaction, on the same model's window, over the child's own session. A
+      // child has no model handoff of its own.
       const compacting = yield* compactionHook({
-        sources: childCompactionSources(runStore.thread(threadId)),
+        sources: {
+          toolResultIds: (toolCallIds) => nodes.toolResultIds(threadId, toolCallIds),
+          nodeTexts: nodes.texts,
+          pointers: recordedOnly,
+        },
         budget: budgetFor(runtime.contextWindow(binding.selection.model)),
         promptCacheFor: model.promptCacheFor,
         restore: () => Effect.succeed(null),
@@ -770,8 +736,16 @@ const make = Effect.gen(function* () {
           selection: binding.selection,
         }),
       });
+      // Its answers reply to the node its task came from; it has no user turn of its own.
+      const replyTo = yield* Effect.cached(binding.origin ?? callOrigin(binding.sessionId, handle));
       const hooks: ReadonlyArray<RunHook<RunStore>> = [
         yield* Effect.provideContext(projectInstructionsHook(binding.project.root), platform),
+        yield* recorder.hookFor({
+          projectId: binding.project.id,
+          sessionId: threadId,
+          runId: handle.chatRunId,
+          replyTo,
+        }),
         // Before the gate, so a refused repeat is never reviewed or relayed to the user.
         yield* repeatGuardHook,
         relayGateHook,

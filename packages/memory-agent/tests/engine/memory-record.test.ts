@@ -46,7 +46,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
             projectId: project.id,
             sessionId: session.id,
             runId,
-            userNodeId: Effect.succeed(user.id),
+            replyTo: Effect.succeedSome(user.id),
           });
           yield* scriptedRun({
             turns: [{ text: "owner answer" }],

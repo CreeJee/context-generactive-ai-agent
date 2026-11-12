@@ -1400,10 +1400,13 @@ const make = Effect.gen(function* () {
     const subagentRows = yield* decodeIds(
       yield* sql`SELECT id FROM subagents WHERE session_id = ${sessionId}`,
     );
+    // The session and its subagents' sessions, whose records go with it.
+    const tree = sql`SELECT ${sessionId} UNION ALL
+      SELECT id FROM sessions WHERE parent_session_id = ${sessionId}`;
     // One statement per table over all of the session's nodes: a statement per node kept the write
     // lock for minutes on a long conversation.
-    const ids = sql`SELECT id FROM nodes WHERE session_id = ${sessionId}`;
-    const seqs = sql`SELECT seq FROM nodes WHERE session_id = ${sessionId}`;
+    const ids = sql`SELECT id FROM nodes WHERE session_id IN (${tree})`;
+    const seqs = sql`SELECT seq FROM nodes WHERE session_id IN (${tree})`;
     yield* run(sql`DELETE FROM interpretations WHERE node_id IN (${ids}) OR target_id IN (${ids})`);
     yield* run(sql`DELETE FROM edges WHERE from_id IN (${ids}) OR to_id IN (${ids})`);
     yield* run(sql`DELETE FROM node_refs WHERE node_id IN (${ids})`);
@@ -1412,7 +1415,7 @@ const make = Effect.gen(function* () {
     yield* run(sql`DELETE FROM interpret_jobs WHERE node_id IN (${ids})`);
     yield* run(sql`DELETE FROM node_vectors WHERE node_seq IN (${seqs})`);
     yield* run(sql`DELETE FROM memory_graph_suppressed_nodes WHERE node_seq IN (${seqs})`);
-    const nodes = (yield* run(sql`DELETE FROM nodes WHERE session_id = ${sessionId}`)).changes;
+    const nodes = (yield* run(sql`DELETE FROM nodes WHERE session_id IN (${tree})`)).changes;
     yield* run(sql`DELETE FROM background_tasks WHERE session_id = ${sessionId}`);
     // Its Work Trace goes with it, also the tombstones of the tasks deleted above: no page shows a
     // deleted conversation's tasks. Their attempts, events, artifacts and notifications cascade, and
@@ -1450,8 +1453,9 @@ const make = Effect.gen(function* () {
     yield* run(sql`DELETE FROM session_workflows WHERE session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM workflow_blocker_evidence WHERE session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM workflow_executions WHERE session_id = ${sessionId}`);
-    yield* run(sql`DELETE FROM turn_summary_blocks WHERE session_id = ${sessionId}`);
+    yield* run(sql`DELETE FROM turn_summary_blocks WHERE session_id IN (${tree})`);
     yield* run(sql`DELETE FROM subagents WHERE session_id = ${sessionId}`);
+    yield* run(sql`DELETE FROM sessions WHERE parent_session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM sessions WHERE id = ${sessionId}`);
     const purgedCounts = yield* encodeJson({
       nodes,

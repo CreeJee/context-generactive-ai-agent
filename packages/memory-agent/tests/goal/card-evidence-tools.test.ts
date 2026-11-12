@@ -7,7 +7,7 @@ import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 
 testAgent({ testProvider: {} })("card evidence tools", (it) => {
-  it.effect("a card verifier reads memory records by node id, and only that", () =>
+  it.effect("a card verifier reads memory records and tool results by id, and only those", () =>
     Effect.gen(function* () {
       const env = yield* TestEnv;
       const fs = yield* FileSystem.FileSystem;
@@ -39,7 +39,7 @@ testAgent({ testProvider: {} })("card evidence tools", (it) => {
       );
       expect(verifier?.toolNames).toContain("read_evidence");
       expect(verifier?.toolNames).not.toContain("find_memory");
-      expect(verifier?.toolNames).not.toContain("read_tool_result");
+      expect(verifier?.toolNames).toContain("read_tool_result");
     }),
   );
 });
