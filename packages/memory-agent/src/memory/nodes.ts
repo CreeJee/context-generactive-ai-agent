@@ -29,6 +29,8 @@ export const NodeKind = Schema.Literals([
   "tool_result",
   "file_observation",
   "topic",
+  /** An entry of an agent session's progress note; it cites its evidence and may supersede an earlier one. */
+  "note",
 ]);
 export type NodeKind = typeof NodeKind.Type;
 

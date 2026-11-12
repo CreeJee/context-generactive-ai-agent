@@ -11,6 +11,8 @@ export const edgeWeights = {
   reply: 0.9, // assistant -> user turn it answers
   touches: 0.7, // nodes that refer to the same file or URL
   next: 0.6, // previous node -> next node in the same session
+  cites: 0.9, // note -> a node it rests on
+  supersedes: 0.95, // later note -> earlier note of the same session it replaces
   // llm: added by llm-interpret
   corrects: 0.95, // newer statement -> statement it corrects
   retracts: 0.95, // newer statement -> statement it withdraws
@@ -28,6 +30,8 @@ export const EdgeKind = Schema.Literals([
   "retracts",
   "about",
   "related",
+  "cites",
+  "supersedes",
 ]);
 export type EdgeKind = typeof EdgeKind.Type;
 

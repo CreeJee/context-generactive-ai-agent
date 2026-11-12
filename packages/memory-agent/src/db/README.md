@@ -19,6 +19,7 @@
 - `FreePages.layer` — incremental auto_vacuum으로 만든 파일이면 10분마다 빈 페이지를 확인하는 fiber를 scope에 띄운다. 그렇지 않은 파일에서는 아무것도 하지 않는다. `reclaimFreePages()`는 빈 페이지가 1,024개 아래로 내려갈 때까지 `PRAGMA incremental_vacuum(256)`을 100ms씩 쉬어 가며 실행한다
 - `PlannerStatistics.layer` — 앱이 시작하면 모든 표, 이후 한 시간마다 이 연결이 질의한 표의 쿼리 플래너 통계(`sqlite_stat1`)를 새로 만드는 fiber를 scope에 띄운다. `refreshPlannerStatistics(scope)`는 `PRAGMA optimize(0x10003)`/`(0x3)`가 계획한 `ANALYZE`를 비우는 표만 빼고 표 하나씩 실행한다
 - `migrations` — `readonly string[]` 순서형 스키마 SQL 단계. projects, sessions, nodes, edges, lexical_changes, chat_threads, chat_thread_messages, chat_runs, queued_messages, subagents, mcp_trust, agent_trust 등을 정의한다
+- `memoryNoteKindsMigration` / `rebuildMemoryKinds` (`memory-kinds-migration.ts`) — `nodes.kind`에 `note`, `edges.kind`에 `cites`·`supersedes`를 더하는 단계. SQLite는 CHECK를 바꿀 수 없어 두 테이블을 지금 정의 그대로(CHECK만 바꿔) 다시 만들고, 행을 rowid 순으로 복사해 양방향 `EXCEPT`로 같은지 확인한 뒤 옛 테이블을 지운다. 인덱스와 트리거는 `sqlite_master`에 있던 그대로 다시 만들고, `nodes`의 AUTOINCREMENT 값(`sqlite_sequence`)을 유지해 지운 node의 seq를 다시 주지 않는다. 정의가 예상과 다르면 `RebuildSchemaUnexpected`, 행이 달라지면 `PreservedRowsChanged`로 멈춘다
 - `goalHistoryMigration` — `{ version: 42, kind: "goal-history-binding-fk-rebuild", preservedTables }`. FK 검사를 멈춘 채 참조되는 테이블을 재구성할 수 있는 유일한 단계
 - `tanStackRowsMigration` — SQL 주석뿐인 단계. 시작 시 이 단계와 함께 `migrateTanStackRows`가 실행된다
 - `emptyUserMessageMigration` — chat_threads.messages에서 빈 user ModelMessage만 제거하는 SQL 단계(대화를 메시지 행으로 옮기기 전의 옛 단계)
@@ -35,7 +36,7 @@
 - 적용 버전은 마이그레이션 잠금(BEGIN IMMEDIATE)을 잡은 뒤에 읽는다. 다른 starter가 먼저 끝냈을 수 있기 때문이다.
 - user_version이 `migrations.length`보다 크면 `NewerThanBuild`로 거부한다. reader에서 더 작으면 `MigrationPending`으로 거부한다. reader는 마이그레이션하지 않으며 캐시된 스키마 버전을 가정하지 않는다.
 - `effect_sql_migrations`가 없으면 1..applied를 `schema_N` 이름으로 adopt한다. 과거 SQL은 다시 실행하지 않는다. 기록이 1..applied와 연속으로 맞지 않으면 `MetadataMismatch`로 거부한다.
-- FK를 멈춘 채 참조 테이블을 재구성할 수 있는 단계는 `goalHistoryMigration`(version 42)뿐이다. 이 단계 전후로 `preservedTables`의 rowid 순 스냅샷이 같아야 하고, `PRAGMA foreign_key_check`가 비어 있어야 한다.
+- FK를 멈춘 채 참조 테이블을 재구성할 수 있는 단계는 `goalHistoryMigration`(version 42)과 `memoryNoteKindsMigration` 둘뿐이다. 이 단계 전후로 `preservedTables`의 rowid 순 스냅샷이 같아야 하고, `PRAGMA foreign_key_check`가 비어 있어야 한다.
 - 대기 단계가 있었다면 COMMIT 전에 `PRAGMA foreign_key_check`를 통과하고 `assertDatabaseSchema`를 통과해야 한다.
 - `assertDatabaseSchema`는 chat_runs(run_id,thread_id,status), workflow_run_bindings(run_id,workflow_revision_id,goal_instance_id), owner_read_recoveries(receipt_id,authorization_fingerprint,execution_payload_json), owner_workflow_executions(execution_id,created_at,updated_at), nodes(id,seq,project_id,session_id,kind,text) 컬럼을 prepare로 검사한다. version cursor만으로 런타임 계약을 보장하지 않는다.
 - Migrator는 단계 실패를 일반 defect로 바꾼다. 그래서 단계 안에서는 `DatabaseSchemaRejected`를 throw해 사유를 보존하고, `catchDefect`에서 `migrationFailure`로 되돌린다.

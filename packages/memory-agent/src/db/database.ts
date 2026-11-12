@@ -15,6 +15,7 @@ import {
   tanStackRowsMigration,
 } from "./migrations.ts";
 import { migrationClient } from "./migration-client.ts";
+import { memoryNoteKindsMigration, rebuildMemoryKinds } from "./memory-kinds-migration.ts";
 import { sqlClientOver } from "./sql-client.ts";
 
 export class DatabaseOpenError extends Schema.TaggedError<
@@ -35,8 +36,10 @@ export const DatabaseSchemaRejectedReason = Schema.TaggedUnion({
   /** A reader found a schema the owning app has not migrated yet. */
   MigrationPending: { actual: Schema.Finite, supported: Schema.Finite },
   MetadataMismatch: {},
-  /** The goal history rebuild changed rows it must preserve. */
+  /** The goal history or memory kinds rebuild changed rows it must preserve. */
   PreservedRowsChanged: {},
+  /** The memory kinds rebuild found `nodes` or `edges` defined otherwise than it rewrites. */
+  RebuildSchemaUnexpected: {},
   InvalidForeignKeys: {},
 });
 
@@ -157,6 +160,15 @@ const migrateInTransaction = Effect.fnUntraced(function* (sqlite: DatabaseSync) 
                 if (rebuild) {
                   const after = snapshot();
                   if (before.some((rows, table) => rows !== after[table]))
+                    throw rejected(schemaRejection.PreservedRowsChanged.make({}));
+                  if (sqlite.prepare("PRAGMA foreign_key_check").all().length !== 0)
+                    throw rejected(schemaRejection.InvalidForeignKeys.make({}));
+                }
+                if (step === memoryNoteKindsMigration) {
+                  const failure = rebuildMemoryKinds(sqlite);
+                  if (failure === "SchemaUnexpected")
+                    throw rejected(schemaRejection.RebuildSchemaUnexpected.make({}));
+                  if (failure === "RowsChanged")
                     throw rejected(schemaRejection.PreservedRowsChanged.make({}));
                   if (sqlite.prepare("PRAGMA foreign_key_check").all().length !== 0)
                     throw rejected(schemaRejection.InvalidForeignKeys.make({}));

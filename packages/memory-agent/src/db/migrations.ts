@@ -1,3 +1,5 @@
+import { memoryNoteKindsMigration } from "./memory-kinds-migration.ts";
+
 // Only the confirmed empty ModelMessage shape is disposable. Unknown payload fields
 // (including parts, attachments and tool calls) are deliberately preserved.
 export const emptyUserMessageMigration = `
@@ -3032,6 +3034,7 @@ export const migrations: readonly string[] = [
     PRIMARY KEY (candidate_id, tool_call_id)
   );
   `,
+  memoryNoteKindsMigration,
   `
   -- A message one conversation leaves another conversation of the same project (decisions.md
   -- "세션 dispatch는 표에 영속으로 저장한다"). A row waits until the target conversation's next run
@@ -3070,8 +3073,9 @@ export const migrations: readonly string[] = [
   `,
 ];
 
-/** Only this startup migration may rebuild a referenced table with FK checks suspended.
- * Older steps remain ordinary SQL transactions; never infer special handling from SQL text.
+/** One of the two startup migrations that may rebuild a referenced table with FK checks suspended;
+ * the other is {@link memoryNoteKindsMigration}. Older steps remain ordinary SQL transactions;
+ * never infer special handling from SQL text.
  */
 export const goalHistoryMigration = {
   version: 42,
