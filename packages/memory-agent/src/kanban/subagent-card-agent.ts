@@ -12,6 +12,7 @@ import { gatedToolNames } from "../tools/definitions.ts";
 import { FileTools } from "../tools/files.ts";
 import { OutsideTools } from "../tools/outside.ts";
 import { runTool, type RunTool } from "../tools/run-tool.ts";
+import { SkillTools, type SkillToolset } from "../tools/skills.ts";
 import type { PlanStep } from "../workflow/workflow.ts";
 import { cardAgentToolNames, verifierToolNames } from "../workflow/card-capabilities.ts";
 import {
@@ -137,6 +138,7 @@ const make = Effect.gen(function* () {
   const outsideTools = yield* OutsideTools;
   const approvedTools = yield* ApprovedTools;
   const mcpServers = yield* McpServers;
+  const skillTools = yield* SkillTools;
   const crypto = yield* SecureRandom.SecureRandom;
 
   /**
@@ -167,9 +169,13 @@ const make = Effect.gen(function* () {
     yield* sessions.get(sessionId);
     const project = yield* projects.get(projectId);
     const selection = yield* active.selectedFor(role);
+    const carded = cardToolProject(project, worktree);
+    // Skills as the chat offers them: a catalog of the card's own folder, or none.
+    const skills: SkillToolset = yield* skillTools.toolsFor(carded, sessionId);
     return {
-      project: cardToolProject(project, worktree),
+      project: carded,
       mcp: yield* readOnlyMcp(project),
+      skills,
       selection: Option.fromNullishOr(selection),
     };
   });
@@ -181,7 +187,7 @@ const make = Effect.gen(function* () {
   const agent = CardAgent.of({
     run: Effect.fnUntraced(
       function* (run: CardAgentRun) {
-        const { project, mcp, selection } = yield* cardSetting(
+        const { project, mcp, skills, selection } = yield* cardSetting(
           run.sessionId,
           run.projectId,
           run.worktree,
@@ -209,10 +215,14 @@ const make = Effect.gen(function* () {
                     ...fileTools.toolsFor(project),
                     ...outsideTools.toolsFor(project),
                     ...approvedTools.toolsFor(project, run.sessionId, "gate"),
+                    ...skills.tools,
                   ]),
                   ...mcp.tools,
                 ],
-                systemPrompts: mcp.systemPrompts,
+                systemPrompts: [
+                  ...mcp.systemPrompts,
+                  ...(skills.instructions === null ? [] : [skills.instructions]),
+                ],
                 gated: mcp.gated,
               },
               {
@@ -261,7 +271,7 @@ const make = Effect.gen(function* () {
       readonly instructions: string;
     }) {
       const runId = `${input.runPrefix}:${yield* crypto.uuidV7()}`;
-      const { project, mcp, selection } = yield* cardSetting(
+      const { project, mcp, skills, selection } = yield* cardSetting(
         input.sessionId,
         input.projectId,
         input.worktree,
@@ -274,6 +284,7 @@ const make = Effect.gen(function* () {
             ...allowed(verifierToolNames)([
               ...fileTools.toolsFor(project),
               ...approvedTools.toolsFor(project, input.sessionId, "gate"),
+              ...skills.tools,
             ]),
             ...mcp.tools,
             recorder.runTool,
@@ -285,7 +296,10 @@ const make = Effect.gen(function* () {
               runId,
               selection: chosen,
               tools,
-              systemPrompts: mcp.systemPrompts,
+              systemPrompts: [
+                ...mcp.systemPrompts,
+                ...(skills.instructions === null ? [] : [skills.instructions]),
+              ],
               gated: mcp.gated,
             },
             { agent: input.agent, message: input.message, instructions: input.instructions },

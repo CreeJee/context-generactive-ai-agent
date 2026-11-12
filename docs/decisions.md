@@ -5034,3 +5034,14 @@
 - 결정: `save`·`lexical-apply`·`lexical-reset`의 reply 기한을 2초에서 15초(`writeTimeout`)로 늘린다. 이 기한은 멈춘 worker를 가려내는 것이다. 디스크가 늦어 오판하면 벡터 색인이 owner를 다시 열 때까지 멈추고, 진짜 멈춘 worker를 늦게 알아채는 비용은 실패가 조금 늦는 것뿐이라, 시작 기한(`startupTimeout`)처럼 응답하지 않는 worker만 가린다. 메모리만 다루는 `add`·`remove`·`reset`·`validate`·`vector-search`는 2초 그대로다.
 - 버린 안: publish마다 저장하지 않고 몇 초에 한 번 모아 저장하기. `node_vectors`에는 벡터 본체가 없고, 시작할 때 인덱스 크기가 `node_vectors`와 다르면 인덱스를 비우고 다시 임베딩한다. commit 뒤 저장 전에 프로세스가 끝나면 17만 벡터를 전부 다시 임베딩하게 된다. commit도 저장까지 미루면 피할 수 있지만, 그동안 chunk 매핑이 없어 검색이 그 벡터를 버리는 등 publish의 의미가 바뀌어 따로 정한다.
 - 남은 것: 실패한 update로 멈춘 게이트는 여전히 owner를 다시 열 때(백엔드 재시작)까지 풀리지 않는다.
+
+## 카드 에이전트와 검증자도 스킬 카탈로그와 read_skill을 받는다 (2026-11-13)
+
+- 계기: 채팅 run은 `SkillTools.toolsFor`로 프로젝트 스킬이 있을 때만 `skills.instructions`를 시스템 프롬프트에 넣고 `read_skill`을 도구로 주지만, 칸반 카드 에이전트(`subagent-card-agent.ts`)와 검증자는 스킬 지침도 `read_skill`도 없었다. `cardAgentToolNames`·`verifierToolNames`에는 `run_skill`만 있었다. 카드가 프로젝트가 이미 남긴 스킬(예: 테스트 돌리기 규칙)을 읽어 따라야 할 때 읽을 방법이 없었다.
+- 결정: 카드 에이전트와 검증자는 채팅과 같은 경로(`SkillTools.toolsFor`)로 스킬을 본다.
+  - 대상은 스킬 목록에서 이미 정한 규칙("에이전트가 저장한 스킬은 앱 저장소에 후보로 두고 (2026-11-12)")을 그대로 따른다: run root의 커밋된 `.agents/skills`, 정식 스킬, 이 Goal 대화의 후보. 카드·검증자는 Goal 대화의 session으로 돌기 때문에 같은 Goal의 후보를 그대로 본다.
+  - 스킬이 있을 때만 시스템 프롬프트에 `skills.instructions`를 더하고 `read_skill` RunTool을 도구에 넣는다. 스킬이 없으면 지침도 도구도 없다(채팅과 같다).
+  - 검증자는 읽기 전용이므로 `read_skill`을 추가로 받되 쓰기 도구(`write_file`, `edit_file`, `delete_file`, `save_code_skill`, 밖 쓰기)는 그대로 없다.
+  - `save_code_skill`·`run_skill`의 승인 게이트는 바꾸지 않는다: 카드 에이전트는 지금처럼 저장·실행을 프로젝트 권한 모드로 물어보고, 검증자는 애초에 그 도구가 없다.
+- 버린 안: 카드에 스킬 목록을 다른 방식(예: 커밋된 폴더 전체를 무조건 읽기)으로 넣기. 스킬 목록 규칙이 run마다 한 곳에 있어야 카드와 채팅이 같은 목록을 본다는 판단으로 `toolsFor` 재사용을 택했다.
+- 확인: `packages/memory-agent/tests/kanban-skills.test.ts` — 카드 에이전트는 스킬이 있으면 시스템 프롬프트에 카탈로그와 `read_skill`이 있고, 없으면 둘 다 없다. 검증자는 스킬 유무와 관계없이 쓰기 도구가 없고, 스킬이 있으면 `read_skill`이 있다.
