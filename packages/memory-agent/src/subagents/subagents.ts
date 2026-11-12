@@ -234,6 +234,13 @@ const toView = (row: SubagentRow): SubagentView => ({
 
 export const subagentThreadId = (subagentId: string) => `subagent-${subagentId}`;
 
+/**
+ * The id a child's permission review is kept under, with its parent session's reviews: the user
+ * answers on the parent's page, and a report of the parent covers it.
+ */
+const childReviewId = (subagentId: string, toolCallId: string) =>
+  `${subagentThreadId(subagentId)}:${toolCallId}`;
+
 /** The run a subagent tool call belongs to, and what children get from it. */
 export interface SubagentBinding {
   readonly project: Project;
@@ -512,7 +519,7 @@ const make = Effect.gen(function* () {
     ) =>
       reviews.record({
         sessionId: binding.sessionId,
-        toolCallId: `${subagentThreadId(row.id)}:${call.id}`,
+        toolCallId: childReviewId(row.id, call.id),
         toolName: call.name,
         input: call.written,
         decision,
@@ -745,6 +752,10 @@ const make = Effect.gen(function* () {
           sessionId: threadId,
           runId: handle.chatRunId,
           replyTo,
+          reviewOf: (toolCallId) => ({
+            sessionId: binding.sessionId,
+            toolCallId: childReviewId(row.id, toolCallId),
+          }),
         }),
         // Before the gate, so a refused repeat is never reviewed or relayed to the user.
         yield* repeatGuardHook,

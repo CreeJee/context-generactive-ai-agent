@@ -273,6 +273,17 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
       expect(
         (yield* reviews.latest(sessionId, `subagent-${children[1]!.id}:call-shell`))?.decision,
       ).toBe("denied");
+      // The results in each child's session carry the user's answer, as the parent's would.
+      expect(
+        yield* sqlAll(
+          `SELECT json_extract(detail, '$.permission.decision') AS decision FROM nodes
+           WHERE session_id IN (?, ?) AND kind = 'tool_result'
+             AND json_extract(detail, '$.toolCallId') = 'call-shell'
+           ORDER BY seq`,
+          subagentThreadId(children[0]!.id),
+          subagentThreadId(children[1]!.id),
+        ),
+      ).toEqual([{ decision: "approved" }, { decision: "denied" }]);
       // Both calls ended: the approved one settled, the denied one never started.
       yield* Effect.forEach(
         children,

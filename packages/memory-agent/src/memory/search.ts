@@ -57,6 +57,13 @@ export interface Match {
   readonly kind: NodeKind;
   readonly projectId: string;
   readonly sessionId: string | null;
+  /**
+   * Set when a subagent's session holds the match: the conversation that started it. A card's
+   * agent and verifier are subagents of their Goal's conversation.
+   */
+  readonly parentSessionId: string | null;
+  /** The subagent's name, when it has one: `card-<card>-g<n>` runs a card, `…-verify` checks one. */
+  readonly agent: string | null;
   readonly createdAt: string;
   /** Matched chunk's start, or original text's start. Read evidence before relying on it. */
   readonly snippet: string;
@@ -399,6 +406,16 @@ const make = (tuning: SearchTuning) =>
       Result: Schema.Struct({ name: Schema.String }),
       execute: (projectId) => sql`SELECT name FROM projects WHERE id = ${projectId}`,
     });
+    const sessionOf = SqlSchema.findOneOption({
+      Request: Schema.String,
+      Result: Schema.Struct({
+        parent_session_id: Schema.NullOr(Schema.String),
+        agent: Schema.NullOr(Schema.String),
+      }),
+      execute: (sessionId) => sql`SELECT s.parent_session_id, a.name AS agent FROM sessions s
+        LEFT JOIN subagents a ON s.parent_session_id IS NOT NULL AND s.id = 'subagent-' || a.id
+        WHERE s.id = ${sessionId}`,
+    });
     const otherProjects = SqlSchema.findAll({
       Request: Schema.String,
       Result: Schema.Struct({ id: Schema.String }),
@@ -472,6 +489,20 @@ const make = (tuning: SearchTuning) =>
           Option.match({ onNone: () => projectId, onSome: (row) => row.name }),
         ),
       );
+
+    /** Which session a match comes from: a conversation's own, or a subagent's under one. */
+    const sessionOrigin = (sessionId: string | null) =>
+      sessionId === null
+        ? Effect.succeed({ parentSessionId: null, agent: null })
+        : storageRead(
+            Effect.map(
+              sessionOf(sessionId),
+              Option.match({
+                onNone: () => ({ parentSessionId: null, agent: null }),
+                onSome: (row) => ({ parentSessionId: row.parent_session_id, agent: row.agent }),
+              }),
+            ),
+          );
 
     const allowedProjects = (projectId: string, crossProject: boolean) =>
       crossProject
@@ -720,39 +751,44 @@ const make = (tuning: SearchTuning) =>
             projectName: projectName(visit.node.projectId),
             supersededBy: appliedChanges(visit.node.id),
             unconfirmedChallenges: unconfirmedCount(visit.node.id),
+            origin: sessionOrigin(visit.node.sessionId),
           }).pipe(
-            Effect.map(({ latest, projectName, supersededBy, unconfirmedChallenges }): Match => {
-              const matched = Option.getOrUndefined(MutableHashMap.get(spans, visit.node.id));
-              const start = matched?.start ?? 0;
-              return {
-                id: visit.node.id,
-                kind: visit.node.kind,
-                projectId: visit.node.projectId,
-                sessionId: visit.node.sessionId,
-                createdAt: visit.node.createdAt,
-                snippet: visit.node.text.slice(start, start + snippetLength),
-                ...optionalProperty(
-                  "matchedSpan",
-                  matched === undefined ? undefined : { ...matched, unit: "utf16" as const },
-                ),
-                utility: Math.round(visit.utility * 1000) / 1000,
-                foundBy:
-                  visit.path.length > 0
-                    ? "graph"
-                    : HashSet.has(vectorIds, visit.node.id)
-                      ? "vector"
-                      : "text",
-                path: visit.path,
-                projectName,
-                fromOtherProject: visit.node.projectId !== input.projectId,
-                supersededBy: supersededBy.map((change) => ({
-                  id: change.from_id,
-                  relation: change.kind,
-                })),
-                unconfirmedChallenges,
-                latest,
-              };
-            }),
+            Effect.map(
+              ({ latest, projectName, supersededBy, unconfirmedChallenges, origin }): Match => {
+                const matched = Option.getOrUndefined(MutableHashMap.get(spans, visit.node.id));
+                const start = matched?.start ?? 0;
+                return {
+                  id: visit.node.id,
+                  kind: visit.node.kind,
+                  projectId: visit.node.projectId,
+                  sessionId: visit.node.sessionId,
+                  parentSessionId: origin.parentSessionId,
+                  agent: origin.agent,
+                  createdAt: visit.node.createdAt,
+                  snippet: visit.node.text.slice(start, start + snippetLength),
+                  ...optionalProperty(
+                    "matchedSpan",
+                    matched === undefined ? undefined : { ...matched, unit: "utf16" as const },
+                  ),
+                  utility: Math.round(visit.utility * 1000) / 1000,
+                  foundBy:
+                    visit.path.length > 0
+                      ? "graph"
+                      : HashSet.has(vectorIds, visit.node.id)
+                        ? "vector"
+                        : "text",
+                  path: visit.path,
+                  projectName,
+                  fromOtherProject: visit.node.projectId !== input.projectId,
+                  supersededBy: supersededBy.map((change) => ({
+                    id: change.from_id,
+                    relation: change.kind,
+                  })),
+                  unconfirmedChallenges,
+                  latest,
+                };
+              },
+            ),
           ),
         );
         return {

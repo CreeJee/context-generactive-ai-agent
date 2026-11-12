@@ -33,6 +33,14 @@ export interface RunBinding {
   readonly replyTo: Effect.Effect<Option.Option<string>>;
   /** Set when an external ACP agent answers instead of the app's model. */
   readonly externalAgent?: string;
+  /**
+   * Where the permission review of a call is kept, when not with the run's session under its call
+   * id: a subagent's reviews are kept with its parent session's, which the user answers on.
+   */
+  readonly reviewOf?: (toolCallId: string) => {
+    readonly sessionId: string;
+    readonly toolCallId: string;
+  };
 }
 
 type AssistantMessage = Extract<StoredMessage, { readonly role: "assistant" }>;
@@ -112,12 +120,16 @@ const recorderFor = Effect.fnUntraced(function* (binding: RunBinding) {
 
   /** The review behind a gated call's result, when the permission gate decided it. */
   // Read before a hook's check-and-append, which must not yield in between.
-  const permissionOf = (toolCallId: string) =>
-    Effect.map(reviews.latest(binding.sessionId, toolCallId), (review) =>
+  const reviewOf =
+    binding.reviewOf ?? ((toolCallId: string) => ({ sessionId: binding.sessionId, toolCallId }));
+  const permissionOf = (toolCallId: string) => {
+    const at = reviewOf(toolCallId);
+    return Effect.map(reviews.latest(at.sessionId, at.toolCallId), (review) =>
       isTruthy(review)
         ? { decision: review.decision, decidedBy: review.decidedBy, reason: review.reason }
         : undefined,
     );
+  };
 
   const base = {
     projectId: binding.projectId,

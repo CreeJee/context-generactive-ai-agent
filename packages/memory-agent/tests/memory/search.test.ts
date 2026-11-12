@@ -22,6 +22,7 @@ import { Sessions } from "../../src/sessions/sessions.ts";
 import { MemoryTools } from "../../src/tools/memory.ts";
 import { scriptedRun } from "../support/loop-run.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+import { sqlRun } from "../support/sql.ts";
 
 /**
  * A new project with one session. Search ranks within a project, so each test gets its own and
@@ -280,6 +281,53 @@ testAgent()("MemorySearch.find", (it) => {
       expect(result.degraded).toEqual([]);
       expect(result.matches[0]?.id).toBe(target.id);
     }),
+  );
+
+  it.effect(
+    "says which subagent's session a match comes from, and nothing for the conversation's own",
+    () =>
+      Effect.gen(function* () {
+        const { project, session } = yield* freshProject;
+        const nodes = yield* Nodes;
+        // A card's agent: a named subagent whose session sits under the Goal's conversation.
+        yield* sqlRun(
+          `INSERT INTO subagents
+           (id, session_id, name, status, parent_run_id, last_task, created_at, updated_at)
+         VALUES ('card-agent', ?, 'card-c1-g1', 'completed', 'run', 'task', 1, 1)`,
+          session.id,
+        );
+        yield* sqlRun(
+          `INSERT INTO sessions (id, project_id, created_at, parent_session_id)
+         VALUES ('subagent-card-agent', ?, 'now', ?)`,
+          project.id,
+          session.id,
+        );
+        const own = yield* nodes.append({
+          projectId: project.id,
+          sessionId: session.id,
+          kind: "user",
+          text: "배포 스크립트는 블루그린으로 바꾸자",
+        });
+        const card = yield* nodes.append({
+          projectId: project.id,
+          sessionId: "subagent-card-agent",
+          kind: "assistant",
+          text: "블루그린 배포 스크립트를 deploy.sh에 넣었다",
+        });
+        yield* indexAll;
+        const result = yield* find({
+          query: "블루그린 배포 스크립트",
+          projectId: project.id,
+          crossProject: false,
+        });
+        const byId = (id: string) => result.matches.find((match) => match.id === id);
+        expect(byId(card.id)).toMatchObject({
+          sessionId: "subagent-card-agent",
+          parentSessionId: session.id,
+          agent: "card-c1-g1",
+        });
+        expect(byId(own.id)).toMatchObject({ parentSessionId: null, agent: null });
+      }),
   );
 
   it.effect("memory tools let the model find, read and trace earlier evidence in a chat run", () =>
