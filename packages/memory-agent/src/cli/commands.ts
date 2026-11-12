@@ -31,7 +31,7 @@ const encodeLine = <A>(value: A) => Schema.encodeEffect(jsonLine)(value).pipe(Ef
 const print = <A>(value: A) => Effect.flatMap(encodeLine(value), Console.log);
 
 /** `--storage`, else `$CONTEXT_AGENT_HOME`, else the default storage root. */
-const resolveStorage = (given: Option.Option<string>) =>
+export const resolveStorage = (given: Option.Option<string>) =>
   Option.match(given, {
     onSome: (value) => Effect.succeed(value),
     onNone: () =>
@@ -39,6 +39,32 @@ const resolveStorage = (given: Option.Option<string>) =>
         Config.String("CONTEXT_AGENT_HOME").pipe(Config.withDefault(fallback)),
       ),
   });
+
+/**
+ * The `--storage` value the memory commands would parse out of raw arguments, before effect/cli
+ * runs: the executable's entry must know the storage root to unpack the runtime into before it can
+ * start the CLI. It reads the same token forms effect/cli's lexer and parser do (`--storage <value>`
+ * and `--storage=<value>`, nothing after `--`) and keeps the first occurrence, as a second one fails
+ * the command's parse anyway. What would parse as the flag's value stays in sync with the parser:
+ * a token that is itself an option leaves the flag valueless, which the CLI then reports.
+ */
+export const storageFlagValue = (args: ReadonlyArray<string>): Option.Option<string> => {
+  const at = args.indexOf("--");
+  const tokens = at === -1 ? args : args.slice(0, at);
+  for (const [index, token] of tokens.entries()) {
+    if (token === "--storage") {
+      const value = tokens[index + 1];
+      if (value !== undefined && !value.startsWith("-")) return Option.some(value);
+      return Option.none();
+    }
+    if (token.startsWith("--storage=")) return Option.some(token.slice("--storage=".length));
+  }
+  return Option.none();
+};
+
+/** The storage root the memory commands over these raw arguments would read and write. */
+export const resolveStorageRoot = (args: ReadonlyArray<string>) =>
+  resolveStorage(storageFlagValue(args));
 
 /** The project flags plus the working directory the command was started in. */
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.

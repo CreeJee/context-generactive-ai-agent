@@ -19,7 +19,8 @@ import { NodeStream, NodeSink, NodeTerminal } from "@effect/platform-node";
 import { ndJsonStream } from "@agentclientprotocol/sdk";
 import { defaultStorageRoot } from "memory-agent";
 import { createAppApi, startAcpAgent } from "memory-agent/acp";
-import { runMemoryCli } from "memory-agent/memory-cli";
+import { runMemoryCli, resolveStorageRoot } from "memory-agent/memory-cli";
+import { configureRuntimeRoot } from "memory-agent/runtime-resources";
 import { SdkStreams } from "memory-agent/acp";
 import { Cause, Context, Exit, Layer, MutableRef, Scope, Stream } from "effect";
 import * as build from "#server-build";
@@ -48,8 +49,8 @@ const usage = msg`사용법:
   context-agent acp [--port 5173]
       에디터(Zed 등)용 ACP 에이전트(실행 중인 앱에 연결)
   context-agent memory <명령> [플래그]
-      앱 없이 기억을 읽습니다(읽기 전용): find-memory, read-evidence, trace-evidence, projects.
-      자세한 사용법은 context-agent memory --help로 봅니다.
+      앱 없이 기억을 읽고 관리합니다: find-memory, read-evidence, trace-evidence, projects,
+      import, import-status, compact. 자세한 사용법은 context-agent memory --help로 봅니다.
       acp와 memory는 첫 인자에서 예약어입니다. 그 이름의 폴더는 ./acp, ./memory로 엽니다.
   context-agent --version
       실행 파일의 버전, 릴리스 채널과 대상 플랫폼을 표시합니다.`;
@@ -74,6 +75,15 @@ const rawArguments = await nodePlatform.runPromise(
   Effect.flatMap(Stdio.Stdio, (stdio) => stdio.args),
 );
 if (rawArguments[0] === "memory") {
+  // The commands load turbovec and start the embed·import·native-search workers, which in the
+  // executable live in the unpacked runtime folder. So the storage root the CLI will use (the same
+  // `--storage` → `$CONTEXT_AGENT_HOME` → default rule memory-cli exports, over the same raw
+  // arguments) is decided first, the runtime is unpacked into it, and the folder is configured
+  // before the CLI starts. Not the executable, i.e. a checkout, unpacks nothing (null) and the CLI
+  // keeps reading its packages beside this source.
+  const storageRoot = await nodePlatform.runPromise(resolveStorageRoot(rawArguments.slice(1)));
+  const runtime = await unpackRuntime(storageRoot);
+  configureRuntimeRoot(runtime);
   await nodePlatform.runPromise(
     Effect.scoped(
       Effect.flatMap(Layer.build(NodeTerminal.layer), (terminal) =>
