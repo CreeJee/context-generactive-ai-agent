@@ -61,7 +61,7 @@
 - `workTraceStreamUrl(sessionId, after)`로 work trace SSE 스트림 URL을 만든다(구독은 호출자가 맡는다)
 - `api.ts`는 `browserCrypto`(Web Crypto 기반 Effect `SecureRandom`)를 import한다
 - URL 상태: `App`이 nuqs `setLocation`으로 브라우저 쿼리스트링을 바꾼다. 프로젝트 선택·추가 때는 `history: "push"`를 쓴다
-- React Query mutation(프로젝트 추가, 모델 선택, 계정 전환, 권한 모드, cross recall, 프로젝트 숨김, 세션 생성, 세션 수명주기)으로 서버 상태를 바꾼다
+- React Query mutation(프로젝트 추가, 모델 선택, 계정 전환, 권한 모드 — 슬래시 명령과 설정 대화상자의 권한 페이지, cross recall, 프로젝트 숨김, 세션 생성, 세션 수명주기)으로 서버 상태를 바꾼다
 - `openSettingsOverlay`로 overlay-kit 설정 대화상자를 연다
 
 ## Verification

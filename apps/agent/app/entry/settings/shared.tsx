@@ -30,6 +30,10 @@ export const pageTitles = {
     message: "외부 에이전트",
     comment: "Settings page name: outside ACP agents the conversation may delegate to",
   }),
+  permission: msg({
+    message: "권한",
+    comment: "Settings page name: how the project's conversations allow approval-gated tools",
+  }),
   conversation: msg({
     message: "긴 대화",
     comment: "Settings page name: when a long conversation starts being summarized",

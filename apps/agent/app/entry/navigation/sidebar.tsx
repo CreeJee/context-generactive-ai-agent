@@ -1,5 +1,4 @@
-import type { MessageDescriptor } from "@lingui/core";
-import { msg, ph, t } from "@lingui/core/macro";
+import { ph, t } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
 import { Array, Data, Effect, Option } from "effect";
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
@@ -94,7 +93,6 @@ import {
   FolderPick,
   type ProviderModel,
   type ModelSelection,
-  type PermissionMode,
   type ListedProject,
   type Session,
 } from "../api";
@@ -198,18 +196,6 @@ export function ModelSection({
   );
 }
 
-const permissionModeLabels = {
-  ask: msg({ message: "매번 묻기", comment: "Project permission mode `ask`" }),
-  auto: msg({ message: "자동 판단 (auto)", comment: "Project permission mode `auto`" }),
-  full: msg({ message: "전체 권한 (full)", comment: "Project permission mode `full`" }),
-} satisfies Record<PermissionMode, MessageDescriptor>;
-
-const permissionModes = [
-  { value: "ask", label: permissionModeLabels.ask },
-  { value: "auto", label: permissionModeLabels.auto },
-  { value: "full", label: permissionModeLabels.full },
-] satisfies ReadonlyArray<{ value: PermissionMode; label: MessageDescriptor }>;
-
 const projectSectionOpenAtom = atomWithStorage("context-agent-project-section-open-v2", false);
 
 export function ProjectSection({
@@ -219,7 +205,6 @@ export function ProjectSection({
   onSelect,
   onAdd,
   onPickFolder,
-  onPermissionMode,
   onCrossRecall,
   onHide,
   onRestore,
@@ -234,7 +219,6 @@ export function ProjectSection({
   onAdd: (root: string) => Promise<string | null>;
   /** The host's folder dialog. */
   onPickFolder: () => Promise<FolderPick>;
-  onPermissionMode: (mode: PermissionMode) => void;
   /** Whether conversations in other projects may recall this project's memory (R08). */
   onCrossRecall: (allowed: boolean) => void;
   /** Archives the project: out of this list; its conversations and memory stay. */
@@ -249,12 +233,7 @@ export function ProjectSection({
   const { t } = useLingui();
   const current = projects.find((project) => project.id === projectId);
   const [open, setOpen] = useAtom(projectSectionOpenAtom);
-  const [confirmingFull, setConfirmingFull] = useState(false);
   const sectionLabel = t({ message: "프로젝트", comment: "Sidebar section of project settings" });
-  const modeItems = permissionModes.map((option) => ({
-    value: option.value,
-    label: t(option.label),
-  }));
 
   return (
     <section>
@@ -305,42 +284,6 @@ export function ProjectSection({
             </DataListItem>
             {current && (
               <>
-                <DataListItem
-                  term={t({
-                    message: "권한",
-                    comment: "Sidebar field label: the project's permission mode",
-                  })}
-                >
-                  <Select
-                    value={current.permissionMode}
-                    items={modeItems}
-                    disabled={busy}
-                    onValueChange={(value) => {
-                      const mode = permissionModes.find((option) => option.value === value);
-                      // Full permission runs every tool without asking, so it is confirmed first.
-                      if (mode?.value === "full") setConfirmingFull(true);
-                      else if (isTruthy(mode)) onPermissionMode(mode.value);
-                    }}
-                  >
-                    <SelectTrigger
-                      className="w-full"
-                      size="sm"
-                      aria-label={t({
-                        message: "권한 모드",
-                        comment: "Picker of the project's permission mode",
-                      })}
-                    >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {modeItems.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </DataListItem>
                 <DataListItem
                   term={t({
                     message: "기억",
@@ -395,37 +338,6 @@ export function ProjectSection({
           )}
         </CollapsibleContent>
       </Collapsible>
-      <AlertDialog open={confirmingFull} onOpenChange={setConfirmingFull}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              <Trans>전체 권한으로 바꿀까요?</Trans>
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              <Trans>
-                이 프로젝트의 대화가 셸 명령과 MCP 도구처럼 승인을 받던 도구를 묻지 않고 바로
-                실행합니다. 믿을 수 있는 프로젝트에서만 써 주십시오.
-              </Trans>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>
-              <Trans comment="Dialog button that cancels">취소</Trans>
-            </AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => {
-                setConfirmingFull(false);
-                onPermissionMode("full");
-              }}
-            >
-              <Trans comment="Dialog button that confirms switching the project to full permission">
-                전체 권한으로 바꾸기
-              </Trans>
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </section>
   );
 }

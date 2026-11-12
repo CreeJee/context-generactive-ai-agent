@@ -2,11 +2,12 @@
 
 ## Overview
 
-`apps/agent/app/entry/settings/pages`에는 앱 설정 대화상자의 페이지 본문 React 컴포넌트가 있다. `settings-dialog.tsx`의 `pageBodies`가 이 컴포넌트들을 렌더한다. 각 페이지는 `../../queries`의 React Query 훅으로 백엔드 설정을 읽는다. mutation은 `runUiEffect`/`uiPromise`로 감싼 Effect 경계에서 실행한다. 다루는 설정은 외부 ACP 에이전트, 긴 대화 요약, 임베딩, 이미지 생성, 대화 가져오기, 프로젝트 개선, 칸반, MCP, 회상 범위, 스킬, Kagi 웹 검색이다. 화면 문구는 모두 한국어다. 프로젝트 범위 페이지는 `project: Project | null`을 받고, 프로젝트가 없으면 `NoProject`를 보여 준다.
+`apps/agent/app/entry/settings/pages`에는 앱 설정 대화상자의 페이지 본문 React 컴포넌트가 있다. `settings-dialog.tsx`의 `pageBodies`가 이 컴포넌트들을 렌더한다. 각 페이지는 `../../queries`의 React Query 훅으로 백엔드 설정을 읽는다. mutation은 `runUiEffect`/`uiPromise`로 감싼 Effect 경계에서 실행한다. 다루는 설정은 외부 ACP 에이전트, 긴 대화 요약, 임베딩, 이미지 생성, 대화 가져오기, 프로젝트 권한 모드, 프로젝트 개선, 칸반, MCP, 회상 범위, 스킬, Kagi 웹 검색이다. 화면 문구는 모두 한국어다. 프로젝트 범위 페이지는 `project: Project | null`을 받고, 프로젝트가 없으면 `NoProject`를 보여 준다.
 
 ## Interface
 
 - `AgentSettings` — `{ project: Project | null }`. 외부 ACP 에이전트 목록, 신뢰·연결 상태 배지, 신뢰 토글과 다시 연결 버튼(`AgentChange.trust`/`AgentChange.reconnect`)을 보여 주는 페이지
+- `PermissionSettings` — `{ project: Project | null }`. 프로젝트 권한 모드(ask/auto/full)를 고르는 페이지. `full`은 '전체 권한으로 바꿀까요?' 확인 창을 거쳐 저장하며, `usePermissionModeMutation`으로 저장하고 프로젝트 목록 쿼리를 무효화한다
 - `ConversationSettings` — 긴 대화를 요약으로 보내기 시작하는 시점(`summaryStartPercent`, 0~50%)을 저장하는 페이지
 - `EmbeddingSettings` — 임베딩 실행 방식(auto/cpu/gpu) 선택, WebGPU 다시 확인(`EmbeddingCommand.choose`/`check`), 임베딩 대기 수와 기억 그래프 정리 상태, 해석하지 못한 발언을 보여 주는 페이지
 - `FailedInterpretations` (`failed-interpretations.tsx`) — 기억 해석이 실패로 남긴 발언 수와 '다시 시도' 버튼. 실패한 발언이 없거나 수를 읽기 전에는 그리지 않는다. 임베딩 페이지가 쓴다

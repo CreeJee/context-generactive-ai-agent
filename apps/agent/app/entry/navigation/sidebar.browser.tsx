@@ -134,7 +134,6 @@ describe("sidebar disclosures", () => {
               onSelect={() => {}}
               onAdd={() => Promise.resolve(null)}
               onPickFolder={() => Promise.resolve({ _tag: "cancelled" })}
-              onPermissionMode={() => {}}
               onCrossRecall={() => {}}
               onHide={() => {}}
               onRestore={() => {}}
@@ -147,7 +146,7 @@ describe("sidebar disclosures", () => {
       const trigger = screen.getByRole("button", { name: "프로젝트 Project 1" });
       expect(trigger.element().textContent).toBe("Project 1");
       yield* sdkCall(() => trigger.click());
-      alignedTerms(screen.container, ["프로젝트", "권한", "기억", "목록"]);
+      alignedTerms(screen.container, ["프로젝트", "기억", "목록"]);
     }),
   );
 
@@ -178,7 +177,6 @@ describe("sidebar disclosures", () => {
                 onSelect={(id) => void events.push(`select:${id}`)}
                 onAdd={(root) => Promise.resolve(void events.push(`add:${root}`)).then(() => null)}
                 onPickFolder={() => Promise.resolve({ _tag: "picked", root: "/tmp/alpha" })}
-                onPermissionMode={() => {}}
                 onCrossRecall={() => {}}
                 onHide={() => {}}
                 onRestore={(id) => void events.push(`restore:${id}`)}

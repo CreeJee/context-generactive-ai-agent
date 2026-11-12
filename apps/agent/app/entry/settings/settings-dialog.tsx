@@ -10,6 +10,7 @@ import {
   KanbanIcon,
   MessagesSquareIcon,
   PlugIcon,
+  ShieldCheckIcon,
   WaypointsIcon,
   WrenchIcon,
 } from "lucide-react";
@@ -36,6 +37,7 @@ import { RecallSettings } from "./pages/recall";
 import { EmbeddingSettings } from "./pages/embedding";
 import { McpSettings } from "./pages/mcp";
 import { AgentSettings } from "./pages/agents";
+import { PermissionSettings } from "./pages/permission";
 import { SkillSettings } from "./pages/skills";
 import { ImprovementSettings } from "./pages/improvements";
 import { KanbanSettings } from "./pages/kanban";
@@ -50,6 +52,7 @@ const settingsGroups = [
       { value: "image", icon: ImageIcon },
       { value: "mcp", icon: PlugIcon },
       { value: "agents", icon: BotIcon },
+      { value: "permission", icon: ShieldCheckIcon },
     ],
   },
   {
@@ -97,6 +100,7 @@ const pageBodies: Record<SettingsPage, (project: Project | null) => ReactNode> =
   image: () => <ImageSettings />,
   mcp: (project) => <McpSettings project={project} />,
   agents: (project) => <AgentSettings project={project} />,
+  permission: (project) => <PermissionSettings project={project} />,
   conversation: () => <ConversationSettings />,
   recall: () => <RecallSettings />,
   imports: () => <ImportSettings />,

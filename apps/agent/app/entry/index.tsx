@@ -723,12 +723,6 @@ export function App() {
                     done: () => selectProject(restoredId),
                   })
                 }
-                onPermissionMode={(mode) =>
-                  void changeProject({
-                    change: () => permissionMutation.mutateAsync(mode),
-                    failed: errorMessage,
-                  })
-                }
                 onCrossRecall={(allowed) =>
                   void changeProject({
                     change: () => crossRecallMutation.mutateAsync(!allowed),
