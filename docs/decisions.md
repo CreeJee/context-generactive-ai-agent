@@ -5081,37 +5081,36 @@
   - 순서: 빠질 구간을 근거(`(reread: …)`)를 남기며 요약한다. 요약이 실패하면 그 구간의 호출과 결과를 쌍으로(`paired`) 빼고, 빠졌다는 표지와 다시 읽을 id를 남긴다. LLM이 실패해도 크기 상한이 보장된다.
   - 요약은 하나로 합친다(사용자, rolling). 블록을 쌓지 않고, 새로 빠지는 구간만 요약해 기존 요약에 합친다. 줄일 때마다 앞부분 캐시를 한 번 깨지만, 줄이기는 `leaveOutAt`을 넘을 때만 일어나 드물다.
   - 강도: `leaveOutAt`을 넘으면 절반까지 내린다(지금 규칙). 저장된 대화는 바꾸지 않고 출력은 `read_tool_result`로 다시 읽을 수 있으므로 되돌릴 수 있는 압축이다. 다시 읽을 곳이 기록되지 않은 출력은 기록될 때까지 빼지 않는다.
-  - 진행 메모: 대화(session)에 남긴다. run이 끝나도 버리지 않고 같은 대화의 다음 run이 이어 쓴다. 대화를 지우면 같이 지운다.
-    - 메모는 스레드마다 하나다(대화의 메인 스레드, 각 서브에이전트 스레드). Goal 대화에서 카드들이 동시에 돌아도 서로의 메모를 덮지 않는다.
+  - 서브에이전트는 부모가 있는 세션이다(사용자, 2026-11-13). 채팅의 서브에이전트, 카드 에이전트, 검증자가 모두 같다. 메인 세션과 같은 규칙(기록, 근거, 메모, compaction, 요약)을 쓴다.
+    - 계기: 처음에는 서브에이전트 기록을 RunStore에만 두고 메모가 인용한 출력만 node로 옮기려 했다. 그러면 인용되지 않은 출력은 검색에 나오지 않고, 옮긴 근거에서 주변 맥락으로 따라갈 길도 없다. 근거가 떨어져 남는다. 서브에이전트를 세션으로 보면 모든 메시지와 도구 결과가 그 자리에서 node가 되어 검색과 그래프 탐색(calls, returns, next)이 끊기지 않는다. OpenCode(child session의 `parentID`), t3code와 Codex(별도 스레드)도 서브에이전트를 별도 세션으로 돌린다.
+    - 그래서 없앤다: 서브에이전트 기록을 기억 밖에 두는 것, run이 끝날 때 근거를 옮기는 단계, 서버 내부의 스레드 call 근거, `read_subagent_tool_result`(`read_tool_result` 하나로 연다), 스레드마다 메모를 두는 별도 규칙.
+    - 서브에이전트 세션에는 `user` node가 없다. 첫 지시는 사용자가 아니라 부모가 한 말이라, `user`로 기록하면 사용자 말을 정정·철회할 권한(`isChangeAuthority`)이 생긴다. 지시의 출처는 부모 쪽에 이미 있는 node다. 채팅 서브에이전트는 부모의 `delegate_to_agent` 호출 node, 카드 에이전트와 검증자는 attempt를 시작할 때의 Plan 버전 node다.
+    - 읽기 범위: `read_tool_result`와 기억 도구는 같은 세션 트리(부모와 자식)의 기록을 연다. 카드는 메인 세션의 출력을, 부모는 자식의 출력을 연다.
+    - 양: 985개짜리 기록도 node가 된다. 도구 호출과 결과는 임베딩하지 않으므로(`embeddedKinds`는 user, assistant, topic) 늘어나는 것은 lexical 색인과 assistant 글의 임베딩이다. 검색 결과에는 어느 세션(부모, 서브에이전트, 카드)에서 나왔는지 표시한다.
+  - 진행 메모: 세션에 남긴다. 세션마다 하나이므로 Goal 세션의 카드들이 동시에 돌아도 서로의 메모를 덮지 않는다. run이 끝나도 버리지 않고 같은 세션의 다음 run이 이어 쓴다. 세션을 지우면 같이 지운다.
     - 서브에이전트는 끝날 때 마지막 텍스트와 함께 자기 메모를 부모에게 돌려준다.
     - 항목마다 쓴 run과 시각을 남긴다. 근거가 불변 기록이므로 "그때 그랬다"는 사실은 계속 참이다. 지금도 참인지는 모델이 다시 확인한다.
     - 항목은 `Found`(알아낸 것), `Done`(바꾼 것·실행한 것), `Tried`(시도와 결과), `Open`(열린 질문)이다. `Open` 말고는 근거가 하나 이상 있어야 한다.
     - compaction에서 빼지 않고 요청 끝에 다시 보여 준다. 크기 상한을 넘으면 에이전트가 정리한다.
-    - (사용자) 메모 항목은 기억 그래프의 node로 올리고, 근거에 provenance edge를 잇는다.
+    - 메모 항목은 기억 node다(사용자). `nodes.kind`와 `edges.kind`의 `CHECK`를 바꾸려고 두 테이블을 다시 만든다(`seq`, `id` 보존). node 종류 `note`, edge 종류 `cites`(메모 → 근거)와 `supersedes`(나중 메모 → 이전 메모)를 더한다. 기존 `assistant` node와 `related`/`corrects` edge를 재사용하는 안은 버렸다. `corrects`는 사용자 권한을 뜻하고 `assistant`는 해석 대상이라, 곳곳에 메모 예외가 들어간다.
     - 메모와 정정·철회(사용자): 지금 규칙은 같은 프로젝트의 더 나중 사용자 node만 정정·철회할 수 있다(`isChangeAuthority`). 메모는 사용자 말도, 에이전트의 해석(`Interpretations`)도 아니므로 이렇게 둔다.
-      - 같은 스레드의 나중 메모 항목만 그 스레드의 이전 메모 항목을 대체한다. 에이전트가 항목을 고치거나 지우면 이 대체로 남기고, 이전 항목은 지우지 않는다. 정정 권한을 메모끼리, 같은 스레드 안으로만 넓힌 것이다.
+      - 같은 세션의 나중 메모 항목만 그 세션의 이전 메모 항목을 대체한다(`supersedes`). 에이전트가 항목을 고치거나 지우면 이 대체로 남기고, 이전 항목은 지우지 않는다.
       - 메모보다 나중의 같은 프로젝트 사용자 말은 지금 규칙대로 메모를 정정·철회한다.
       - 메모는 사용자 말이나 도구 출력을 정정·철회하지 못한다.
     - 검색(사용자): 다른 대화의 `find_memory` 결과에도 메모 항목이 나온다. 해석처럼 "에이전트 메모, 사용자 확인 아님"을 표시하고 근거 node를 같이 보인다.
-  - 근거(사용자):
-    - 모델에게 보이는 근거는 `Node(id)` 하나다. 다른 run의 기록은 모두 node로 읽는다.
-    - 누가 어떤 id를 아는가(2026-11-12 코드 기준): 모델은 자기 기록의 call id만 안다. provider가 바뀌면 replay할 때 id가 다시 붙을 수 있어(`model/history.ts`의 `renamed`) 모델이 본 id와 저장된 id가 다를 수 있다. thread id는 어느 모델도 모른다(프롬프트에 없다). 부모는 서브에이전트의 `taskId`와 `attemptId`만 알고 그 안의 call id는 모른다. 계획자와 검증자는 카드의 call id를 모른다. node id는 pointer(`read_evidence <node id>`)와 `find_memory` 결과로만 본다.
-    - 그래서 쓸 때 모델은 자기 기록에서 본 call id나 이미 아는 node id만 적는다. thread와 저장된 원래 id는 서버가 채운다. 기록에 없는 id는 그 항목을 거절한다. file:line은 run 안에서 바뀌므로 받지 않고, 그 파일을 읽은 call id를 근거로 쓴다.
-    - 메인 스레드의 call id는 그 결과의 node로 바로 바꾼다(`Nodes.toolResultIds`).
-    - 서브에이전트(카드 포함)의 call id는 run 안에서만 서버 내부에 call 근거로 둔다. 자기 run 안에서는 `read_subagent_tool_result`로 연다. 서브에이전트 기록 전체는 기억에 넣지 않는다(RunStore 스레드에 그대로 둔다).
-    - run이 끝나면 메모가 인용한 서브에이전트 출력을 원문 그대로 기억 node로 옮긴다. LLM을 쓰지 않는다. 원문과 hash가 같은지 확인하고, 시크릿 가리기는 다른 node와 같이 거친다. 옮긴 node의 출처 edge는 그 일을 시작한 node 아래에 둔다. 채팅 서브에이전트는 부모의 `delegate_to_agent` 호출 node 아래(메모 → 위임 node → attempt → call)다. 카드 출력은 어느 카드, generation, 브랜치에서 나왔는지도 남긴다(worktree 기준이라 메인 checkout과 다를 수 있다).
-    - 인용되지 않은 출력 중 남길 것은 리뷰어, 계획자, 오케스트레이터가 판단해 같은 방식으로 옮긴다.
-    - 카드 출력의 기준점(사용자): Plan 버전마다 node를 하나 만든다. 카드는 메인 스레드에 위임 node가 없고, Plan 버전(`workflow_state_revisions`의 불변 행)은 기억 node가 아니다. 작성자(`author_json`)는 `User`(화면에서 고침)이거나 `Orchestrator { runId }`(call id는 남지 않음)다.
+  - 근거(사용자): 근거는 언제나 `Node(id)`다.
+    - 누가 어떤 id를 아는가(2026-11-12 코드 기준): 모델은 자기 기록의 call id만 안다. provider가 바뀌면 replay할 때 id가 다시 붙을 수 있어(`model/history.ts`의 `renamed`) 모델이 본 id와 저장된 id가 다를 수 있다. 세션이나 스레드 id는 어느 모델도 모른다. node id는 pointer(`read_evidence <node id>`)와 `find_memory` 결과로만 본다.
+    - 그래서 쓸 때 모델은 자기 기록에서 본 call id나 이미 아는 node id만 적는다. 서버가 call id를 저장된 원래 id로 되돌리고 그 결과의 node로 바꾼다(`Nodes.toolResultIds`). 기록에 없는 id는 그 항목을 거절한다. file:line은 run 안에서 바뀌므로 받지 않고, 그 파일을 읽은 call id를 근거로 쓴다.
+    - 카드 출력에는 어느 카드, generation, 브랜치에서 나왔는지 남긴다. worktree 기준이라 메인 checkout과 다를 수 있다.
+    - Plan 버전 node(사용자): Plan 버전마다 node를 하나 만든다. Plan 버전(`workflow_state_revisions`의 불변 행)은 기억 node가 아니고, 작성자(`author_json`)는 `User`(화면에서 고침)이거나 `Orchestrator { runId }`(call id는 남지 않음)다.
       - 계획자가 만든 버전이면 그 `update_plan`/`edit_plan` 호출 node에 edge를 잇는다. 사용자가 고친 버전에도 기준점이 생긴다.
-      - 카드 출력은 attempt를 시작할 때의 Plan 버전 node 아래에 둔다. 실행 중인 카드는 고칠 수 없으므로(`card_running`) 그 버전이 카드가 따른 버전이다.
+      - 카드 세션의 출처는 attempt를 시작할 때의 Plan 버전 node다. 실행 중인 카드는 고칠 수 없으므로(`card_running`) 그 버전이 카드가 따른 버전이다.
       - 버린 안: 그 버전을 저장한 호출 node만 기준으로 쓰기. 사용자가 고친 버전에는 node가 없고, call id가 남지 않아 runId와 도구 이름으로 찾아야 한다.
-  - 근거를 여는 도구(사용자): 카드와 검증자에게 `read_evidence`를 준다. 읽기 전용이므로 2026-11-11의 카드 능력 목록(`card-capabilities.ts`)과 계획자 글에 같이 적는다. 이제 모든 run(메인 채팅, 서브에이전트, 카드, 검증자, BTW)이 같은 프로젝트의 node를 연다.
-    - 2026-11-12까지 카드는 파일, 밖 파일, `save_code_skill`, `run_skill`, 읽기 전용 MCP, `read_subagent_tool_result`만 받았고, 검증자는 파일 읽기, `run_skill`, 읽기 전용 MCP, `record_card_verdict`만 받았다. 기억 도구는 일부러 뺀 것이 아니라 처음부터 주지 않았다.
-  - 열 수 없는 근거: node로 옮기기가 저장 오류로 실패했거나, 근거 node가 읽는 run의 기억 범위(`memoryScope`) 밖이면 그 항목을 "근거 확인 불가"로 표시한다. 그 밖에는 표시하지 않는다.
-- 열린 것:
+  - 근거를 여는 도구(사용자): 카드와 검증자에게 `read_evidence`를 준다(631aca7c). 읽기 전용이므로 카드 능력 목록(`card-capabilities.ts`)과 계획자 글에 같이 적었다. 2026-11-12까지 카드와 검증자는 기억 도구를 받지 않았다. 일부러 뺀 것이 아니라 처음부터 주지 않았다.
+  - 열 수 없는 근거: 근거 node가 읽는 run의 기억 범위(`memoryScope`) 밖이면 그 항목을 "근거 확인 불가"로 표시한다.
 - 기본값(구현하며 조정, 사용자가 맡김):
   - 메모 크기 상한은 턴 요약 하나와 같은 `summaryCharacters`(6,000자)다. 넘으면 에이전트가 정리할 때까지 새 항목을 거절한다.
   - 원문으로 남기는 최근 step은 지금 `recentRawSteps`(10)이다. 그래도 넘치면 2026-11-04의 3단계대로 run 안 출력을 pointer로 바꾸고 마지막 step의 결과는 그대로 둔다.
-  - 요약은 스레드마다 하나다. 지난 턴과 진행 중인 run의 step을 같은 요약에 합치고, 지금 턴 요약처럼 저장해 재시작 뒤에도 쓴다. 사용자 말은 지금처럼 leave-out 표지가 원문으로 남기고, 에이전트의 진행 상태는 메모가 남긴다. 턴 블록(`summaryBlockTurns`)과 step 블록(`stepBlockSteps`)은 없앤다.
-  - 서브에이전트 step 상한(OpenHands 500, Goose 1000)은 이번 범위에 넣지 않는다.
-- 대체할 결정: 2026-11-04 "진행 중인 run(마지막 user 메시지부터)은 빼지 않는다", 2026-11-05 "블록은 메모리에만 두고 run이 끝나면 버린다"의 블록 누적 부분.
+  - 요약은 세션마다 하나다. 지난 턴과 진행 중인 run의 step을 같은 요약에 합치고, 지금 턴 요약처럼 저장해 재시작 뒤에도 쓴다. 사용자 말은 지금처럼 leave-out 표지가 원문으로 남기고, 에이전트의 진행 상태는 메모가 남긴다. 턴 블록(`summaryBlockTurns`)과 step 블록(`stepBlockSteps`)은 없앤다.
+- 열린 것: 서브에이전트 step 상한(OpenHands 500, Goose 1000)은 이번 범위에 넣지 않는다.
+- 대체할 결정: 2026-11-04 "진행 중인 run(마지막 user 메시지부터)은 빼지 않는다", 2026-11-05 "블록은 메모리에만 두고 run이 끝나면 버린다"의 블록 누적 부분, 서브에이전트 기록을 기억에 넣지 않고 RunStore 스레드에만 두는 것(`read_subagent_tool_result`).
