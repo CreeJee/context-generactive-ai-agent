@@ -97,6 +97,7 @@ import {
   type Session,
 } from "../api";
 import { DataList, DataListItem } from "~/components/ui/data-list";
+import type { ProjectWorking } from "../queries/project";
 import { SidebarDisclosureTrigger } from "./sidebar-disclosure-trigger";
 import { LoadFailed } from "../shared/load-failed";
 import { effortChoices } from "./providers";
@@ -668,11 +669,8 @@ const shownIn = (filter: PlaceFilter) => (session: Session) =>
   });
 
 /** Conversations at work lead their project's group: answering, or running their board. */
-const working = (
-  session: Session,
-  answering: ReadonlySet<string>,
-  boardRunning: ReadonlySet<string>,
-) => answering.has(session.id) || boardRunning.has(session.id);
+const atWork = (session: Session, working: ProjectWorking) =>
+  working.answering.has(session.id) || working.boardRunning.has(session.id);
 
 /**
  * One project's part of the conversation list: its header, place filter, groups and archive.
@@ -681,8 +679,7 @@ const working = (
 function ProjectSessionGroup({
   group,
   selected,
-  answering,
-  boardRunning,
+  working,
   label,
   row,
   onRestore,
@@ -696,8 +693,8 @@ function ProjectSessionGroup({
   };
   /** The project whose page is open; its group is the one open, and the only one without rows. */
   readonly selected: boolean;
-  readonly answering: ReadonlySet<string>;
-  readonly boardRunning: ReadonlySet<string>;
+  /** The project's conversations at work now, which lead the group and fill the badge. */
+  readonly working: ProjectWorking;
   readonly label: (session: Session) => string;
   readonly row: (session: Session) => React.ReactNode;
   /** Puts an archived conversation back in the list, in its own project. */
@@ -719,8 +716,9 @@ function ProjectSessionGroup({
   ].toSorted();
   const filter = placeFilterOf(placeValue, places);
   const shown = group.sessions.filter(shownIn(filter));
-  const atWork = shown.filter((session) => working(session, answering, boardRunning));
-  const rest = shown.filter((session) => !working(session, answering, boardRunning));
+  // `filter` builds `shown` either way; counting through it again reads clearer than another pass.
+  const leading = shown.filter((session) => atWork(session, working));
+  const rest = shown.filter((session) => !atWork(session, working));
   const everywhere = PlaceFilter.$is("all")(filter);
   const everyPlaceLabel = t({
     message: "모든 작업 위치",
@@ -748,7 +746,7 @@ function ProjectSessionGroup({
         >
           <ChevronRightIcon className="size-3.5 shrink-0 transition-transform group-data-panel-open:rotate-90" />
           <span className="min-w-0 flex-1 truncate text-left">{group.name}</span>
-          {/* Readable while the group is folded too, when it is the header's only context. */}
+          {/* Readable while the group is folded too, when it is the only context. */}
           {!open && (
             <span
               className="shrink-0 tabular-nums text-2xs font-medium text-muted-foreground"
@@ -759,6 +757,19 @@ function ProjectSessionGroup({
             >
               {group.sessions.length}
             </span>
+          )}
+          {/* How many conversations of this project are at work now; none is the usual state. */}
+          {leading.length > 0 && (
+            <Badge
+              variant="default"
+              aria-label={t({
+                message: `진행 중 ${ph({ count: leading.length })}개`,
+                comment: "How many conversations the project has at work now",
+              })}
+            >
+              <Spinner className="size-2.5" aria-hidden />
+              {leading.length}
+            </Badge>
           )}
           {selected && <Badge variant="secondary">{t`사용 중`}</Badge>}
         </CollapsibleTrigger>
@@ -833,15 +844,15 @@ function ProjectSessionGroup({
                   message: "진행 중",
                   comment: "Conversation list section: conversations answering or running a board",
                 })}
-                count={atWork.length}
+                count={leading.length}
                 defaultOpen
               >
-                {atWork.length === 0 ? (
+                {leading.length === 0 ? (
                   <p className="px-2 py-1 text-xs text-muted-foreground">
                     <Trans>진행 중인 대화가 없습니다.</Trans>
                   </p>
                 ) : (
-                  <SidebarMenu>{atWork.map(row)}</SidebarMenu>
+                  <SidebarMenu>{leading.map(row)}</SidebarMenu>
                 )}
               </SessionGroup>
               <SessionGroup
@@ -962,8 +973,7 @@ function SessionGroup({
  */
 export function SessionSection({
   groups,
-  answering,
-  boardRunning,
+  working,
   loading,
   failed = false,
   onRetry = () => {},
@@ -983,10 +993,8 @@ export function SessionSection({
     readonly sessions: ReadonlyArray<Session>;
     readonly archived: ReadonlyArray<Session>;
   }>;
-  /** Conversations whose run is producing an answer now, across every project. */
-  answering: ReadonlySet<string>;
-  /** Conversations whose kanban board is running, across every project. */
-  boardRunning: ReadonlySet<string>;
+  /** One entry per listed project: its conversations at work now, which lead its group. */
+  working: ReadonlyArray<ProjectWorking>;
   /** No group's list has arrived yet, so an empty one says nothing. */
   loading: boolean;
   /** Some list could not be read; missing groups would say there are no conversations. */
@@ -1007,6 +1015,13 @@ export function SessionSection({
 }) {
   const { t } = useLingui();
   const label = sessionLabel(useHydrated());
+  /** One project's conversations at work now, which lead that project's group. */
+  const workingOf = (groupProjectId: string): ProjectWorking =>
+    working.find((project) => project.projectId === groupProjectId) ?? {
+      projectId: groupProjectId,
+      answering: new Set<string>(),
+      boardRunning: new Set<string>(),
+    };
   // The asked-about conversation stays while the dialog closes, so its title does not blank out.
   const [deleteAsk, setDeleteAsk] = useState<{
     readonly session: Session;
@@ -1018,81 +1033,85 @@ export function SessionSection({
       comment: "Button that opens a conversation's menu; title is the conversation's title",
     });
   const deleteTitle = deleteAsk === null ? null : label(deleteAsk.session);
-  const row = (session: Session) => (
-    <SidebarMenuItem key={session.id}>
-      <SidebarMenuButton
-        isActive={session.id === sessionId && session.projectId === projectId}
-        render={
-          <Link
-            to={`/?project=${encodeURIComponent(session.projectId)}&session=${encodeURIComponent(session.id)}`}
-            preventScrollReset
-            aria-current={
-              session.id === sessionId && session.projectId === projectId ? "page" : undefined
-            }
-          />
-        }
-      >
-        <span className="min-w-0 flex-1 truncate">{label(session)}</span>
-        {session.worktreePath !== null && (
-          <Badge
-            variant="outline"
-            className="max-w-24 shrink-0"
-            title={session.worktreePath ?? undefined}
-          >
-            <GitBranchIcon /> <span className="truncate">{sessionPlace(session)}</span>
-          </Badge>
-        )}
-        {session.agent && (
-          <Badge variant="outline" className="shrink-0">
-            <BotIcon /> {session.agent}
-          </Badge>
-        )}
-        {working(session, answering, boardRunning) && (
-          <span className="flex shrink-0 text-muted-foreground">
-            <Spinner
-              aria-label={
-                answering.has(session.id)
-                  ? t({
-                      message: "답변 중",
-                      comment: "Conversation status: an answer is streaming",
-                    })
-                  : t({
-                      message: "보드 실행 중",
-                      comment: "Conversation status: its kanban board is running",
-                    })
+  const row = (session: Session) => {
+    // The project's working set the row is judged by: the one its own project's group leads with.
+    const projectWorking = workingOf(session.projectId);
+    return (
+      <SidebarMenuItem key={session.id}>
+        <SidebarMenuButton
+          isActive={session.id === sessionId && session.projectId === projectId}
+          render={
+            <Link
+              to={`/?project=${encodeURIComponent(session.projectId)}&session=${encodeURIComponent(session.id)}`}
+              preventScrollReset
+              aria-current={
+                session.id === sessionId && session.projectId === projectId ? "page" : undefined
               }
             />
-          </span>
-        )}
-      </SidebarMenuButton>
-      {/* One menu on hover or focus keeps the row's width for its title. */}
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          render={<SidebarMenuAction showOnHover aria-label={menuLabel(session)} />}
+          }
         >
-          <EllipsisIcon />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent side="right" align="start">
-          <DropdownMenuItem
-            onClick={() => onArchive(session.projectId, session.id)}
-            title={t`실행 중이면 안전하게 중단하고 기억은 남깁니다`}
+          <span className="min-w-0 flex-1 truncate">{label(session)}</span>
+          {session.worktreePath !== null && (
+            <Badge
+              variant="outline"
+              className="max-w-24 shrink-0"
+              title={session.worktreePath ?? undefined}
+            >
+              <GitBranchIcon /> <span className="truncate">{sessionPlace(session)}</span>
+            </Badge>
+          )}
+          {session.agent && (
+            <Badge variant="outline" className="shrink-0">
+              <BotIcon /> {session.agent}
+            </Badge>
+          )}
+          {atWork(session, projectWorking) && (
+            <span className="flex shrink-0 text-muted-foreground">
+              <Spinner
+                aria-label={
+                  projectWorking.answering.has(session.id)
+                    ? t({
+                        message: "답변 중",
+                        comment: "Conversation status: an answer is streaming",
+                      })
+                    : t({
+                        message: "보드 실행 중",
+                        comment: "Conversation status: its kanban board is running",
+                      })
+                }
+              />
+            </span>
+          )}
+        </SidebarMenuButton>
+        {/* One menu on hover or focus keeps the row's width for its title. */}
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={<SidebarMenuAction showOnHover aria-label={menuLabel(session)} />}
           >
-            <ArchiveIcon />{" "}
-            <Trans comment="Menu item that archives the conversation">보관하기</Trans>
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            variant="destructive"
-            onClick={() => setDeleteAsk({ session, open: true })}
-          >
-            <Trash2Icon />{" "}
-            <Trans comment="Menu item that deletes the conversation's source record">
-              원본 삭제
-            </Trans>
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </SidebarMenuItem>
-  );
+            <EllipsisIcon />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent side="right" align="start">
+            <DropdownMenuItem
+              onClick={() => onArchive(session.projectId, session.id)}
+              title={t`실행 중이면 안전하게 중단하고 기억은 남깁니다`}
+            >
+              <ArchiveIcon />{" "}
+              <Trans comment="Menu item that archives the conversation">보관하기</Trans>
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              variant="destructive"
+              onClick={() => setDeleteAsk({ session, open: true })}
+            >
+              <Trash2Icon />{" "}
+              <Trans comment="Menu item that deletes the conversation's source record">
+                원본 삭제
+              </Trans>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </SidebarMenuItem>
+    );
+  };
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* The list's actions come first, then its sections; no title row competes with them. */}
@@ -1183,8 +1202,7 @@ export function SessionSection({
               key={group.projectId}
               group={group}
               selected={group.projectId === projectId}
-              answering={answering}
-              boardRunning={boardRunning}
+              working={workingOf(group.projectId)}
               label={label}
               row={row}
               onRestore={onRestore}

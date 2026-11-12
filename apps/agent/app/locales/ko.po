@@ -5611,6 +5611,11 @@ msgstr "진단 중입니다. 기다리는 동안에도 제보문을 복사·저�
 msgid "진행 중"
 msgstr "진행 중"
 
+#. How many conversations the project has at work now
+#: app/entry/navigation/sidebar.tsx
+msgid "진행 중 {count}개"
+msgstr "진행 중 {count}개"
+
 #: app/entry/navigation/sidebar.tsx
 msgid "진행 중인 대화가 없습니다."
 msgstr "진행 중인 대화가 없습니다."

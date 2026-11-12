@@ -106,6 +106,9 @@ const group = (projectId: string, name: string, sessions: Session[], archived = 
   archived,
 });
 
+/** No conversation of any project is at work; tests that need one name their own. */
+const idle: Array<import("../queries/project").ProjectWorking> = [];
+
 const mounts: RootType[] = [];
 
 const documentRef = dom.window.document;
@@ -159,8 +162,7 @@ describe("SessionSection collapsible groups (jsdom)", () => {
             group("alpha", "Alpha", [sessionOf("alpha", "a1", "알파 대화")]),
             group("beta", "Beta", [sessionOf("beta", "b1", "베타 질문")]),
           ]}
-          answering={new Set()}
-          boardRunning={new Set()}
+          working={idle}
           loading={false}
           projectId="beta"
           sessionId="b1"
@@ -195,8 +197,7 @@ describe("SessionSection collapsible groups (jsdom)", () => {
             group("alpha", "Alpha", [sessionOf("alpha", "a1", "알파 대화")]),
             group("beta", "Beta", [sessionOf("beta", "b1", "베타 질문")]),
           ]}
-          answering={new Set()}
-          boardRunning={new Set()}
+          working={idle}
           loading={false}
           projectId="beta"
           sessionId="b1"
@@ -219,5 +220,81 @@ describe("SessionSection collapsible groups (jsdom)", () => {
     expect(parameters.get("session")).toBe("a1");
     // The row of the page in use is the current one; the other project's is not.
     expect(alpha!.getAttribute("aria-current")).toBeNull();
+  });
+
+  test("a conversation at work leads its group with a spinner, and the header badges the count", async () => {
+    const { container } = await renderSection(
+      <div className="w-72">
+        <SessionSection
+          groups={[
+            group("alpha", "Alpha", [
+              sessionOf("alpha", "a1", "알파 먼저"),
+              sessionOf("alpha", "a2", "알파 나중"),
+            ]),
+          ]}
+          // a2 answers now: it leaves the "대화" section for the "진행 중" one above it.
+          working={[{ projectId: "alpha", answering: new Set(["a2"]), boardRunning: new Set() }]}
+          loading={false}
+          projectId="alpha"
+          sessionId={null}
+          archiveError={null}
+          onCreate={() => {}}
+          onArchive={() => {}}
+          onDelete={() => {}}
+          onRestore={() => {}}
+          agents={[]}
+        />
+      </div>,
+    );
+
+    // The answering conversation is the first row; the idle one follows it.
+    const titles = rowLinks(container).map((link) => link.textContent?.trim());
+    expect(titles).toEqual(["알파 나중", "알파 먼저"]);
+    // The leading row carries the answering spinner.
+    expect(container.querySelector('a[href*="session=a2"] [role="status"]')).not.toBeNull();
+    expect(container.querySelector('a[href*="session=a1"] [role="status"]')).toBeNull();
+
+    // The group header badges how many conversations are at work in this project; the badge's
+    // accessible name carries the count, its content the number and a spinning marker.
+    const header = [...container.querySelectorAll("button")].find((button) =>
+      (button.textContent ?? "").startsWith("Alpha"),
+    );
+    const badge = header?.querySelector('[data-slot="badge"][aria-label]');
+    expect(badge?.getAttribute("aria-label")).toContain("진행 중 1개");
+    expect(badge?.textContent).toContain("1");
+    // The spinner inside the badge marks the count as live, like the rows it counts.
+    expect(badge?.querySelector('[data-slot="spinner"]')).not.toBeNull();
+  });
+
+  test("a group without conversations at work shows no badge", async () => {
+    const { container } = await renderSection(
+      <div className="w-72">
+        <SessionSection
+          groups={[
+            group("alpha", "Alpha", [sessionOf("alpha", "a1", "알파 대화")]),
+            group("beta", "Beta", [sessionOf("beta", "b1", "베타 대화")]),
+          ]}
+          // Only beta answers; alpha's header has nothing to badge.
+          working={[{ projectId: "beta", answering: new Set(["b1"]), boardRunning: new Set() }]}
+          loading={false}
+          projectId="beta"
+          sessionId={null}
+          archiveError={null}
+          onCreate={() => {}}
+          onArchive={() => {}}
+          onDelete={() => {}}
+          onRestore={() => {}}
+          agents={[]}
+        />
+      </div>,
+    );
+
+    await click(container, /^Alpha/);
+    const headerOf = (name: string) =>
+      [...container.querySelectorAll("button")].find((button) =>
+        (button.textContent ?? "").startsWith(name),
+      );
+    expect(headerOf("Beta")?.querySelector('[data-slot="badge"][aria-label]')).not.toBeNull();
+    expect(headerOf("Alpha")?.querySelector('[data-slot="badge"][aria-label]')).toBeNull();
   });
 });

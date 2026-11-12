@@ -5327,3 +5327,12 @@
 - 결정: `SessionSection`의 프로젝트 그룹 접힘은 Base UI Collapsible의 기본(닫힌 패널 언마운트)을 유지한다. `CollapsibleContent`에 `keepMounted`를 넣지 않는다. 접힘은 곧 숨김이고, 모든 프로젝트의 행을 상시 마운트하는 DOM 비용을 피한다. 이 동작은 jsdom 컴포넌트 테스트(`sidebar-collapse.test.tsx`)와 브라우저 테스트(`sidebar.browser.tsx`)가 함께 단언한다: 접힌 그룹은 행 링크가 없고, 펼친 그룹만 자기 행을 마운트하며, 다른 프로젝트의 행 링크는 `project`·`session` 파라미터를 모두 가진다. 행 링크 단언은 그룹을 펼친 뒤(또는 선택 프로젝트의 기본 펼침 상태에서) 한다.
   - 컴포넌트 테스트가 `Link`를 렌더하려면 라우터 컨텍스트가 필요하다. jsdom 테스트는 `createMemoryRouter`로, 브라우저 테스트는 `withSidebar` 래퍼가 메모리 라우터로 감싼다(`report-draft.test.tsx`와 같은 방식).
 - 기록: 카드 샌드박스에서 브라우저 테스트 기동은 실패한다. `vp test --config apps/agent/vite.browser.config.ts --run apps/agent/app/entry/navigation/sidebar.browser.tsx`의 결과는 Chromium이 `FATAL:base/apple/mach_port_rendezvous_mac.cc:159 — bootstrap_check_in org.chromium.Chromium.MachPortRendezvousServer: Permission denied (1100)`로 죽는 것(SIGTRAP)이었다. macOS 샌드박스(seatbelt)가 Chromium의 Mach 포트 랑데부 서버 부트스트랩 체크인을 막기 때문이다. 최종 브라우저 확인은 사용자 환경에서 한다.
+
+## 진행 중 대화는 모든 프로젝트 그룹에서 선행하고 그룹 헤더가 개수를 배지로 보인다 (2026-11-12)
+
+- 계기: 사이드바가 프로젝트별 그룹으로 재구성된 뒤에도 진행 중(답변 중·보드 실행 중) 대화는 선택 프로젝트의 것만 읽었다. 다른 프로젝트의 대화가 돌고 있어도 그룹에서 먼저 보이지 않고, 배지도 없었다.
+- 결정: 실행 상태 조회를 모든 표시 프로젝트로 확장한다. 기존 `projectQueries.running`(`appQueryKeys.project.running`)과 `projectQueries.boards`(`appQueryKeys.project.boards`)의 쿼리 키와 queryFn을 그대로 쓰는 `useAllWorkingSessions(projects)`가 프로젝트마다 `useQueries`로 읽어 `{projectId, answering, boardRunning}`을 돌려주고, `SessionSection`은 새 prop `working: ProjectWorking[]`으로 이를 받는다. 기존의 단일 프로젝트 훅 `useWorkingSessions(projectId)`는 지운다.
+  - 각 그룹은 진행 중 대화를 "진행 중" 섹션으로 먼저 보이고 행에 Spinner를 단다(답변 중은 "답변 중", 보드 실행 중은 "보드 실행 중" 스크린 리더 이름). 그룹 헤더는 그 프로젝트의 진행 중 개수를 배지로 보이고(스피너를 함께 담는다, 스크린 리더 이름 "진행 중 {count}개"), 0이면 배지를 두지 않는다.
+  - 폴링은 조건부다: `refetchInterval`이 그 프로젝트의 읽기 데이터에 진행 중(`running` 길이, `boards`의 `kanbanActive`)이 있을 때만 2초로 돌고 없으면 끊는다. 그래서 조용한 프로젝트는 SSE 무효화만 따라간다. `project.sessions`·`project.boards`·`project.running` 키를 함께 무효화하는 이벤트 규약은 그대로라 이 조회도 함께 갱신된다.
+- 버린 안: running과 boards를 한 엔드포인트로 합쳐 읽기. 키와 무효화 규약을 다시 만들어야 하고, 보드 목록은 다른 화면도 같이 읽는다.
+- 기록: 카드 샌드박스에서 `vp test`(apps/agent)는 서버 포트를 여는 세 테스트(`server/serve.test.ts`, `server/launch-project.test.ts`의 "opening the folder on the app", `server/tests/dev-agent-chat-boundary.test.ts`)가 `listen EPERM: operation not permitted`로 실패한다. macOS 샌드박스가 소켓 listen을 막는 탓이고, 이 카드가 바꾼 UI·쿼리 파일의 테스트(`app/entry`, `app/.server` 31개 파일 106 테스트)는 모두 통과한다.

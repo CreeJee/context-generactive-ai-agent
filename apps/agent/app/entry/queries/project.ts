@@ -5,6 +5,13 @@ import type { Session } from "../api";
 import { AgentTrustState, McpServerState, api } from "../api";
 import { appQueryKeys } from "./keys";
 
+/** Reads the project's conversations at work now (answering or running its board). */
+const runningOptions = (projectId: string) =>
+  queryOptions({
+    queryKey: appQueryKeys.project.running(projectId),
+    queryFn: () => api.runningSessions(projectId),
+  });
+
 export const projectQueries = {
   sessions: (projectId: string) =>
     queryOptions({
@@ -55,12 +62,7 @@ export const projectQueries = {
       queryFn: () => api.projectBoards(projectId),
       staleTime: 0,
     }),
-  running: (projectId: string) =>
-    queryOptions({
-      queryKey: appQueryKeys.project.running(projectId),
-      queryFn: () => api.runningSessions(projectId),
-      staleTime: 0,
-    }),
+  running: runningOptions,
   kanban: (projectId: string) =>
     queryOptions({
       queryKey: appQueryKeys.project.kanban(projectId),
@@ -83,6 +85,24 @@ export type ProjectSessions = {
   readonly sessions: ReadonlyArray<Session>;
   readonly archived: ReadonlyArray<Session>;
 };
+
+/** One project's conversations at work now, as its group orders and badges them. */
+export type ProjectWorking = {
+  readonly projectId: string;
+  /** The project's conversations whose run is producing an answer now. */
+  readonly answering: ReadonlySet<string>;
+  /** The project's conversations whose kanban board is running. */
+  readonly boardRunning: ReadonlySet<string>;
+};
+
+/** Follow a run only while this read's own project shows one under way. */
+const followRunning = (query: { readonly state: { readonly data?: ReadonlyArray<string> } }) =>
+  (query.state.data?.length ?? 0) > 0 ? 2000 : false;
+
+/** Follow a run only while this project has a board running its kanban loop. */
+const followBoards = (query: {
+  readonly state: { readonly data?: ReadonlyArray<{ readonly kanbanActive: boolean }> };
+}) => (query.state.data?.some((board) => board.kanbanActive) === true ? 2000 : false);
 
 /**
  * The sidebar's groups read every listed project's conversations, not only the selected one's.
@@ -113,20 +133,43 @@ export function useAllProjectSessions(
   });
 }
 
-/** Conversations at work now: answering, or running their board. They lead the sidebar's list. */
-export function useWorkingSessions(projectId: string | null) {
-  const enabled = projectId !== null;
-  const answering = useQuery({ ...projectQueries.running(projectId ?? ""), enabled });
-  const boards = useQuery({ ...projectQueries.boards(projectId ?? ""), enabled });
-  return {
-    answering: new Set(answering.data ?? []),
-    boardRunning: new Set(
-      Iterable.map(
-        Iterable.filter(boards.data ?? [], (board) => board.kanbanActive),
-        (board) => board.sessionId,
+/**
+ * Conversations at work now, across every listed project: answering, or running their board.
+ * They lead their project's group in the sidebar and fill its header badge.
+ *
+ * The reads reuse the existing `running` and `boards` query keys and queries, so the page in use
+ * shares the cache and the same SSE invalidations move every project's read. The two options
+ * differ in what their data says, so the polling reads its own query's data type: a project with
+ * nothing at work stops polling and follows only its events.
+ */
+export function useAllWorkingSessions(
+  projects: ReadonlyArray<{ readonly id: string }>,
+): ReadonlyArray<ProjectWorking> {
+  const answering = useQueries({
+    queries: projects.map((project) => ({
+      ...projectQueries.running(project.id),
+      refetchInterval: followRunning,
+    })),
+  });
+  const boards = useQueries({
+    queries: projects.map((project) => ({
+      ...projectQueries.boards(project.id),
+      refetchInterval: followBoards,
+    })),
+  });
+  return projects.map((project, index): ProjectWorking => {
+    const boardRows = boards[index]?.data ?? [];
+    return {
+      projectId: project.id,
+      answering: new Set(answering[index]?.data ?? []),
+      boardRunning: new Set(
+        Iterable.map(
+          Iterable.filter(boardRows, (board) => board.kanbanActive),
+          (board) => board.sessionId,
+        ),
       ),
-    ),
-  };
+    };
+  });
 }
 
 export const useAgentsQuery = (projectId: string | null) =>

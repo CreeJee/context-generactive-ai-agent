@@ -17,6 +17,7 @@ import { AccountEntry, AccountSwitcherMenu } from "./account-switcher";
 import { CompatibleAccountsList } from "./compatible-accounts";
 import type { CompatibleAccountChange } from "./compatible-client";
 import { ModelSection, ProjectSection, SessionSection } from "./sidebar";
+import type { ProjectWorking } from "../queries/project";
 import { SidebarProvider } from "../../components/ui/sidebar";
 
 /** Renders under the app's Lingui instance, which the test setup activates in Korean. */
@@ -530,6 +531,17 @@ describe("sidebar disclosures", () => {
     archived,
   });
 
+  /** No conversation of any project is at work; tests that need one name their own. */
+  const idle: Array<ProjectWorking> = [];
+  /** One conversation of a project answering now, as the working reads report it. */
+  const answeringIn = (projectId: string, sessionId: string): Array<ProjectWorking> => [
+    { projectId, answering: new Set([sessionId]), boardRunning: new Set() },
+  ];
+  /** One conversation of a project with its kanban board running. */
+  const boardRunningIn = (projectId: string, sessionId: string): Array<ProjectWorking> => [
+    { projectId, answering: new Set(), boardRunning: new Set([sessionId]) },
+  ];
+
   it.live("each listed project is a collapsible group with its own conversations", () =>
     Effect.gen(function* () {
       const screen = yield* sdkCall(() =>
@@ -545,8 +557,7 @@ describe("sidebar disclosures", () => {
                 // No sessions: only the selected project is shown as a group.
                 group("gamma", "Gamma", []),
               ]}
-              answering={new Set()}
-              boardRunning={new Set()}
+              working={idle}
               loading={false}
               projectId="gamma"
               sessionId={null}
@@ -595,8 +606,7 @@ describe("sidebar disclosures", () => {
           <div className="w-72">
             <SessionSection
               groups={[group("alpha", "Alpha", [sessionOf("alpha", "a1", "알파 대화")])]}
-              answering={new Set()}
-              boardRunning={new Set()}
+              working={idle}
               loading={false}
               // The selected project starts open, like a first visit to the page.
               projectId="alpha"
@@ -632,8 +642,7 @@ describe("sidebar disclosures", () => {
           <div className="w-72">
             <SessionSection
               groups={[group("alpha", "Alpha", [sessionOf("alpha", "a1", "알파 대화")])]}
-              answering={new Set()}
-              boardRunning={new Set()}
+              working={idle}
               loading={false}
               projectId="alpha"
               sessionId="a1"
@@ -668,8 +677,7 @@ describe("sidebar disclosures", () => {
           <div className="w-72">
             <SessionSection
               groups={[group("alpha", "Alpha", [sessionOf("alpha", "a1", "알파 대화")])]}
-              answering={new Set()}
-              boardRunning={new Set()}
+              working={idle}
               loading={false}
               projectId="alpha"
               sessionId="a1"
@@ -705,8 +713,7 @@ describe("sidebar disclosures", () => {
           <div className="w-72">
             <SessionSection
               groups={[group("gamma", "Gamma", [])]}
-              answering={new Set()}
-              boardRunning={new Set()}
+              working={idle}
               loading={false}
               projectId="gamma"
               sessionId={null}
@@ -744,8 +751,7 @@ describe("sidebar disclosures", () => {
                 // Read fine, but empty and not the selected project: it is not worth a group.
                 group("gamma", "Gamma", []),
               ]}
-              answering={new Set()}
-              boardRunning={new Set()}
+              working={idle}
               loading={false}
               projectId="alpha"
               sessionId="a1"
@@ -783,8 +789,7 @@ describe("sidebar disclosures", () => {
                 group("alpha", "Alpha", [sessionOf("alpha", "a1", "알파 대화")]),
                 group("beta", "Beta", [sessionOf("beta", "b1", "베타 질문")]),
               ]}
-              answering={new Set()}
-              boardRunning={new Set()}
+              working={idle}
               loading={false}
               // The page is on beta, so the row of alpha must still open alpha's conversation.
               projectId="beta"
@@ -823,8 +828,7 @@ describe("sidebar disclosures", () => {
           <div className="w-72">
             <SessionSection
               groups={[group("alpha", "Alpha", [sessionOf("alpha", "a1", "알파 대화")])]}
-              answering={new Set()}
-              boardRunning={new Set()}
+              working={idle}
               loading={false}
               projectId="beta"
               sessionId={null}
@@ -850,6 +854,124 @@ describe("sidebar disclosures", () => {
       yield* sdkCall(() => row.getByRole("button", { name: "알파 대화 메뉴" }).click());
       yield* sdkCall(() => screen.getByRole("menuitem", { name: "보관하기" }).click());
       expect(asked).toEqual(["archive:alpha:a1"]);
+    }),
+  );
+
+  it.live("a conversation at work leads its group and shows its spinner", () =>
+    Effect.gen(function* () {
+      const screen = yield* sdkCall(() =>
+        render(
+          <div className="w-72">
+            <SessionSection
+              groups={[
+                group("alpha", "Alpha", [
+                  sessionOf("alpha", "a1", "알파 먼저"),
+                  sessionOf("alpha", "a2", "알파 나중"),
+                ]),
+              ]}
+              // a2 answers now: it leaves the "대화" section for the "진행 중" one above it.
+              working={answeringIn("alpha", "a2")}
+              loading={false}
+              projectId="alpha"
+              sessionId={null}
+              archiveError={null}
+              onCreate={() => {}}
+              onArchive={() => {}}
+              onDelete={() => {}}
+              onRestore={() => {}}
+              agents={[]}
+            />
+          </div>,
+          withSidebar,
+        ),
+      );
+
+      // The selected group is open, so the rows are mounted: the answering one is first.
+      const rows = [...screen.container.querySelectorAll('a[href*="session="]')];
+      expect(rows.map((row) => row.textContent?.trim())).toEqual(["알파 나중", "알파 먼저"]);
+      // The row carries the spinner with the answering status as its name.
+      const spinning = screen.getByRole("status", { name: "답변 중" });
+      expect(spinning.element().closest("a")?.textContent).toContain("알파 나중");
+
+      // The header badge counts the project's conversations at work; its accessible name says
+      // what the count is of, its content the number with a spinning marker.
+      const header = screen.getByRole("button", { name: /^Alpha/u }).element();
+      const badge = header.querySelector('[data-slot="badge"][aria-label]');
+      expect(badge?.getAttribute("aria-label")).toContain("진행 중 1개");
+      expect(badge?.textContent).toContain("1");
+      expect(badge?.querySelector('[data-slot="spinner"]')).not.toBeNull();
+
+      // A board running instead of an answer leads too, with the board's own status.
+      const again = yield* sdkCall(() =>
+        render(
+          <div className="w-72">
+            <SessionSection
+              groups={[group("alpha", "Alpha", [sessionOf("alpha", "a1", "알파 먼저")])]}
+              working={boardRunningIn("alpha", "a1")}
+              loading={false}
+              projectId="alpha"
+              sessionId={null}
+              archiveError={null}
+              onCreate={() => {}}
+              onArchive={() => {}}
+              onDelete={() => {}}
+              onRestore={() => {}}
+              agents={[]}
+            />
+          </div>,
+          withSidebar,
+        ),
+      );
+      yield* sdkCall(() =>
+        expect.element(again.getByRole("status", { name: "보드 실행 중" })).toBeVisible(),
+      );
+    }),
+  );
+
+  it.live("the header badge counts the project's own working conversations", () =>
+    Effect.gen(function* () {
+      const screen = yield* sdkCall(() =>
+        render(
+          <div className="w-72">
+            <SessionSection
+              groups={[
+                group("alpha", "Alpha", [
+                  sessionOf("alpha", "a1", "알파 질문"),
+                  sessionOf("alpha", "a2", "알파 후속"),
+                ]),
+                group("beta", "Beta", [sessionOf("beta", "b1", "베타 질문")]),
+              ]}
+              // Two of alpha's conversations work; beta's stays quiet.
+              working={[
+                {
+                  projectId: "alpha",
+                  answering: new Set(["a1"]),
+                  boardRunning: new Set(["a2"]),
+                },
+                { projectId: "beta", answering: new Set(), boardRunning: new Set() },
+              ]}
+              loading={false}
+              projectId="alpha"
+              sessionId={null}
+              archiveError={null}
+              onCreate={() => {}}
+              onArchive={() => {}}
+              onDelete={() => {}}
+              onRestore={() => {}}
+              agents={[]}
+            />
+          </div>,
+          withSidebar,
+        ),
+      );
+
+      // Alpha's badge counts both kinds of work; beta's has no badge at all.
+      const alphaHeader = screen.getByRole("button", { name: /^Alpha/u }).element();
+      const betaHeader = screen.getByRole("button", { name: /^Beta/u }).element();
+      const alphaBadge = alphaHeader.querySelector('[data-slot="badge"][aria-label]');
+      expect(alphaBadge?.getAttribute("aria-label")).toContain("진행 중 2개");
+      expect(alphaBadge?.textContent).toContain("2");
+      expect(betaHeader.querySelectorAll('[data-slot="badge"][aria-label]')).toHaveLength(0);
     }),
   );
 });

@@ -30,9 +30,9 @@ import {
 import {
   useAgentsQuery,
   useAllProjectSessions,
+  useAllWorkingSessions,
   useProjectSessionsQuery,
   useSkillsQuery,
-  useWorkingSessions,
   usableAgents,
 } from "./queries/project";
 import { FolderIcon, LogInIcon, SettingsIcon, UserIcon } from "lucide-react";
@@ -208,6 +208,11 @@ export function App() {
   const groups = useAllProjectSessions(
     projects.map((project) => ({ id: project.id, name: project.name })),
   );
+  /**
+   * Conversations at work now, per project: the groups lead with them and badge their count.
+   * Every listed project is read, not only the selected one, so a group answers from its own read.
+   */
+  const working = useAllWorkingSessions(projects.map((project) => ({ id: project.id })));
   // No group yet means nothing to show: either everything is still loading, or a read failed.
   // The selected project's own read leads the loading and failure states, as it did before.
   const sessionsLoading =
@@ -219,7 +224,6 @@ export function App() {
     void sessionsQuery.refetch();
     void projectsQuery.refetch();
   };
-  const working = useWorkingSessions(projectId);
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const [projectError, setProjectError] = useState<string | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
@@ -776,8 +780,7 @@ export function App() {
             {projectId && (
               <SessionSection
                 groups={groups}
-                answering={working.answering}
-                boardRunning={working.boardRunning}
+                working={working}
                 loading={sessionsLoading}
                 failed={sessionsFailed}
                 onRetry={retrySessions}

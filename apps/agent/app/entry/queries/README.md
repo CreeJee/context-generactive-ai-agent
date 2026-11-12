@@ -19,6 +19,7 @@
 - `useInterpretationQuery` — 기억 해석이 실패로 남긴 발언 수(`{failed}`). 실패한 발언이 있을 때만 보이므로 suspense 없이 읽고, 읽기 전이나 실패하면 데이터가 없다. global `interpretation` 이벤트로 다시 읽는다
 - `useProjectSessionsQuery(projectId | null)` / `useAgentsQuery(projectId | null)` — projectId가 null이면 `enabled: false`로 비활성화한다
 - `useAllProjectSessions(projects)` — 사이드바가 프로젝트별로 대화를 묶어 보이게 하려는 훅. 프로젝트마다 `projectQueries.sessions`를 `useQueries`로 읽고, 읽힌 프로젝트만 `{projectId, name, sessions, archived}` 그룹으로 돌려준다. 키는 `appQueryKeys.project.sessions`를 그대로 쓴다
+- `useAllWorkingSessions(projects)` — 사이드바가 모든 프로젝트의 진행 중 대화를 묶어 보이게 하려는 훅. 프로젝트마다 `projectQueries.running`과 `projectQueries.boards`를 `useQueries`로 읽어(키는 기존 `running`·`boards` 그대로) `{projectId, answering, boardRunning}`을 돌려준다. `refetchInterval`은 그 프로젝트에 진행 중이 있을 때만 2초로 돈다(`followRunning`·`followBoards`), 없으면 끈다. `running`·`boards` 키를 쓰는 다른 화면과 캐시를 공유하고, SSE 무효화(`project.sessions`·`project.boards`·`project.running`)를 함께 받는다
 - `useSkillsQuery` — `Function.dual(2)` project 훅
 - `useDecisionInboxQuery` / `useProjectBoardsQuery` — project 범위 일반 `useQuery` 훅
 - `useSuspenseMcpQuery` / `useSuspenseAgentsQuery` / `useSuspenseSkillsQuery` / `useSuspenseProjectKanbanQuery` — project 범위 Suspense 훅
