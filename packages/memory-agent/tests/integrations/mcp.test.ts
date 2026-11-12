@@ -3,7 +3,7 @@ import { Context, Effect, FileSystem, Layer, Path, Schedule, Schema } from "effe
 import { build } from "vite/rolldown";
 import { expect, vi } from "vite-plus/test";
 import { CardVerifier } from "../../src/kanban/card-agent.ts";
-import { noMcpHints } from "../../src/mcp/contracts.ts";
+import { defaultMcpClientName, noMcpHints } from "../../src/mcp/contracts.ts";
 import { McpServers, McpServerState, mcpToolName } from "../../src/mcp/servers.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { PermissionReviews } from "../../src/permissions/reviews.ts";
@@ -485,6 +485,7 @@ testAgent()("MCP servers behind OAuth", (it) => {
         const trusted = yield* servers.setTrusted(project, "project", "docs", true);
         expect(trusted.servers[0]).toMatchObject({
           signedIn: false,
+          clientName: defaultMcpClientName,
           state: McpServerState.needsLogin({ failure: null }),
         });
         expect((yield* servers.runTools(project)).tools).toEqual([]);
@@ -536,6 +537,33 @@ testAgent()("MCP servers behind OAuth", (it) => {
           signedIn: false,
           state: McpServerState.needsLogin({ failure: null }),
         });
+      }),
+    serverStartTimeout,
+  );
+
+  // Some authorization servers register only client names they know and refuse others with 403.
+  it.effect(
+    "a login registers the client under the name the person chose, and the next login keeps it",
+    () =>
+      Effect.gen(function* () {
+        const servers = yield* McpServers;
+        const { project, fake } = yield* freshProject;
+        const oauth = yield* fakeOAuthMcpServer;
+        yield* writeJson(fake.config, { mcpServers: { docs: { type: "http", url: oauth.url } } });
+        yield* servers.setTrusted(project, "project", "docs", true);
+
+        const chosen = yield* servers.login(project, "project", "docs", "Claude Code");
+        expect(chosen.servers[0]).toMatchObject({
+          clientName: "Claude Code",
+          state: { _tag: "loggingIn" },
+        });
+        expect(yield* oauth.registeredNames).toEqual(["Claude Code"]);
+        yield* servers.cancelLogin(project, "project", "docs");
+
+        // Each login listens on a new port, so the client registers again, under the same name.
+        yield* servers.login(project, "project", "docs");
+        expect(yield* oauth.registeredNames).toEqual(["Claude Code", "Claude Code"]);
+        yield* servers.cancelLogin(project, "project", "docs");
       }),
     serverStartTimeout,
   );

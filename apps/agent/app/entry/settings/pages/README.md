@@ -15,6 +15,7 @@
 - `ImprovementSettings` — 프로젝트 개선 스캔 페이지. `/api/settings/improvements`로 시작·중지 명령을 보내고, 저장소별 `ImprovementReport`와 작업 명세 markdown을 보여 주며 복사할 수 있다
 - `KanbanSettings` — `{ project: Project | null }`. 칸반 동시 실행 카드 수(`ConcurrencyField`), 프로젝트 순서(`ProjectOrderField`), 계획자·실행자·검증자 모델(`RoleModelField`, 비우면 선택된 모델), 보호 브랜치(Goal 병합 위치)를 정하는 페이지
 - `McpSettings` — `{ project: Project | null }`. 프로젝트의 MCP 서버 설정 페이지. 프로젝트가 없으면 `NoProject`를 보여 준다
+- `McpLoginDialog` (`mcp-login.tsx`) — 스스로 등록하는 OAuth 클라이언트로 로그인하는 서버(`McpServerView.clientName`이 있음)의 로그인 창. 클라이언트 이름을 기본값·`Claude Code`·직접 입력 중에서 고르고, 고른 이름을 `McpCommand.login`의 `clientName`으로 보낸다. 처음에는 지난번에 고른 이름이 선택돼 있다
 - `RecallSettings` — 대화가 자기 프로젝트 밖에서 닿을 수 있는 기억 범위를 정하는 페이지(`useRecallSettingsQuery`/`useRecallSettingsMutation`)
 - `SkillSettings` — `{ project: Project | null }`. 프로젝트 스킬 설정 페이지
 - `KagiSettings` — Kagi Search/Extract(R19) 페이지. 키를 keychain에 저장한 뒤 명시적 스위치로 켠다(`useKagiQuery`/`useKagiMutation`, `KagiCommand`)

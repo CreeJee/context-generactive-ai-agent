@@ -130,7 +130,7 @@ export const ProjectsApiHandlers = HttpApiBuilder.group(
         withProject(params.project, (project) =>
           Match.valueTags(payload, {
             trust: ({ scope, name, trusted }) => servers.setTrusted(project, scope, name, trusted),
-            login: ({ scope, name }) => servers.login(project, scope, name),
+            login: ({ scope, name, clientName }) => servers.login(project, scope, name, clientName),
             cancelLogin: ({ scope, name }) => servers.cancelLogin(project, scope, name),
             logout: ({ scope, name }) => servers.logout(project, scope, name),
             toolHint: (change) => servers.setToolHint(project, change),

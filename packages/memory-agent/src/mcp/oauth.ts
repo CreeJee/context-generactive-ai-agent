@@ -52,7 +52,7 @@ import {
   McpOAuthConfig,
   type MissingVariable,
 } from "./config.ts";
-import type { McpScope } from "./contracts.ts";
+import { defaultMcpClientName, type McpScope } from "./contracts.ts";
 import { msg } from "@lingui/core/runtime-macro";
 import { i18n } from "../i18n.ts";
 
@@ -128,6 +128,8 @@ const StoredClient = Schema.Struct({
   client_secret_expires_at: Schema.optional(Schema.Finite),
   token_endpoint_auth_method: Schema.optional(Schema.String),
   redirect_uris: Schema.optional(Schema.Array(Schema.String)),
+  /** The name the client registered under; kept so a login under another name registers again. */
+  client_name: Schema.optional(Schema.String),
   issuer: Schema.optional(Schema.String),
 });
 type StoredClient = typeof StoredClient.Type;
@@ -164,6 +166,11 @@ const StoredLogin = Schema.Struct({
   tokens: Schema.optional(StoredTokens),
   dpopKey: Schema.optional(StoredDpopKey),
   challenge: Schema.optional(Challenge),
+  /**
+   * The client name the person chose at the last login, for a client that registers itself.
+   * Some authorization servers register only the client names they know.
+   */
+  clientName: Schema.optional(Schema.String),
 });
 type StoredLogin = typeof StoredLogin.Type;
 
@@ -197,7 +204,6 @@ export const defaultOAuth = McpOAuthConfig.cases.authorizationCode.make({
   client: McpOAuthClient.cases.automatic.make({}),
 });
 
-const clientName = "context-generactive-agent";
 const loopbackHost = "127.0.0.1";
 const callbackPath = "/callback";
 const dpopAlgorithm = "ES256";
@@ -306,6 +312,8 @@ type Flow = Data.TaggedEnum<{
     readonly redirectUrl: string;
     readonly state: string;
     readonly authorizationUrl: Deferred.Deferred<URL>;
+    /** The name the client registers under, if it registers itself at this login. */
+    readonly clientName: string;
   };
 }>;
 const Flow = Data.taggedEnum<Flow>();
@@ -350,6 +358,11 @@ export interface McpCredentials {
   /** Whether a person's login is stored; only known once a connection or login read it. */
   readonly signedIn: Effect.Effect<boolean>;
   /**
+   * The name a person's next login registers the client under: the one chosen last, else the
+   * default. None when the client is registered beforehand or the app logs in as itself.
+   */
+  readonly clientName: Effect.Effect<Option.Option<string>>;
+  /**
    * A call was refused for scope (403 `insufficient_scope`). A client that is the app itself gets a
    * token with the wider scope; a person logs in again, and the next login asks for it.
    */
@@ -359,8 +372,10 @@ export interface McpCredentials {
     void,
     McpLoginRequired | Cause.UnknownError | Schema.SchemaError | SecretStoreFailed
   >;
+  /** `clientName` replaces the stored choice; without it the login uses that choice. */
   readonly login: (options: {
     readonly timeoutMs: number;
+    readonly clientName?: string | undefined;
   }) => Effect.Effect<McpLoginAttempt, McpLoginFailed>;
 }
 
@@ -505,7 +520,8 @@ export const openMcpCredentials = Effect.fnUntraced(function* (options: {
   const invalidate = {
     all: Effect.all(
       [
-        update(() => empty),
+        // The chosen client name is the person's setting, not a credential.
+        update((login) => ({ ...empty, ...optionalProperty("clientName", login.clientName) })),
         Ref.set(discovery, Option.none()),
         Ref.set(verifier, Option.none()),
         SynchronizedRef.set(dpop, Option.none()),
@@ -518,13 +534,15 @@ export const openMcpCredentials = Effect.fnUntraced(function* (options: {
     discovery: Ref.set(discovery, Option.none()),
   };
 
-  /** A client that registered itself, if it did so for this login's redirect. */
+  /** A client that registered itself, if it did so for this login's redirect and name. */
   const registeredFor = (flow: Flow) => (client: StoredClient) =>
     Flow.$match(flow, {
       connection: () => true,
-      login: ({ redirectUrl }) =>
+      login: ({ redirectUrl, clientName }) =>
         client.client_id === setup.metadataUrl ||
-        (client.redirect_uris ?? []).includes(redirectUrl),
+        ((client.redirect_uris ?? []).includes(redirectUrl) &&
+          // A client stored before names were kept registered under the default one.
+          (client.client_name ?? defaultMcpClientName) === clientName),
     });
 
   const clientInformation = (flow: Flow) =>
@@ -540,11 +558,17 @@ export const openMcpCredentials = Effect.fnUntraced(function* (options: {
         }),
     });
 
-  /** Only a client that registers itself saves what registration gave it. */
-  const saveClient = (information: StoredOAuthClientInformation) =>
+  /**
+   * Only a client that registers itself saves what registration gave it, with the name it asked
+   * for when the authorization server does not repeat it.
+   */
+  const saveClient = (clientName: string) => (information: StoredOAuthClientInformation) =>
     runNativeEffect(
       Effect.flatMap(decodeClient(information), (client) =>
-        update((login) => ({ ...login, client })),
+        update((login) => ({
+          ...login,
+          client: { ...client, client_name: client.client_name ?? clientName },
+        })),
       ),
     );
 
@@ -556,6 +580,11 @@ export const openMcpCredentials = Effect.fnUntraced(function* (options: {
           login: (login) => login.redirectUrl,
         })
       : undefined;
+    // A connection never registers a client, so its name is only there to fill the metadata.
+    const clientName = Flow.$match(flow, {
+      connection: () => defaultMcpClientName,
+      login: (login) => login.clientName,
+    });
     const clientMetadata: OAuthClientMetadata = {
       client_name: clientName,
       redirect_uris: redirectUrl === undefined ? [] : [redirectUrl],
@@ -578,7 +607,7 @@ export const openMcpCredentials = Effect.fnUntraced(function* (options: {
       clientInformation: () => runNativeEffect(clientInformation(flow)),
       ...optionalProperty(
         "saveClientInformation",
-        Option.isNone(setup.registered) ? saveClient : undefined,
+        Option.isNone(setup.registered) ? saveClient(clientName) : undefined,
       ),
       tokens: () => runNativeEffect(Effect.map(current, (login) => login.tokens)),
       saveTokens: (tokens) => runNativeEffect(saveTokens(tokens)),
@@ -671,6 +700,7 @@ export const openMcpCredentials = Effect.fnUntraced(function* (options: {
 
   const login = Effect.fn("McpOAuth.login")(function* (loginOptions: {
     readonly timeoutMs: number;
+    readonly clientName?: string | undefined;
   }): Effect.fn.Return<McpLoginAttempt, McpLoginFailed> {
     const listenerScope = yield* Scope.make();
     const closeListener = Scope.close(listenerScope, Exit.void);
@@ -699,10 +729,22 @@ export const openMcpCredentials = Effect.fnUntraced(function* (options: {
       const redirectUrl = `http://${authority}${callbackPath}`;
       const state = yield* crypto.uuidV4();
       const authorizationUrl = yield* Deferred.make<URL>();
-      const provider = providerFor(Flow.login({ redirectUrl, state, authorizationUrl }));
-      const { challenge } = yield* current.pipe(
+      const remembered = yield* current.pipe(
         Effect.mapError(loginFailureOf),
         Effect.catch(failWith),
+      );
+      const { challenge } = remembered;
+      const clientName = loginOptions.clientName ?? remembered.clientName ?? defaultMcpClientName;
+      // A name the person chose is kept for the next login, also when this one does not finish.
+      yield* Effect.when(
+        update((login) => ({ ...login, clientName })),
+        Effect.succeed(
+          loginOptions.clientName !== undefined &&
+            loginOptions.clientName !== remembered.clientName,
+        ),
+      ).pipe(Effect.mapError(loginFailureOf), Effect.catch(failWith));
+      const provider = providerFor(
+        Flow.login({ redirectUrl, state, authorizationUrl, clientName }),
       );
       const started = yield* authorize(provider, {
         serverUrl: options.url,
@@ -824,6 +866,15 @@ export const openMcpCredentials = Effect.fnUntraced(function* (options: {
     },
     signedIn: Effect.map(SynchronizedRef.get(stored), (loaded) =>
       Option.exists(loaded, (stored) => setup.interactive && stored.tokens !== undefined),
+    ),
+    clientName: Effect.map(SynchronizedRef.get(stored), (loaded) =>
+      setup.interactive && Option.isNone(setup.registered)
+        ? Option.some(
+            Option.flatMapNullishOr(loaded, (login) => login.clientName).pipe(
+              Option.getOrElse(() => defaultMcpClientName),
+            ),
+          )
+        : Option.none(),
     ),
     stepUp,
     login,

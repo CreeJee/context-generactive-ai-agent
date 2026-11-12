@@ -228,6 +228,11 @@ msgstr "{cwd}: 대화 {transcripts}개, {reason}"
 msgid "{days}일"
 msgstr "{days}일"
 
+#. Option for the OAuth client name this app gives by default; the name is a code value
+#: app/entry/settings/pages/mcp-login.tsx
+msgid "{defaultMcpClientName} (기본)"
+msgstr "{defaultMcpClientName} (기본)"
+
 #: app/entry/shared/model-downloads.tsx
 msgid "{done} / {size} ({percent}%)"
 msgstr "{done} / {size} ({percent}%)"
@@ -397,6 +402,10 @@ msgstr "{section}: 오래된 항목은 상한 때문에 빠졌음"
 #: app/entry/index.tsx
 msgid "{selectedProviderName} 연결이 필요합니다."
 msgstr "{selectedProviderName} 연결이 필요합니다."
+
+#: app/entry/settings/pages/mcp-login.tsx
+msgid "{serverName} 서버에 로그인"
+msgstr "{serverName} 서버에 로그인"
 
 #: app/entry/settings/pages/mcp.tsx
 msgid "{serverName} 서버에서 로그아웃할까요?"
@@ -1800,6 +1809,10 @@ msgstr "다른 대화로 옮길까요?"
 msgid "다른 대화의 카드와는 순서를 바꿀 수 없습니다. 대화 순서는 대화별 상태 패널에서 바꿉니다."
 msgstr "다른 대화의 카드와는 순서를 바꿀 수 없습니다. 대화 순서는 대화별 상태 패널에서 바꿉니다."
 
+#: app/entry/settings/pages/mcp-login.tsx
+msgid "다른 앱의 이름으로 등록하면 그 서버의 이용 약관에 어긋날 수 있습니다."
+msgstr "다른 앱의 이름으로 등록하면 그 서버의 이용 약관에 어긋날 수 있습니다."
+
 #: app/entry/chat/read-only-bar.tsx
 msgid "다른 창에서 이 대화를 쓰고 있습니다"
 msgstr "다른 창에서 이 대화를 쓰고 있습니다"
@@ -2314,7 +2327,9 @@ msgstr "로그아웃"
 
 #. Button that adds the account by opening its login
 #. Button that signs in to an MCP server
+#. Dialog button that starts an MCP server's OAuth login
 #: app/entry/navigation/account-profiles.tsx
+#: app/entry/settings/pages/mcp-login.tsx
 #: app/entry/settings/pages/mcp.tsx
 msgid "로그인"
 msgstr "로그인"
@@ -2355,6 +2370,10 @@ msgstr "로그인이 제시간에 끝나지 않았습니다."
 #: app/entry/settings/pages/mcp.tsx
 msgid "로그인하지 못했습니다."
 msgstr "로그인하지 못했습니다."
+
+#: app/entry/settings/pages/mcp-login.tsx
+msgid "로그인할 때 이 앱은 서버에 이 이름으로 자기를 등록합니다. 어떤 서버는 아는 앱 이름만 받고 다른 이름은 거절합니다. 고른 이름은 이 서버의 다음 로그인에도 씁니다."
+msgstr "로그인할 때 이 앱은 서버에 이 이름으로 자기를 등록합니다. 어떤 서버는 아는 앱 이름만 받고 다른 이름은 거절합니다. 고른 이름은 이 서버의 다음 로그인에도 씁니다."
 
 #: app/entry/report/report-delivery.tsx
 msgid "로컬 서버 요청이 실패했습니다"
@@ -5456,6 +5475,16 @@ msgstr "직접 merge"
 msgid "직접 merge하기로 함, Goal 브랜치를 남겨 둠"
 msgstr "직접 merge하기로 함, Goal 브랜치를 남겨 둠"
 
+#. Option that lets the user type their own OAuth client name
+#: app/entry/settings/pages/mcp-login.tsx
+msgid "직접 입력"
+msgstr "직접 입력"
+
+#. Field where the user types their own OAuth client name
+#: app/entry/settings/pages/mcp-login.tsx
+msgid "직접 입력한 클라이언트 이름"
+msgstr "직접 입력한 클라이언트 이름"
+
 #. Badge on an MCP tool whose hints the user changed
 #: app/entry/settings/pages/mcp-tool-hints.tsx
 msgid "직접 지정"
@@ -5684,6 +5713,7 @@ msgstr "충족"
 #. Dialog button that cancels
 #. Dialog button that cancels
 #. Dialog button that cancels
+#. Dialog button that cancels
 #. Dialog button that keeps the task record
 #: app/entry/chat/btw-panel.tsx
 #: app/entry/chat/chat-panel.tsx
@@ -5692,6 +5722,7 @@ msgstr "충족"
 #: app/entry/navigation/account-profiles.tsx
 #: app/entry/navigation/compatible-accounts.tsx
 #: app/entry/navigation/sidebar.tsx
+#: app/entry/settings/pages/mcp-login.tsx
 #: app/entry/settings/pages/mcp.tsx
 #: app/entry/settings/pages/web.tsx
 msgid "취소"
@@ -5932,6 +5963,11 @@ msgstr "코드 실행"
 #: app/entry/report/report-draft.tsx
 msgid "코드 없음"
 msgstr "코드 없음"
+
+#. Label of the select that picks the OAuth client name for an MCP login
+#: app/entry/settings/pages/mcp-login.tsx
+msgid "클라이언트 이름"
+msgstr "클라이언트 이름"
 
 #: app/entry/settings/pages/improvements.tsx
 msgid "클립보드를 사용할 수 없습니다. 아래 문서에서 텍스트를 직접 선택해 복사해 주십시오."

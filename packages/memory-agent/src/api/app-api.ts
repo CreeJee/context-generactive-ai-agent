@@ -98,6 +98,7 @@ export {
 export { GeneratedImage } from "./app-api/media.ts";
 export { CrossProviderMediaRunApproval } from "../providers/image-media-contracts.ts";
 export {
+  defaultMcpClientName,
   McpToolHint,
   mcpHint,
   mcpHintDefaults,

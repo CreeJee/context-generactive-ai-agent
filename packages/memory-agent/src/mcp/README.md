@@ -21,7 +21,8 @@
 - `McpStepTimedOut` — `connect` 또는 `tools/list` 단계 시간 초과를 나타내는 TaggedError
 - `McpServerConfig` — `Schema.TaggedUnion`이고 `stdio{command,args,env}` 또는 `http{url,headers,oauth?}`이다
 - `McpOAuthConfig` / `McpOAuthClient` / `McpClientAuthentication` — `oauth` 설정. `authorizationCode{client,callbackPort?,scope?}`(사람 로그인) 또는 `clientCredentials{clientId,issuer,authentication,scope?}`(앱 자신). client는 `automatic{metadataUrl?}`(CIMD 또는 동적 등록) 또는 `registered{clientId,issuer?,authentication?}`. 증명은 `secret` 또는 `privateKeyJwt`이고 값은 `${NAME}` 참조만 받는다. 파일에서는 평평한 `{grant?, clientId?, clientSecret?, privateKey?{key,algorithm}, clientMetadataUrl?, issuer?, callbackPort?, scope?}`로 쓰고, 함께 쓸 수 없는 조합은 `invalid_config`다
-- `openMcpCredentials` / `McpCredentials` — 서버 로그인 하나. transport용 `AuthProvider`·DPoP `fetch`, `signedIn`, `stepUp`, `login`을 준다
+- `openMcpCredentials` / `McpCredentials` — 서버 로그인 하나. transport용 `AuthProvider`·DPoP `fetch`, `signedIn`, `clientName`(다음 로그인이 등록할 클라이언트 이름), `stepUp`, `login`을 준다
+- `defaultMcpClientName` — 스스로 등록하는 클라이언트의 기본 이름 `context-generactive-agent`(`contracts.ts`, 브라우저도 쓴다)
 - `McpLoginRequired` / `needsLogin` / `McpLoginFailed` / `McpLoginOutcome` / `McpLoginAttempt` — 로그인이 필요하다는 오류와 cause 사슬 검사, 로그인 시작 실패, 로그인 결과, 진행 중인 로그인
 - `loginSlot` / `loginBinding` / `defaultOAuth` — 키체인 항목 이름, 로그인이 만들어진 URL·설정의 해시, `oauth`가 없을 때의 기본값(자동 등록 + 사람 로그인)
 - `McpScope` — `"global" | "project"` 리터럴 schema
@@ -64,8 +65,9 @@
 - OAuth는 HTTP 서버에서 `oauth`가 있거나, 없더라도 `Authorization` 헤더를 적지 않았을 때 쓴다. 서버가 401을 주기 전에는 아무것도 하지 않는다.
 - 로그인은 키체인 항목(`loginSlot`)마다 하나이고, 그 항목을 쓰는 연결(공통 서버는 모든 프로젝트)이 함께 쓴다. 항목의 `binding`이 지금 URL·`oauth`와 다르면 빈 로그인으로 본다. 발견 결과와 PKCE verifier는 메모리에만 둔다.
 - 연결은 브라우저 로그인을 시작하지 않고 클라이언트를 등록하지 않는다. 동시에 온 401은 `Semaphore` 하나로 refresh 한 번만 한다(저장 횟수로 다른 refresh가 끝났는지 본다). 로그인이 필요하면 상태가 `needsLogin`이 되고, 로그인·로그아웃·신뢰 변경으로 연결이 바뀌기 전까지 서버에 다시 묻지 않는다.
-- 로그인은 루프백 `127.0.0.1`의 `/callback`으로 받는다. `callbackPort`가 없으면 빈 포트를 쓰고, 동적 등록한 클라이언트는 redirect URI가 다르면 다시 등록한다. state와 Host를 확인하고, 콜백은 한 번만 받는다. 시작(발견·등록)은 30초, 로그인 전체는 5분 안에 끝나야 한다.
+- 로그인은 루프백 `127.0.0.1`의 `/callback`으로 받는다. `callbackPort`가 없으면 빈 포트를 쓰고, 동적 등록한 클라이언트는 redirect URI나 이름이 다르면 다시 등록한다. state와 Host를 확인하고, 콜백은 한 번만 받는다. 시작(발견·등록)은 30초, 로그인 전체는 5분 안에 끝나야 한다.
 - 403 `insufficient_scope`: client_credentials는 넓힌 scope로 토큰을 다시 받고 호출을 한 번 더 한다. 사람 로그인은 넓힌 scope를 다음 로그인에 쓰도록 남기고 호출을 실패시킨다.
+- 스스로 등록하는 클라이언트는 사람이 로그인 때 고른 이름(`login`의 `clientName`)으로 등록한다. 어떤 인가 서버(예: Figma)는 아는 클라이언트 이름만 등록하고 나머지는 403으로 거절하기 때문이다. 고른 이름은 키체인 항목의 `clientName`에 남아 다음 로그인의 기본값이 되고, 자격 증명을 모두 무효로 해도 남는다. 고르지 않으면 `defaultMcpClientName`이다.
 - 신뢰를 거두거나 로그아웃하면 키체인 항목, 메모리의 로그인, 진행 중인 로그인을 모두 지운다.
 
 ## Side Effects

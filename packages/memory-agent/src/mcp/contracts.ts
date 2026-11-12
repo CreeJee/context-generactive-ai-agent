@@ -15,6 +15,9 @@ import {
 export const McpScope = Schema.Literals(["global", "project"]);
 export type McpScope = typeof McpScope.Type;
 
+/** The name a client that registers itself at an OAuth login gives, unless the person chose another. */
+export const defaultMcpClientName = "context-generactive-agent";
+
 /**
  * The MCP spec's tool annotations (`ToolAnnotations`), each a hint about what calling a tool does:
  * - `readOnly`: it does not change its environment.
@@ -112,6 +115,12 @@ export const McpServerView = Schema.Struct({
   shadowed: Schema.Boolean,
   /** A person's OAuth login to the server is stored (known once the app used or made it). */
   signedIn: Schema.Boolean,
+  /**
+   * The name the client registers under at the next login, for a client that registers itself
+   * (some authorization servers take only names they know); `null` for other servers, or until
+   * the app used the server's login.
+   */
+  clientName: Schema.NullOr(Schema.String),
   state: ServerState,
 });
 export type McpServerView = typeof McpServerView.Type;

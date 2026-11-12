@@ -20,6 +20,8 @@ export const fakeOAuthMcpServer = Effect.gen(function* () {
   const valid = yield* Ref.make(HashSet.empty<string>());
   const issued = yield* Ref.make(0);
   const refreshes = yield* Ref.make(0);
+  /** The `client_name` of each registration, in order. */
+  const registeredNames = yield* Ref.make<ReadonlyArray<JsonValue>>([]);
   /** The PKCE challenge of the code the authorization endpoint gave last. */
   const challenge = yield* Ref.make(Option.none<string>());
 
@@ -81,6 +83,7 @@ export const fakeOAuthMcpServer = Effect.gen(function* () {
         });
       case "/register": {
         const metadata = yield* Effect.flatMap(request.json, decodeMetadata);
+        yield* Ref.update(registeredNames, (names) => [...names, metadata.client_name ?? null]);
         return HttpServerResponse.jsonUnsafe(
           { ...metadata, client_id: "fake-client" },
           { status: 201 },
@@ -138,5 +141,6 @@ export const fakeOAuthMcpServer = Effect.gen(function* () {
     /** The server stops accepting the access tokens it gave, as when they expire. */
     expireTokens: Ref.set(valid, HashSet.empty<string>()),
     refreshes: Ref.get(refreshes),
+    registeredNames: Ref.get(registeredNames),
   };
 });

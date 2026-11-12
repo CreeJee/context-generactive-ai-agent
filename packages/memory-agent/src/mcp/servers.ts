@@ -828,6 +828,15 @@ const make = Effect.gen(function* () {
       }),
     );
 
+  /** The client name a login would register under, once the server's login is in use. */
+  const loginClientName = (slot: SecretName) =>
+    Effect.flatMap(SynchronizedRef.get(credentials), (current) =>
+      Option.match(HashMap.get(current, slot), {
+        onNone: () => Effect.succeed(null),
+        onSome: (found) => Effect.map(found.clientName, Option.getOrNull),
+      }),
+    );
+
   /** A connected server's tools as settings show them, with the hints the user set. */
   const withHintsShown =
     (rows: readonly HintRow[], server: ConfiguredServer) =>
@@ -877,9 +886,10 @@ const make = Effect.gen(function* () {
           // A command line or URL can carry a key (`--api-key=…`, `?token=…`); the page gets it hidden.
           target: redactor.shownDetail(summary.target),
           signedIn: signedIn(slotOf(project, entry.server)),
+          clientName: loginClientName(slotOf(project, entry.server)),
           state: stateOf(project, entry, hints),
         }),
-        ({ target, signedIn, state }): McpServerView => ({
+        ({ target, signedIn, clientName, state }): McpServerView => ({
           scope: entry.server.scope,
           name: entry.server.name,
           transport: summary.transport,
@@ -888,6 +898,7 @@ const make = Effect.gen(function* () {
           headerNames: summary.headerNames,
           shadowed: entry.shadowed,
           signedIn,
+          clientName,
           state,
         }),
       );
@@ -979,7 +990,7 @@ const make = Effect.gen(function* () {
     );
   };
 
-  const startLogin = (project: Project, server: ConfiguredServer) =>
+  const startLogin = (project: Project, server: ConfiguredServer, clientName: string | undefined) =>
     Effect.flatMap(personalLogin(project, server), (login) =>
       Effect.transposeOption(
         Option.map(login, (found) =>
@@ -991,7 +1002,7 @@ const make = Effect.gen(function* () {
                 Option.exists(HashMap.get(yield* Ref.get(logins), slot), LoginState.$is("pending"))
               )
                 return;
-              yield* found.login({ timeoutMs: loginTimeoutMs }).pipe(
+              yield* found.login({ timeoutMs: loginTimeoutMs, clientName }).pipe(
                 Effect.matchEffect({
                   onFailure: (failed) =>
                     Effect.flatMap(
@@ -1093,12 +1104,15 @@ const make = Effect.gen(function* () {
 
     /**
      * Starts a person's OAuth login to a trusted HTTP server; settings show where to log in until
-     * it ends, and the server connects with it. Other servers are ignored.
+     * it ends, and the server connects with it. Other servers are ignored. A client that registers
+     * itself does so under `clientName`, else under the name chosen last.
      */
-    login: (project: Project, scope: McpScope, name: string) =>
+    login: (project: Project, scope: McpScope, name: string, clientName?: string) =>
       Effect.gen(function* () {
         const server = yield* usableServer(project, scope, name);
-        yield* Effect.transposeOption(Option.map(server, (found) => startLogin(project, found)));
+        yield* Effect.transposeOption(
+          Option.map(server, (found) => startLogin(project, found, clientName)),
+        );
         return yield* overview(project);
       }),
 

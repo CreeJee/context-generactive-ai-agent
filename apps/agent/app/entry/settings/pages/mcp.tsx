@@ -38,6 +38,7 @@ import {
   shadowedBadge,
   pageTitles,
 } from "../shared";
+import { McpLoginDialog } from "./mcp-login";
 import { McpToolHints } from "./mcp-tool-hints";
 
 const description = msg`신뢰한 서버만 시작합니다. 설정 파일이 바뀌면 다시 신뢰해야 합니다. 신뢰해도 도구를 부를 때마다 승인이나 자동 판단을 거칩니다. 읽기만 하는 도구만 Plan 작성, 카드 실행, 검증 에이전트가 받습니다.`;
@@ -321,22 +322,36 @@ function LoginActions({
         </Button>
       </>
     );
+  const loginVariant = server.signedIn ? "ghost-muted" : "outline";
+  const loginLabel = server.signedIn ? (
+    <Trans comment="Button that signs in to an MCP server again">다시 로그인</Trans>
+  ) : (
+    <Trans comment="Button that signs in to an MCP server">로그인</Trans>
+  );
   return (
     <>
-      {(McpServerState.$is("needsLogin")(server.state) || server.signedIn) && (
-        <Button
-          size="sm"
-          variant={server.signedIn ? "ghost-muted" : "outline"}
-          disabled={busy}
-          onClick={() => void run(McpCommand.login(target))}
-        >
-          {server.signedIn ? (
-            <Trans comment="Button that signs in to an MCP server again">다시 로그인</Trans>
-          ) : (
-            <Trans comment="Button that signs in to an MCP server">로그인</Trans>
-          )}
-        </Button>
-      )}
+      {(McpServerState.$is("needsLogin")(server.state) || server.signedIn) &&
+        // A client that registers itself lets the person pick the name it registers under.
+        (server.clientName !== null ? (
+          <McpLoginDialog
+            server={server}
+            clientName={server.clientName}
+            busy={busy}
+            variant={loginVariant}
+            run={run}
+          >
+            {loginLabel}
+          </McpLoginDialog>
+        ) : (
+          <Button
+            size="sm"
+            variant={loginVariant}
+            disabled={busy}
+            onClick={() => void run(McpCommand.login(target))}
+          >
+            {loginLabel}
+          </Button>
+        ))}
       {server.signedIn && (
         <AlertDialog open={confirmingLogout} onOpenChange={setConfirmingLogout}>
           <AlertDialogTrigger render={<Button size="sm" variant="ghost-muted" disabled={busy} />}>

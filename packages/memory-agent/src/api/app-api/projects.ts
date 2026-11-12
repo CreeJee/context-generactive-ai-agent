@@ -31,14 +31,19 @@ export type ExternalAgentCommand = typeof ExternalAgentCommand.Type;
 /**
  * - `trust` { scope, name, trusted }: starts that exact configuration; it does not approve any
  *   tool call. Distrusting also forgets the server's OAuth login.
- * - `login` { scope, name }: starts an OAuth login; the answer shows where to log in.
+ * - `login` { scope, name, clientName? }: starts an OAuth login; the answer shows where to log in.
+ *   A client that registers itself does so under `clientName`, kept for later logins.
  * - `cancelLogin` / `logout` { scope, name }: stops that login, or forgets the stored one.
  * - `toolHint` { scope, name, tool, hint, value }: the user's value for one of a tool's MCP
  *   annotation hints, which wins over the server's; `null` goes back to the server's or the spec's.
  */
 export const McpCommand = Schema.TaggedUnion({
   trust: { scope: McpScope, name: Schema.NonEmptyString, trusted: Schema.Boolean },
-  login: { scope: McpScope, name: Schema.NonEmptyString },
+  login: {
+    scope: McpScope,
+    name: Schema.NonEmptyString,
+    clientName: Schema.optionalKey(Schema.Trim.pipe(Schema.check(Schema.isNonEmpty()))),
+  },
   cancelLogin: { scope: McpScope, name: Schema.NonEmptyString },
   logout: { scope: McpScope, name: Schema.NonEmptyString },
   toolHint: {

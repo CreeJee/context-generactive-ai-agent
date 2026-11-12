@@ -31,6 +31,7 @@ const server = {
   headerNames: [],
   shadowed: false,
   signedIn: false,
+  clientName: null,
   state: { _tag: "connected", tools },
 } satisfies McpServerView;
 
