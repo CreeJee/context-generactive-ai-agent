@@ -4946,6 +4946,7 @@
   - full은 이미 도구 호출·밖 쓰기·코드 스킬 저장을 묻지 않고, auto는 그것들을 classifier가 판정한다. 카드 승인만 Plan을 누가 승인했는지로 정하면 사용자가 고른 권한 모드와 어긋난다.
   - ask는 전처럼 사용자를 기다리므로, Plan 모드에서 새 카드마다 사용자가 승인하던 것은 ask 프로젝트에서 그대로다.
   - 권한 모드는 look마다 읽으므로 이미 돌고 있는 보드도 다음 look부터 따른다. 승인을 기다리던 카드도 함께 승인되거나 검토된다.
+  - 보드가 승인 방식을 기록하던 것(`kanban_goals.card_approval`, `KanbanOrchestrator.setCardApproval`, 정책을 저장하지 못했을 때의 blocker)은 지운다. 컬럼은 마이그레이션이 지운다.
 - 대체하는 결정: "outcome 장부와 이어 쓰는 Plan" 구현(2c·3 새 카드 승인)의 "누가 승인하는지는 보드를 시작할 때 `kanban_goals.card_approval`에 남긴다"와, "구체화 중에 쓴 카드는 Plan 승인으로 승인된다"의 "Plan을 다시 승인할 때 … 그 승인의 정책만 `kanban_goals.card_approval`에 기록한다".
 
 ## worker 스레드도 span을 OTLP로 내보낸다 (2026-11-12)

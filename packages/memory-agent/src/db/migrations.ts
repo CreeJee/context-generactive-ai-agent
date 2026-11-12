@@ -2973,6 +2973,12 @@ export const migrations: readonly string[] = [
   `,
   backgroundTasksMigration,
   deletedConversationTraceMigration,
+  `
+  -- The project's permission mode alone approves the cards the planner adds to a running board
+  -- (decisions.md "새 카드 승인은 보드를 누가 시작했는지가 아니라 프로젝트 권한 모드가 정한다
+  -- (2026-11-12)"), so a board no longer records who approves them.
+  ALTER TABLE kanban_goals DROP COLUMN card_approval;
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.
