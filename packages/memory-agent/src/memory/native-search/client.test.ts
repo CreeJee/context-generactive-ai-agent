@@ -129,6 +129,42 @@ it("times out the caller without pretending an active transport job has terminat
     ).pipe(Effect.timeout("5 seconds")),
   ));
 
+it(
+  "waits past the reply timeout for a save, which a busy disk stretches",
+  () =>
+    Effect.runPromise(
+      Effect.scoped(
+        withTestPlatform(
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const directory = yield* fs.makeTempDirectoryScoped({ prefix: "native-slow-save-" });
+            const owner = yield* makeNativeOwner(
+              {
+                kind: "setup",
+                epoch: "slow-save",
+                dimensions: 8,
+                bits: 4,
+                cacheDirectory: directory,
+              },
+              new URL("./worker.ts", import.meta.url),
+              // Transport-only delay standing in for a slow disk.
+              gatedTransport((command, transport) =>
+                command._tag === "save"
+                  ? Effect.sleep("2500 millis").pipe(Effect.andThen(transport.send(command)))
+                  : transport.send(command),
+              ),
+            );
+            const reply = yield* owner.execute(
+              OwnerCommand.cases.save.make({ epoch: "slow-save", requestId: "slow" }),
+            );
+            expect(OwnerReply.guards.ack(reply)).toBe(true);
+          }),
+        ),
+      ).pipe(Effect.timeout("10 seconds")),
+    ),
+  15_000,
+);
+
 it("waits past a budgeted search's budget for its own budget-exceeded reply", () =>
   Effect.runPromise(
     Effect.scoped(
