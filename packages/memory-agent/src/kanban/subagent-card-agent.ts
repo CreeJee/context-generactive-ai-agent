@@ -10,6 +10,7 @@ import { Subagents } from "../subagents/subagents.ts";
 import { ApprovedTools } from "../tools/approved.ts";
 import { gatedToolNames } from "../tools/definitions.ts";
 import { FileTools } from "../tools/files.ts";
+import { MemoryTools } from "../tools/memory.ts";
 import { OutsideTools } from "../tools/outside.ts";
 import { runTool, type RunTool } from "../tools/run-tool.ts";
 import { SkillTools, type SkillToolset } from "../tools/skills.ts";
@@ -136,10 +137,15 @@ const make = Effect.gen(function* () {
   const active = yield* ActiveProvider;
   const fileTools = yield* FileTools;
   const outsideTools = yield* OutsideTools;
+  const memoryTools = yield* MemoryTools;
   const approvedTools = yield* ApprovedTools;
   const mcpServers = yield* McpServers;
   const skillTools = yield* SkillTools;
   const crypto = yield* SecureRandom.SecureRandom;
+
+  /** The memory tools of the card's project; the name lists keep only `read_evidence`. */
+  const evidenceTools = (projectId: string, sessionId: string) =>
+    memoryTools.toolsFor({ projectId, sessionId }, "project");
 
   /**
    * The read-only tools of the project's trusted MCP servers, which run for the project's main
@@ -216,6 +222,7 @@ const make = Effect.gen(function* () {
                     ...outsideTools.toolsFor(project),
                     ...approvedTools.toolsFor(project, run.sessionId, "gate"),
                     ...skills.tools,
+                    ...evidenceTools(run.projectId, run.sessionId),
                   ]),
                   ...mcp.tools,
                 ],
@@ -285,6 +292,7 @@ const make = Effect.gen(function* () {
               ...fileTools.toolsFor(project),
               ...approvedTools.toolsFor(project, input.sessionId, "gate"),
               ...skills.tools,
+              ...evidenceTools(input.projectId, input.sessionId),
             ]),
             ...mcp.tools,
             recorder.runTool,
