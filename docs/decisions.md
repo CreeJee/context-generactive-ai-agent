@@ -5320,3 +5320,10 @@
   - 각 프로젝트의 접힘은 jotai `atomWithStorage("context-agent-session-groups-open-v1", {})`에 프로젝트별로 저장한다. 서버 렌더와 첫 렌더는 빈 기본값을 쓰고, 저장된 값은 마운트 뒤 적용되므로 hydration이 어긋나지 않는다(`ProjectSection`의 `context-agent-project-section-open-v2`와 같은 패턴). 저장이 없는 프로젝트는 이전 기본값을 따른다(선택 프로젝트는 펼침).
   - 접힌 그룹의 헤더는 그 프로젝트의 대화 수를 보이고, 스크린 리더용 이름은 Lingui 메시지 "대화 {count}개"로 쓴다.
 - 버린 안: 접힘을 서버 계정 설정에 저장. 대화 목록의 펼침은 기기·창마다 다른 것이 자연스럽고, 서버 저장은 API와 스키마를 늘리는 데 비해 얻는 것이 적다.
+
+## 사이드바 접힘 테스트는 접힌 그룹에 행이 없음을 단언하고, 브라우저 테스트 기동은 사용자 환경에서 한다 (2026-11-12)
+
+- 계기: s2의 브라우저 테스트가 접힌 그룹에서도 행 링크를 단언해 Base UI Collapsible의 닫힌 내용 언마운트 기본 동작과 어긋났다. 이 샌드박스에서는 브라우저 테스트를 기동할 수 없어 단언과 동작의 불일치가 검증 없이 남았다.
+- 결정: `SessionSection`의 프로젝트 그룹 접힘은 Base UI Collapsible의 기본(닫힌 패널 언마운트)을 유지한다. `CollapsibleContent`에 `keepMounted`를 넣지 않는다. 접힘은 곧 숨김이고, 모든 프로젝트의 행을 상시 마운트하는 DOM 비용을 피한다. 이 동작은 jsdom 컴포넌트 테스트(`sidebar-collapse.test.tsx`)와 브라우저 테스트(`sidebar.browser.tsx`)가 함께 단언한다: 접힌 그룹은 행 링크가 없고, 펼친 그룹만 자기 행을 마운트하며, 다른 프로젝트의 행 링크는 `project`·`session` 파라미터를 모두 가진다. 행 링크 단언은 그룹을 펼친 뒤(또는 선택 프로젝트의 기본 펼침 상태에서) 한다.
+  - 컴포넌트 테스트가 `Link`를 렌더하려면 라우터 컨텍스트가 필요하다. jsdom 테스트는 `createMemoryRouter`로, 브라우저 테스트는 `withSidebar` 래퍼가 메모리 라우터로 감싼다(`report-draft.test.tsx`와 같은 방식).
+- 기록: 카드 샌드박스에서 브라우저 테스트 기동은 실패한다. `vp test --config apps/agent/vite.browser.config.ts --run apps/agent/app/entry/navigation/sidebar.browser.tsx`의 결과는 Chromium이 `FATAL:base/apple/mach_port_rendezvous_mac.cc:159 — bootstrap_check_in org.chromium.Chromium.MachPortRendezvousServer: Permission denied (1100)`로 죽는 것(SIGTRAP)이었다. macOS 샌드박스(seatbelt)가 Chromium의 Mach 포트 랑데부 서버 부트스트랩 체크인을 막기 때문이다. 최종 브라우저 확인은 사용자 환경에서 한다.

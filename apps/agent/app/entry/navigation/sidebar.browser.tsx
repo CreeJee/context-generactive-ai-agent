@@ -3,7 +3,9 @@ import { i18n } from "@lingui/core";
 import { I18nProvider } from "@lingui/react";
 import { Cause, Effect } from "effect";
 import type { ReactNode } from "react";
+import { useState } from "react";
 import { Array as EffectArray } from "effect";
+import { createMemoryRouter, RouterProvider } from "react-router";
 import { render } from "vitest-browser-react";
 import { describe, expect, beforeEach } from "vite-plus/test";
 import "../../app.css";
@@ -24,13 +26,21 @@ const withI18n = {
   ),
 };
 
-/** SessionSection draws SidebarMenuButtons, which need the sidebar context. */
+/**
+ * SessionSection draws SidebarMenuButtons, which need the sidebar context, and conversation rows,
+ * which are react-router Links, so the section renders under the app's router like the page does.
+ */
 const withSidebar = {
-  wrapper: ({ children }: { children: ReactNode }) => (
-    <I18nProvider i18n={i18n}>
-      <SidebarProvider>{children}</SidebarProvider>
-    </I18nProvider>
-  ),
+  wrapper: ({ children }: { children: ReactNode }) => {
+    const [router] = useState(() => createMemoryRouter([{ path: "*", element: children }]));
+    return (
+      <I18nProvider i18n={i18n}>
+        <SidebarProvider>
+          <RouterProvider router={router} />
+        </SidebarProvider>
+      </I18nProvider>
+    );
+  },
 };
 
 const alignedTerms = (root: HTMLElement, expected: string[]) => {
@@ -562,7 +572,11 @@ describe("sidebar disclosures", () => {
       yield* sdkCall(() =>
         expect.element(screen.getByRole("button", { name: "Gamma" })).toBeVisible(),
       );
-      // A folded group holds its conversations; opening it shows them.
+      // Base UI's Collapsible unmounts a closed panel, so a folded group renders no row links;
+      // its header keeps only the conversation count.
+      yield* sdkCall(() => expect.element(screen.getByText("대화 1개")).toBeVisible());
+      expect(screen.container.querySelectorAll('a[href*="session="]').length).toBe(0);
+      // Opening a group mounts its rows.
       yield* sdkCall(() => screen.getByRole("button", { name: /^Alpha/ }).click());
       yield* sdkCall(() =>
         expect.element(screen.getByRole("link", { name: "알파 대화" })).toBeVisible(),
@@ -602,8 +616,9 @@ describe("sidebar disclosures", () => {
         expect.element(screen.getByRole("link", { name: "알파 대화" })).toBeVisible(),
       );
 
-      // Folding it records the fold; the next visit starts folded even though it is the selected
-      // project, because the user's choice outranks the default.
+      // Folding it unmounts the rows (Base UI closes its panel) and records the fold; the next
+      // visit starts folded even though it is the selected project, because the user's choice
+      // outranks the default.
       yield* sdkCall(() => screen.getByRole("button", { name: /^Alpha/ }).click());
       yield* sdkCall(() =>
         expect.element(screen.getByRole("link", { name: "알파 대화" })).not.toBeInTheDocument(),
@@ -786,7 +801,9 @@ describe("sidebar disclosures", () => {
         ),
       );
 
-      // A group folds, so its conversations are behind its header: open it to reach the row.
+      // A group folds, so its conversations are behind its header: the folded alpha has no rows,
+      // and opening it mounts them.
+      expect(screen.container.querySelectorAll('a[href*="session="]').length).toBe(1);
       yield* sdkCall(() => screen.getByRole("button", { name: /^Alpha/ }).click());
       const alpha = screen.getByRole("link", { name: "알파 대화" });
       expect(alpha.element().getAttribute("href")).toBe("/?project=alpha&session=a1");
