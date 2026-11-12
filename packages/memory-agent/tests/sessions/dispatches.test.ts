@@ -307,9 +307,9 @@ testAgent()(function (it) {
         ),
       ).toEqual({ n: 0 });
       // Another run consumes it now.
-      expect(
-        (yield* env.use(dispatches.consume(target.id, "run-b"))).map((row) => row.id),
-      ).toEqual([stored.id]);
+      expect((yield* env.use(dispatches.consume(target.id, "run-b"))).map((row) => row.id)).toEqual(
+        [stored.id],
+      );
     }),
   );
 
@@ -329,10 +329,7 @@ testAgent()(function (it) {
         ),
       );
       yield* env.use(
-        Effect.flatMap(
-          WorkTraceStore,
-          (trace) => trace.holdParentNotifications(target.id),
-        ),
+        Effect.flatMap(WorkTraceStore, (trace) => trace.holdParentNotifications(target.id)),
       );
       expect(yield* env.use(dispatches.consume(target.id, "run-a"))).toEqual([]);
       // The row keeps waiting, unclaimed, and the next run after the hold is lifted takes it.
@@ -351,9 +348,9 @@ testAgent()(function (it) {
       yield* env.use(
         Effect.flatMap(WorkTraceStore, (trace) => trace.resumeParentNotifications(target.id)),
       );
-      expect(
-        (yield* env.use(dispatches.consume(target.id, "run-b"))).map((row) => row.id),
-      ).toEqual([stored.id]);
+      expect((yield* env.use(dispatches.consume(target.id, "run-b"))).map((row) => row.id)).toEqual(
+        [stored.id],
+      );
     }),
   );
 });

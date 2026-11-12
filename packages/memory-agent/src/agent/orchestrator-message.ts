@@ -113,4 +113,3 @@ export const dispatchesMessage = (dispatches: ReadonlyArray<SessionDispatch>) =>
       ),
     ].join("\n"),
   ]);
-

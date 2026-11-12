@@ -18,10 +18,7 @@ const Count = Schema.Struct({ count: Schema.Finite });
 /** The one row of `session_dispatches` the id names, as fixture SQL reads it. */
 const dispatchRow = (id: string) =>
   Effect.flatMap(
-    sqlGet(
-      "SELECT state, delivered_run_id, delivered_at FROM session_dispatches WHERE id = ?",
-      id,
-    ),
+    sqlGet("SELECT state, delivered_run_id, delivered_at FROM session_dispatches WHERE id = ?", id),
     Schema.decodeUnknownEffect(
       Schema.Struct({
         state: Schema.Literals(["waiting", "delivered"]),

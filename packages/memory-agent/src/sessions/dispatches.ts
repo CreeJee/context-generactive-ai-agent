@@ -312,10 +312,8 @@ const make = Effect.gen(function* () {
         const rows = yield* stored(waiting(toSessionId));
         if (rows.length === 0) return [];
         const now = yield* isoNow;
-        const claimed = yield* Effect.filter(
-          rows,
-          (row) =>
-            Effect.map(stored(claimRow({ id: row.id, runId, now })), (taken) => taken.length === 1),
+        const claimed = yield* Effect.filter(rows, (row) =>
+          Effect.map(stored(claimRow({ id: row.id, runId, now })), (taken) => taken.length === 1),
         );
         return claimed.map(toDispatch);
       }).pipe(sql.withTransaction),
@@ -330,9 +328,7 @@ const make = Effect.gen(function* () {
      */
     deliverClaimed: (toSessionId: string, runId: string) =>
       Effect.gen(function* () {
-        const ids = (yield* stored(claimsOf({ toSessionId, runId }))).map(
-          (row) => row.dispatch_id,
-        );
+        const ids = (yield* stored(claimsOf({ toSessionId, runId }))).map((row) => row.dispatch_id);
         if (ids.length === 0) return [];
         const marked = yield* markDeliveredRows({
           toSessionId,
