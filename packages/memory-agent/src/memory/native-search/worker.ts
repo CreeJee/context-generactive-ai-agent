@@ -20,7 +20,7 @@ import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner";
 import { threadId, workerData } from "node:worker_threads";
-import { workerFailedSpansLayer } from "../../runtime/failed-spans.ts";
+import { workerObservabilityLayer } from "../../runtime/worker-observability.ts";
 import { runNativeEffect } from "../../runtime/native-effect.ts";
 import { requireRuntime } from "../../runtime/resources.ts";
 import { initializeNodeSqlite } from "../../runtime/node-sqlite-bridge.ts";
@@ -474,4 +474,4 @@ const server = RpcServer.layer(NativeOwnerRpcs, { concurrency: 1 }).pipe(
 
 // The worker's failed spans go to the owner thread, which puts them in defect notices and
 // reports under the run that caused them.
-await runNativeEffect(Layer.launch(Layer.provide(server, workerFailedSpansLayer)));
+await runNativeEffect(Layer.launch(Layer.provide(server, workerObservabilityLayer)));

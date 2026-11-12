@@ -12,7 +12,7 @@ import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
 import { Projects } from "../projects/projects.ts";
 import { failureTags } from "../runtime/logged-failures.ts";
-import { workerFailedSpansLayer } from "../runtime/failed-spans.ts";
+import { workerObservabilityLayer } from "../runtime/worker-observability.ts";
 import { runNativeEffect } from "../runtime/native-effect.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { Sessions } from "../sessions/sessions.ts";
@@ -107,4 +107,4 @@ const server = RpcServer.layer(ImportRpcs).pipe(
 
 // The worker's failed spans go to the owner thread, which puts them in defect notices and
 // reports under the run that caused them.
-await runNativeEffect(Layer.launch(Layer.provide(server, workerFailedSpansLayer)));
+await runNativeEffect(Layer.launch(Layer.provide(server, workerObservabilityLayer)));

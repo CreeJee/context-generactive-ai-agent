@@ -4947,3 +4947,9 @@
   - ask는 전처럼 사용자를 기다리므로, Plan 모드에서 새 카드마다 사용자가 승인하던 것은 ask 프로젝트에서 그대로다.
   - 권한 모드는 look마다 읽으므로 이미 돌고 있는 보드도 다음 look부터 따른다. 승인을 기다리던 카드도 함께 승인되거나 검토된다.
 - 대체하는 결정: "outcome 장부와 이어 쓰는 Plan" 구현(2c·3 새 카드 승인)의 "누가 승인하는지는 보드를 시작할 때 `kanban_goals.card_approval`에 남긴다"와, "구체화 중에 쓴 카드는 Plan 승인으로 승인된다"의 "Plan을 다시 승인할 때 … 그 승인의 정책만 `kanban_goals.card_approval`에 기록한다".
+
+## worker 스레드도 span을 OTLP로 내보낸다 (2026-11-12)
+
+- 계기: native worker에 명령·native 호출·단계별 span을 달았는데(`1ebfff36`), dev 수집기에는 하나도 오지 않았다. worker 진입점에는 실패 span recorder만 있고 exporter가 없었다. "개발용 관측과 프로파일링 도구"(2026-10-18)에서 "worker 내부 span은 이번 범위에서 내보내지 않는다"고 미뤄 둔 것이다. 그 뒤로 worker 안 시간을 재지 못한 기록이 남아 있다(SQLite 쓰기 잠금 항목).
+- 결정: worker 진입점 6곳(코드·가져오기·임베딩·rerank·native search·샌드박스)이 `workerObservabilityLayer`를 프로그램 전체에 준다. owner와 같은 `OtlpTracer.layerFromConfig`를 worker용 실패 span recorder 아래에 깐다. worker는 `env`를 따로 받지 않아 owner의 `OTEL_*`를 물려받으므로, 변수가 없으면 아무것도 내보내지 않는 것도 owner와 같다. trace는 Effect RPC가 넘긴 부모로 이미 이어져 있어, worker span은 owner의 요청 span 아래에 붙는다(`NativeOwner.execute ← Execute ← Execute ← NativeWorker.save`).
+- 확인: 따로 띄운 수집기와 native owner로 768차원 78,280개 인덱스에 publish 부하를 줬다. 같은 부하에서 dev의 19:28 실패(`save`, `request-timeout`)가 재현됐고(207회 중 1회), span으로 보니 2초를 넘긴 것은 `fsync`(78ms)가 아니라 쓰기 단계(3,781ms)였다. 디스크 쓰기와 `sync`를 계속 돌린 동안이다. 평소 `save`는 쓰기 17ms, `fsync` 7ms, rename 2ms다.
