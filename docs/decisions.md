@@ -4938,3 +4938,11 @@
   - 횟수는 `kanban_cards.conflict_rounds`에 둔다. 해결 카드가 없어졌으므로 `resolution_of` 열과 `CardWorkspace.earlierWork`를 지운다. 이미 보드에 있는 해결 카드는 보통 카드로 남는다.
 - 범위: Goal 브랜치를 사용자 브랜치에 merge하다 생긴 충돌(`MergeConflict`)은 사용자 브랜치를 건드리는 일이라 그대로 사람에게 묻는다.
 - 대체하는 결정: "칸반 실행"(2026-10-18)의 "sync 충돌이면 그 카드를 해결 카드로 대체한다 … 해결 카드가 다시 충돌하면 `human_decision`이다", squash 통합 항목의 "merge 충돌은 abort하고 파일 목록과 함께 실패한다", human_decision 연결 항목의 "해결 카드의 재충돌은 `IntegrationConflict`", 그리고 해결 카드 제목(`Resolve conflicts:`)과 `earlierWork`에 관한 항목.
+
+## 권한 모드가 full이면 사용자가 승인한 보드의 새 카드도 승인한다 (2026-11-12)
+
+- 계기: 프로젝트 `/Users/creejee/work/web`은 권한 모드가 full인데, 세션 `037aa142`의 보드는 11-02에 사용자가 시작해 `card_approval`이 `user`였다. 그래서 계획자가 더한 카드를 11-12에도 사용자가 하나씩 직접 승인했다. 사용자: 새로 만들어진 카드가 full 권한에서 자동 승인되지 않아 너무 불편하다.
+- 결정(사용자): 프로젝트 권한 모드가 full이면 보드의 승인 방식(`user`·`permission`)과 상관없이 다음 look이 계획자가 더한 카드를 승인한다. ask·auto에서는 그대로 `user` 보드는 사용자가, `permission` 보드는 권한 모드가 승인한다.
+  - full은 이미 도구 호출·밖 쓰기·코드 스킬 저장을 묻지 않는다. 카드 승인만 사용자에게 남기면 full을 고른 뜻과 맞지 않는다.
+  - 권한 모드는 look마다 읽으므로 이미 돌고 있는 보드도 다음 look부터 따른다. 승인을 기다리던 카드도 함께 승인된다.
+- 대체하는 결정: "outcome 장부와 이어 쓰는 Plan" 구현(2c·3 새 카드 승인)의 "사용자가 승인한 Plan(`user`)은 사용자가 승인한다"를 권한 모드가 ask·auto일 때로 좁힌다.

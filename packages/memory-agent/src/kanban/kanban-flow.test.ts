@@ -997,6 +997,38 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "runs a card the planner added to a board the user approved without waiting when the project has full permission",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const releaseA = yield* Deferred.make<void>();
+        const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
+          cores: 4,
+          agent: (agent) =>
+            agent.card.id === "a"
+              ? Effect.as(Deferred.await(releaseA), finished)
+              : Effect.succeed(finished),
+        });
+        yield* run(
+          Effect.gen(function* () {
+            const board = yield* executingPlan(fixture, [card("a")]);
+            yield* (yield* Projects).setPermissionMode(board.projectId, "full");
+            yield* (yield* KanbanOrchestrator).start(board.sessionId, "user");
+            yield* plannerAdds(board.sessionId, "b");
+            const approved = yield* waitForCards(
+              board.sessionId,
+              (cards) => status(cards, "b") === "done",
+            );
+            expect(cardOf(approved, "b")?.approval).toBeUndefined();
+            yield* Deferred.succeed(releaseA, undefined);
+            yield* waitForCards(board.sessionId, allDone);
+          }),
+        );
+      }),
+    gitTimeout,
+  );
+
+  it.effect(
     "runs the cards a planner wrote while shaping once the Plan is approved, though the board stayed active",
     () =>
       Effect.gen(function* () {

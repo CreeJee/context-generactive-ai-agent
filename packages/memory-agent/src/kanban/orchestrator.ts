@@ -1016,21 +1016,23 @@ const make = (options: KanbanOrchestratorOptions) =>
     });
 
     /**
-     * Settles the cards the planner added that wait for approval, as the board's policy says. A
-     * board the user approved leaves them to the user. Otherwise the project's permission mode
-     * decides when the look happens: full approves them, ask leaves them to the user, auto has
-     * its reviewer judge the ones not reviewed yet and leaves the rest to the user with the
-     * reason. The cards wait in backlog meanwhile; the cards already approved keep running.
+     * Settles the cards the planner added that wait for approval. A project in the full permission
+     * mode approves them on any board. Otherwise a board the user approved leaves them to the
+     * user, and the project's permission mode decides when the look happens: ask leaves them to
+     * the user, auto has its reviewer judge the ones not reviewed yet and leaves the rest to the
+     * user with the reason. The cards wait in backlog meanwhile; the cards already approved keep
+     * running.
      */
     const settleApprovals = Effect.fnUntraced(function* (goal: KanbanGoal, state: WorkflowState) {
       const waiting = (state.plan?.steps ?? []).filter(
         (step) => step.approval !== undefined && step.approval.review === undefined,
       );
-      if (goal.cardApproval === "user" || waiting.length === 0 || state.goal === null) return;
+      if (waiting.length === 0 || state.goal === null) return;
       const goalArtifact = state.goal;
       const found = yield* projects.get(goal.projectId).pipe(Effect.option);
       if (Option.isNone(found)) return;
       const project = found.value;
+      if (goal.cardApproval === "user" && project.permissionMode !== "full") return;
       // A card cancelled or approved since the read refuses the batch; the next look settles the rest.
       const settle = (change: CardApprovalChange) =>
         workflows
@@ -1379,7 +1381,8 @@ const make = (options: KanbanOrchestratorOptions) =>
        * Runs the session's current Goal as a kanban board. The Plan must be executing. A project
        * that cannot have worktrees runs its cards one at a time in the project itself.
        * `cardApproval` says who approves the cards the planner adds while it runs: the user, unless
-       * the owner approved the Plan in Goal mode.
+       * the owner approved the Plan in Goal mode. A project in the full permission mode approves
+       * them either way.
        */
       start: Effect.fn("KanbanOrchestrator.start")(function* (
         sessionId: string,
