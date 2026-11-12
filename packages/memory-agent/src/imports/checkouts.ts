@@ -117,6 +117,12 @@ const make = Effect.gen(function* () {
 
   const lines = (text: string) => text.split("\n").filter((line) => line.length > 0);
 
+  /** True when `candidate` is `root` or below it. Compared by spelling: the path may not exist. */
+  const within = (root: string, candidate: string) => {
+    const path = relative(root, candidate);
+    return path === "" || (!path.startsWith(`..${sep}`) && path !== ".." && !isAbsolute(path));
+  };
+
   /** `cwd`'s place in its repository's main checkout when `cwd` is in a linked worktree. */
   const mainCheckout = (cwd: string): Effect.Effect<Option.Option<Placed>> =>
     output(cwd, [
@@ -303,8 +309,28 @@ const make = Effect.gen(function* () {
        */
       const resolve = (cwd: string, evidence: RepositoryEvidence | null) => {
         const asRecorded: Placed = { path: cwd, worktree: null };
+        // A worktree inside another checkout (a linked git worktree of this app's own repository,
+        // holding a test's temp folders) maps to a path the main checkout does not have. When that
+        // mapped place neither exists nor lies inside a registered project, placing the folder
+        // there would only be refused as missing; the folder stays where it was recorded instead.
+        const claimable = (placed: Placed) =>
+          fs.exists(placed.path).pipe(
+            Effect.map((exists) =>
+              exists || roots.some((root) => within(root.root, placed.path))
+                ? Option.some(placed)
+                : Option.none<Placed>(),
+            ),
+            Effect.catchTag("PlatformError", () => Effect.succeedNone),
+          );
         return Effect.firstSuccessOf([
-          answer(mainCheckout(cwd)),
+          answer(
+            Effect.flatMap(mainCheckout(cwd), (placed) =>
+              Option.match(placed, {
+                onNone: () => Effect.succeedNone,
+                onSome: claimable,
+              }),
+            ),
+          ),
           answer(
             fs.exists(cwd).pipe(
               Effect.map((exists) => (exists ? Option.some(asRecorded) : Option.none())),
