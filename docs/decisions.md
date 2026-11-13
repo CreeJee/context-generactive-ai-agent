@@ -4699,6 +4699,12 @@
   - 예외는 소스 주석이 아니라 `vite.config.ts`의 파일 override로 둔다. 지금은 참조 동일성으로 방문한 스키마 노드를 세는 `tools/input-repair.ts`와, native `ReadonlySet` 타입인 `Logger.CurrentLoggers`에 넣는 테스트 세 개다.
   - `apps/agent`는 React prop이 native `ReadonlySet`을 받는 자리가 있어 이번 규칙 범위 밖이다.
 
+## 가져오기 배치는 linked worktree 안의 기록되지 않은 폴더를 그대로 둔다 (2026-11-09)
+
+- 계기: git linked worktree 안에서 만든 임시 폴더(예: 테스트가 `node_modules/.vp-tmp` 아래에 만든 fixture)를 cwd로 기록한 대화를 가져오면 `Projects.add`가 `not_found`로 거부됐다. `mainCheckout`은 `git rev-parse --show-toplevel --git-dir --git-common-dir`로 cwd가 linked worktree에 있음을 확인하고 `메인 체크아웃 + relative(top, real)`로 옮기는데, worktree 안의 기록되지 않은 폴더는 메인 체크아웃에 같은 자리가 없어 옮겨진 경로가 실제로 존재하지 않았다. `resolve`는 `firstSuccessOf`로 첫 후보를 채택하므로 `fs.exists` 폴백(`asRecorded`)까지 가지 못했다.
+- 결정: `mainCheckout`의 매핑은 옮겨진 경로가 실제로 존재할 때만 채택한다(`fs.exists`). 존재하지 않으면 그 자리는 none이 되고, 배치는 기록된 cwd를 그대로 쓴다. 실제 worktree 대화(메인 체크아웃에 상응하는 자리가 있는)는 전과 같이 저장소 프로젝트로 들어간다.
+- 검증: `tests/cli/import.test.ts`("imports a conversation the app never saw and finds it again")가 worktree 체크아웃에서 통과한다. 같은 원인으로 `src/kanban/git-worktrees.test.ts`의 "asks for sequential execution when the project is not a git repository"는 여전히 worktree 환경(저장소 안의 TMPDIR)에서 `UnsafeWorktreeBase`로 실패하는데, 이는 배치와 무관한 kanban 검사(작업 기지가 저장소 안에 있으면 거부)의 정상 동작이며 테스트 fixture가 저장소 안에 놓이는 환경 문제다.
+
 ## 임포트 배치: 매핑 경로가 갈 곳이 없으면 기록된 cwd로 되돌린다 (2026-11-10)
 
 - 증상: 이 저장소의 카드 워크트리(메인 체크아웃의 링크드 git 워크트리)에서 임포트 회차를 돌리면 모든 기록이 `skipped not_found`로 남고 written 0·failed 0이었다. 테스트 임시 폴더(`node_modules/.vp-tmp` 아래)도 같은 링크드 워크트리 안에 생기므로, 10/17 결정의 1번 규칙이 그 cwd를 메인 체크아웃의 같은 상대 경로로 매핑했고, 그 경로는 메인에 없어 `projects.add`가 `ProjectRootRejected(not_found)`로 거부했다. 메인 체크아웃에서는 cwd가 링크드 워크트리가 아니라 매핑이 발동하지 않아 같은 테스트가 통과했다.
