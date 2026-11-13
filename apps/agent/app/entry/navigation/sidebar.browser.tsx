@@ -409,7 +409,11 @@ describe("sidebar disclosures", () => {
               handlers={{
                 onChange: (change) => Promise.resolve(void changes.push(change)),
                 onTest: () => Promise.resolve(),
-                onDiscover: () => Promise.resolve(["served-model"]),
+                onDiscover: () =>
+                  Promise.resolve([
+                    { id: "served-model", contextWindow: 131_072 },
+                    { id: "other" },
+                  ]),
               }}
             />
           </div>,
@@ -423,6 +427,24 @@ describe("sidebar disclosures", () => {
       yield* sdkCall(() => endpoint.getByRole("button", { name: "모델 추가" }).click());
       yield* sdkCall(() => endpoint.getByRole("button", { name: "모델 목록 불러오기" }).click());
       yield* sdkCall(() => endpoint.getByRole("button", { name: "served-model" }).click());
+      // The model list's context window fills the field, named by its unit and shown exactly.
+      const contextWindow = endpoint.getByRole("textbox", { name: "컨텍스트 창 (토큰)" });
+      yield* sdkCall(() => expect.element(contextWindow).toHaveValue("128K"));
+      yield* sdkCall(() =>
+        expect.element(endpoint.getByText("131,072 토큰 · 서버 모델 목록의 값")).toBeVisible(),
+      );
+      yield* sdkCall(() => endpoint.getByRole("button", { name: "모델 저장" }).click());
+
+      // A typed unit reads as binary tokens; text that is no count keeps the model from saving.
+      yield* sdkCall(() => endpoint.getByRole("button", { name: "모델 추가" }).click());
+      yield* sdkCall(() => endpoint.getByRole("textbox", { name: "모델 ID" }).fill("typed-model"));
+      const typedWindow = endpoint.getByRole("textbox", { name: "컨텍스트 창 (토큰)" });
+      yield* sdkCall(() => typedWindow.fill("64q"));
+      yield* sdkCall(() =>
+        expect.element(endpoint.getByRole("button", { name: "모델 저장" })).toBeDisabled(),
+      );
+      yield* sdkCall(() => typedWindow.fill("64k"));
+      yield* sdkCall(() => expect.element(endpoint.getByText("65,536 토큰")).toBeVisible());
       yield* sdkCall(() => endpoint.getByRole("button", { name: "모델 저장" }).click());
 
       yield* sdkCall(() =>
@@ -438,7 +460,18 @@ describe("sidebar disclosures", () => {
           accountId: "e",
           model: {
             id: "served-model",
-            contextWindow: 32768,
+            contextWindow: 131_072,
+            outputBudget: null,
+            toolCalling: true,
+            imageInput: false,
+          },
+        },
+        {
+          intent: "save-model",
+          accountId: "e",
+          model: {
+            id: "typed-model",
+            contextWindow: 65_536,
             outputBudget: null,
             toolCalling: true,
             imageInput: false,

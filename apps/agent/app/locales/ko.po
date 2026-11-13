@@ -247,6 +247,16 @@ msgstr "{effort} (현재)"
 msgid "{eventCount}개"
 msgstr "{eventCount}개"
 
+#. exact is the context window in tokens
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "{exact} 토큰"
+msgstr "{exact} 토큰"
+
+#. exact is the context window in tokens, from the server's model list
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "{exact} 토큰 · 서버 모델 목록의 값"
+msgstr "{exact} 토큰 · 서버 모델 목록의 값"
+
 #: app/entry/settings/pages/imports.tsx
 msgid "{failed}개는 읽지 못했습니다."
 msgstr "{failed}개는 읽지 못했습니다."
@@ -538,6 +548,11 @@ msgstr "<0>j</0> <1>k</1> <2>h</2> <3>l</3> 또는 화살표: 카드 사이 이�
 #: app/entry/chat/approval.tsx
 msgid "<0>localhost</0>를 허용하면 이 앱 서버를 포함해 이 컴퓨터의 모든 로컬 서비스에 접속할 수 있습니다."
 msgstr "<0>localhost</0>를 허용하면 이 앱 서버를 포함해 이 컴퓨터의 모든 로컬 서비스에 접속할 수 있습니다."
+
+#. Shown when the context window field holds no usable count
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "1,024에서 10,000,000 사이의 토큰 수를 입력해 주십시오. 예: 128K, 131072"
+msgstr "1,024에서 10,000,000 사이의 토큰 수를 입력해 주십시오. 예: 128K, 131072"
 
 #: app/entry/api.ts
 msgid "20MB보다 큰 이미지는 올릴 수 없습니다."
@@ -5061,6 +5076,11 @@ msgstr "자동 판단 (auto)"
 #: app/entry/shared/failure-details.tsx
 msgid "자세히"
 msgstr "자세히"
+
+#. Label of the one-click context window choices such as 32K or 128K
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "자주 쓰는 컨텍스트 창"
+msgstr "자주 쓰는 컨텍스트 창"
 
 #: app/entry/report/report-draft.tsx
 msgid "작성 시각: {createdAt}"

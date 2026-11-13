@@ -4,20 +4,20 @@ LM Studio와 vLLM은 동일한 `openai-compatible` provider로 연결한다. 제
 
 ## 연결 계약
 
-| 항목             | 현재 구현                                                                                                                           |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| API base URL     | `/v1`을 포함한 URL. LM Studio 예: `http://localhost:1234/v1`, vLLM 예: `http://localhost:8000/v1` (실제 서버 포트·경로에 맞게 설정) |
-| 모델 조회        | `GET {baseUrl}/models`의 `data[].id`. 모델 ID 수동 입력도 가능                                                                      |
-| 연결 테스트      | 비스트리밍 `POST {baseUrl}/chat/completions`. 응답 choices가 있는지만 확인                                                          |
-| 채팅             | `@effect/ai-openai-compat`의 Chat Completions 클라이언트로 SSE 스트리밍(`model/compatible.ts`)                                      |
-| 인증             | 키가 있으면 Bearer 헤더, 없으면 Authorization 헤더를 생략. 키는 endpoint에 묶어 keychain에 저장                                     |
-| 일반 도구        | 설정의 `toolCalling`을 켰을 때 function tool schema 전달 및 tool-call 스트림 처리                                                   |
-| 제공자 전용 도구 | OpenAI·Anthropic의 native tool registry만 지원. 프로토콜 호환으로 web search·file search·hosted execution 권한을 추론하지 않음      |
-| context window   | 사용자 설정값. 모델 목록에서 서버의 실제 로드 context나 tokenizer를 자동 탐지하지 않음                                              |
-| 출력 예산        | `max_tokens`로 전송하고 입력 예산에서 차감                                                                                          |
-| reasoning 출력   | 서버의 `reasoning_content`·`reasoning` 스트림을 추론 내용으로 표시하고 저장·복원                                                    |
-| reasoning 강도   | 모델별 공개 metadata로 옵션 자동 조회. 서버 기본값은 `reasoning_effort` 생략                                                        |
-| 이미지 입력      | 현재 호환 provider의 모델 계약에서 비활성화                                                                                         |
+| 항목             | 현재 구현                                                                                                                                                                               |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| API base URL     | `/v1`을 포함한 URL. LM Studio 예: `http://localhost:1234/v1`, vLLM 예: `http://localhost:8000/v1` (실제 서버 포트·경로에 맞게 설정)                                                     |
+| 모델 조회        | `GET {baseUrl}/models`의 `data[].id`. 모델 ID 수동 입력도 가능                                                                                                                          |
+| 연결 테스트      | 비스트리밍 `POST {baseUrl}/chat/completions`. 응답 choices가 있는지만 확인                                                                                                              |
+| 채팅             | `@effect/ai-openai-compat`의 Chat Completions 클라이언트로 SSE 스트리밍(`model/compatible.ts`)                                                                                          |
+| 인증             | 키가 있으면 Bearer 헤더, 없으면 Authorization 헤더를 생략. 키는 endpoint에 묶어 keychain에 저장                                                                                         |
+| 일반 도구        | 설정의 `toolCalling`을 켰을 때 function tool schema 전달 및 tool-call 스트림 처리                                                                                                       |
+| 제공자 전용 도구 | OpenAI·Anthropic의 native tool registry만 지원. 프로토콜 호환으로 web search·file search·hosted execution 권한을 추론하지 않음                                                          |
+| context window   | 사용자 설정값. 모델 등록 폼에서 목록의 모델을 고르면 모델 목록이 알리는 값(vLLM `max_model_len`, llama.cpp `meta.n_ctx`, OpenRouter `context_length`)으로 채움. 등록된 값은 바꾸지 않음 |
+| 출력 예산        | `max_tokens`로 전송하고 입력 예산에서 차감                                                                                                                                              |
+| reasoning 출력   | 서버의 `reasoning_content`·`reasoning` 스트림을 추론 내용으로 표시하고 저장·복원                                                                                                        |
+| reasoning 강도   | 모델별 공개 metadata로 옵션 자동 조회. 서버 기본값은 `reasoning_effort` 생략                                                                                                            |
+| 이미지 입력      | 현재 호환 provider의 모델 계약에서 비활성화                                                                                                                                             |
 
 현재 연결 테스트 성공은 스트리밍·function calling·모델별 context window 검증을 뜻하지 않는다. `signed-in` 상태 역시 endpoint 설정이 존재한다는 의미이며 실제 서버 접속이나 인증 성공의 증거로 사용하지 않는다. Route catalog에서도 인증의 `verified`는 false이며 모델 접근 근거는 `endpoint_configuration`·`unverified`로 표시한다.
 

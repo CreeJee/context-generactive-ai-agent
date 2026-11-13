@@ -17,6 +17,9 @@ export type {
 
 export { CompatibleAccountsView };
 
+/** A model the endpoint lists, with the context window the list publishes for it, if any. */
+export type DiscoveredModel = (typeof CompatibleModelList.Type)["models"][number];
+
 /** Why a compatible-endpoint request failed; the rejected body is never read. */
 export const CompatibleRequestFailedReason = Schema.TaggedUnion({
   TransportFailed: {},

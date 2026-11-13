@@ -1,7 +1,7 @@
 import { i18n, type MessageDescriptor } from "@lingui/core";
 import { msg, ph, t } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
-import { Data, Schema } from "effect";
+import { Data, Option, Schema } from "effect";
 import { cn } from "cn";
 import { CheckIcon, PencilIcon, PlugIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
 import { useId, useState } from "react";
@@ -34,8 +34,10 @@ import {
   type CompatibleAccountChange,
   type CompatibleAccountStatus,
   type CompatibleModelInput,
+  type DiscoveredModel,
 } from "./compatible-client";
 import { providerLabels } from "./providers";
+import { formatTokenCount, parseTokenCount } from "./token-count";
 
 const rejectedStatuses = Schema.Literals([400, 404, 502]);
 /** What a rejected endpoint request means, by the status codes the server answers with. */
@@ -65,7 +67,7 @@ export const compatibleErrorMessage = (failure: Error) => {
 export type CompatibleHandlers = {
   readonly onChange: (change: CompatibleAccountChange) => Promise<void>;
   readonly onTest: (accountId: string, modelId: string) => Promise<void>;
-  readonly onDiscover: (accountId: string) => Promise<readonly string[]>;
+  readonly onDiscover: (accountId: string) => Promise<readonly DiscoveredModel[]>;
 };
 
 const newModel = (id = "", imageInput = false): CompatibleModelInput => ({
@@ -78,6 +80,11 @@ const newModel = (id = "", imageInput = false): CompatibleModelInput => ({
 
 /** The limit a turned-on output limit starts from. */
 const initialOutputBudget = 4096;
+
+/** The context windows a model can be registered with, as the server checks them. */
+const contextWindowRange = { min: 1024, max: 10_000_000 } as const;
+/** Context windows offered as one-click choices. */
+const contextWindowPresets = [8192, 32_768, 131_072, 262_144, 1_048_576] as const;
 
 function ConnectionFields({
   baseUrl,
@@ -244,13 +251,16 @@ function ModelForm({
 }: {
   initial: CompatibleModelInput;
   busy: boolean;
-  onDiscover: () => Promise<readonly string[]>;
+  onDiscover: () => Promise<readonly DiscoveredModel[]>;
   onSave: (model: CompatibleModelInput) => void;
   onClose: () => void;
 }) {
   const { t } = useLingui();
   const [model, setModel] = useState(initial);
-  const [suggestions, setSuggestions] = useState<readonly string[]>([]);
+  const [contextText, setContextText] = useState(() => formatTokenCount(initial.contextWindow));
+  /** Whether the context window shown is the one the server's model list published. */
+  const [contextListed, setContextListed] = useState(false);
+  const [suggestions, setSuggestions] = useState<readonly DiscoveredModel[]>([]);
   const [discovering, setDiscovering] = useState(false);
   const [discovery, setDiscovery] = useState<string | null>(null);
   const idPrefix = useId();
@@ -259,11 +269,11 @@ function ModelForm({
     setDiscovery(null);
     void onDiscover()
       .then(
-        (ids) => {
-          setSuggestions(ids);
+        (models) => {
+          setSuggestions(models);
           setDiscovery(
             t({
-              message: `${ph({ count: ids.length })}개 모델을 불러왔습니다. 목록에 없는 ID도 직접 입력할 수 있습니다.`,
+              message: `${ph({ count: models.length })}개 모델을 불러왔습니다. 목록에 없는 ID도 직접 입력할 수 있습니다.`,
               comment: "count is how many models the server listed",
             }),
           );
@@ -272,13 +282,33 @@ function ModelForm({
       )
       .finally(() => setDiscovering(false));
   };
+  const parsedContext = parseTokenCount(contextText).pipe(
+    Option.filter((count) => count >= contextWindowRange.min && count <= contextWindowRange.max),
+  );
+  /** The window the form saves; the field's text is the source until it is saved. */
+  const contextWindow = Option.getOrElse(parsedContext, () => model.contextWindow);
+  const setContextWindow = (count: number, listed: boolean) => {
+    setContextText(formatTokenCount(count));
+    setContextListed(listed);
+  };
+  /** Picks a listed model, with the context window the list published for it when it did. */
+  const pick = ({ id, contextWindow }: DiscoveredModel) => {
+    setModel((current) => ({ ...current, id }));
+    Option.match(Option.fromUndefinedOr(contextWindow), {
+      onNone: () => undefined,
+      onSome: (listed) => setContextWindow(listed, true),
+    });
+  };
   return (
     <form
       aria-label={t({ message: "모델 등록", comment: "Label of the form that registers a model" })}
       className="flex flex-col gap-3 rounded-md border p-3"
       onSubmit={(event) => {
         event.preventDefault();
-        onSave({ ...model, id: model.id.trim() });
+        Option.match(parsedContext, {
+          onNone: () => undefined,
+          onSome: (count) => onSave({ ...model, id: model.id.trim(), contextWindow: count }),
+        });
       }}
     >
       <Field>
@@ -304,15 +334,15 @@ function ModelForm({
               comment: "Label of the models the server listed, offered as choices",
             })}
           >
-            {suggestions.slice(0, 20).map((id) => (
+            {suggestions.slice(0, 20).map((suggestion) => (
               <Button
-                key={id}
+                key={suggestion.id}
                 type="button"
                 variant="outline"
                 size="sm"
-                onClick={() => setModel({ ...model, id })}
+                onClick={() => pick(suggestion)}
               >
-                {id}
+                {suggestion.id}
               </Button>
             ))}
           </div>
@@ -333,14 +363,62 @@ function ModelForm({
           </FieldLabel>
           <Input
             id={`${idPrefix}-context`}
-            type="number"
             required
-            min={1024}
-            max={10000000}
-            step={1}
-            value={model.contextWindow}
-            onChange={(event) => setModel({ ...model, contextWindow: Number(event.target.value) })}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="128K"
+            aria-invalid={Option.isNone(parsedContext)}
+            aria-describedby={`${idPrefix}-context-value`}
+            value={contextText}
+            onChange={(event) => {
+              setContextText(event.target.value);
+              setContextListed(false);
+            }}
+            onBlur={() =>
+              Option.match(parsedContext, {
+                onNone: () => undefined,
+                onSome: (count) => setContextText(formatTokenCount(count)),
+              })
+            }
           />
+          <div
+            className="flex flex-wrap gap-1"
+            aria-label={t({
+              message: "자주 쓰는 컨텍스트 창",
+              comment: "Label of the one-click context window choices such as 32K or 128K",
+            })}
+          >
+            {contextWindowPresets.map((preset) => (
+              <Button
+                key={preset}
+                type="button"
+                variant={Option.contains(parsedContext, preset) ? "secondary" : "outline"}
+                size="xs"
+                onClick={() => setContextWindow(preset, false)}
+              >
+                {formatTokenCount(preset)}
+              </Button>
+            ))}
+          </div>
+          <FieldDescription id={`${idPrefix}-context-value`}>
+            {Option.match(parsedContext, {
+              onNone: () => (
+                <Trans comment="Shown when the context window field holds no usable count">
+                  1,024에서 10,000,000 사이의 토큰 수를 입력해 주십시오. 예: 128K, 131072
+                </Trans>
+              ),
+              onSome: (count) => {
+                const exact = count.toLocaleString("ko-KR");
+                return contextListed ? (
+                  <Trans comment="exact is the context window in tokens, from the server's model list">
+                    {exact} 토큰 · 서버 모델 목록의 값
+                  </Trans>
+                ) : (
+                  <Trans comment="exact is the context window in tokens">{exact} 토큰</Trans>
+                );
+              },
+            })}
+          </FieldDescription>
         </Field>
         <Field>
           <div className="flex items-center gap-2">
@@ -368,7 +446,7 @@ function ModelForm({
               type="number"
               required
               min={1}
-              max={model.contextWindow - 1}
+              max={contextWindow - 1}
               step={1}
               value={model.outputBudget}
               onChange={(event) => setModel({ ...model, outputBudget: Number(event.target.value) })}
@@ -407,7 +485,10 @@ function ModelForm({
         <Button type="button" variant="outline" onClick={onClose}>
           <Trans comment="Button that closes the model form">취소</Trans>
         </Button>
-        <Button type="submit" disabled={busy || model.id.trim() === ""}>
+        <Button
+          type="submit"
+          disabled={busy || model.id.trim() === "" || Option.isNone(parsedContext)}
+        >
           <Trans>모델 저장</Trans>
         </Button>
       </div>
@@ -642,11 +723,11 @@ function EndpointCard({
       >
         {account.models.map((model) => {
           const modelId = model.id;
-          const contextWindow = model.contextWindow.toLocaleString();
+          const contextWindow = formatTokenCount(model.contextWindow);
           const output =
             model.outputBudget === null
               ? t({ message: "제한 없음", comment: "Model output limit: none set" })
-              : model.outputBudget.toLocaleString();
+              : formatTokenCount(model.outputBudget);
           const tools = model.toolCalling
             ? t({ message: "켬", comment: "Model tool calling: on" })
             : t({ message: "끔", comment: "Model tool calling: off" });
@@ -842,7 +923,7 @@ export function CompatibleAccounts({ activeProvider }: { activeProvider: Provide
         onTest: (accountId, modelId) =>
           compatibleClient.test(accountId, modelId).then(() => undefined),
         onDiscover: (accountId) =>
-          compatibleClient.discover(accountId).then(({ models }) => models.map(({ id }) => id)),
+          compatibleClient.discover(accountId).then(({ models }) => models),
       }}
     />
   );
