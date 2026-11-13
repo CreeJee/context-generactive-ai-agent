@@ -67,8 +67,8 @@ package-smoke의 keychain 검사 1건을 조사한 판정 기록이다. 기준 �
   - A(smoke와 동일, 시크릿 env 없음): `{"error":"keychain_failed","reason":"read"}` HTTP 500
   - B(CONTEXT_AGENT_SECRET_DIRECTORY+KEY, 파일 백엔드):
     `{"keyRegistered":false,"enabled":false}` HTTP 200
-  같은 바이너리에서 시크릿 백엔드만 바꿔 500→200이 되므로, 코드 결함이 아니라 이 환경의
-  keychain 접근 차단이 원인이다.
+    같은 바이너리에서 시크릿 백엔드만 바꿔 500→200이 되므로, 코드 결함이 아니라 이 환경의
+    keychain 접근 차단이 원인이다.
 - 코드 무관성: 12b03223..HEAD에서 runtime/keyring.ts, config/secrets.ts, kagi/kagi.ts,
   kagi/contracts.ts, api/app-api/settings.ts, smoke-package.ts, memory-agent package.json은
   전부 미변경(git 확인).

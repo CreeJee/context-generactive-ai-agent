@@ -5367,3 +5367,17 @@
 - 앱 스위트 재확인: `agent-test-all`(apps/agent 단위 전체)이 42개 파일 134개 테스트를 전부 통과시켰다. 브라우저 테스트(`sidebar.browser.tsx`)는 이 샌드박스가 Chromium 기동을 막아(`bootstrap_check_in … MachPortRendezvousServer: Permission denied`, SIGTRAP) 실행할 수 없고, 사용자 환경에서 돌아야 한다.
 - 최종 확인점: 전체 스위트의 최종 확인(`vp run -r test`에서 실패 0)은 listen·unix 소켓·Chromium을 허용하는 사용자 환경에서 한다. 이 기록의 귀속이 맞다면 사용자 환경에서는 78개가 모두 통과로 바뀌어야 하고, 그렇지 않은 실패가 남으면 이 기록의 귀속이 틀린 것이다.
 - 검증 방법 기록: `vp check`는 `.agents/skills/vp-check`, 테스트는 `.agents/skills/test-failures-sandboxed`(TMPDIR·CARGO_HOME을 프로젝트 안으로 돌린 사본)로 돌렸다. 단독 재검증은 `run-one-test-default-tmp`·`run-one-verbose` 스킬(같은 파일을 기본 TMPDIR로 다시 돌리고 오류 체인을 보존), 앱 전체는 `agent-test-all` 스킬로 했다. 샌드박스 초기화 실패의 원인은 `sandbox-availability-probe` 스킬로 `SandboxManager`를 직접 호출해 확인했다(플랫폼·의존성 검사는 통과, `initialize()`만 소켓 bind EPERM). 전체 로그는 `node_modules/.vp-tmp/last-test.log`(gitignore 대상)에 남는다.
+
+## 검증 중단 뒤 머지 통합 상태 재확인 (2026-11-14)
+
+- 계기: Goal 레벨 머지 검증 에이전트가 ModelRunError로 두 번 연속 중단해 판정이 NotFinished가 됐다. 불통과가 아니라 판정 부재고, 코드 결함이 확인된 것도 아니어서 s7-verify-reground 카드가 현재 HEAD의 통합 상태를 다시 확인해 검증 재실행의 근거를 남긴다.
+- 기준: 카드 브랜치 `ctx/card/7bdb5dd7…/s7-verify-reground`, HEAD `a06ab82e`(Merge main into ctx/goal/7bdb5dd7…), 시작 시 작업 트리 clean(git-status-brief).
+- 확인 결과:
+  - 충돌 표식 0건: `<<<<<<<`·`=======`·`>>>>>>>` 줄이 저장소 어디에도 없다(검색에 걸린 것은 충돌 감지 코드와 지침 안의 문자열 예시뿐).
+  - 목표 산출물 표식 존재: `sidebar.tsx`의 `ProjectSessionGroup`, `app/entry/navigation/sidebar-collapse.test.tsx`, `app/entry/settings/pages/permission.tsx`.
+  - 앱 테스트 통과: `agent-test-files`로 apps/agent 테스트 42개 파일 134개 전부 통과. 첫 실행에서 2파일(`server/tests/dev-hmr-api-recovery.test.ts`, `server/tests/dev-agent-chat-boundary.test.ts`)이 `VectorIndexError NativeOwnerFailed(native-incompatible)`로 실패했는데, 이 worktree에 `memory-turbovec.node` 빌드가 없던 환경 문제다(turbovec-build로 애드온을 만든 뒤 전부 통과).
+  - vp-check: 이 Goal이 바꾼 9개 파일(sidebar.tsx, sidebar.browser.tsx, sidebar-collapse.test.tsx, index.tsx, queries/project.ts, queries/mutations/project.ts, settings/pages/permission.tsx, settings/settings-dialog.tsx, settings/shared.tsx) 범위 clean, 저장소 전체도 clean.
+  - 브라우저 테스트(`sidebar.browser.tsx`)는 이 샌드박스가 Chromium 기동을 막아(`bootstrap_check_in … MachPortRendezvousServer: Permission denied`, SIGTRAP) 실행할 수 없다. 2026-11-12 기록과 같은 환경 제한이고 사용자 환경에서 돈다.
+- 환경 복원 기록: 카드 worktree에는 gitignore 대상 환경물이 없어 처음 검사가 환경 오류로 가득했다. ① wording(content)이 Kiwi 형태소 모델(88MB)을 github release에서 받지 못해 unchecked를 냈다(샌드박스가 `github.com:443` 아웃바운드를 막아서다) — 메인 체크아웃의 `node_modules/.cache/wording/kiwi-0.24.1`(104MB)을 worktree로 복사하니 사라져 귀속이 확인됐다. ② `.react-router` 라우트 타입 부재의 TS2307 다수 — `react-router typegen`으로 생성. ③ 위의 네이티브 애드온 빌드. 이 세 가지는 카드 worktree마다 다시 필요하다.
+- 수리: `card-S8-findings.md`의 연속 줄 들여쓰기를 포맷 규칙에 맞게 고쳤다(2칸→4칸, 문서 포맷뿐). 검증을 통과한 코드는 재작성하지 않았다.
+- 판정: 머지 통합 상태는 정상이고 검증 재실행 요건을 갖췄다. NotFinished는 중단의 결과일 뿐 코드 결함의 증거가 아니다.
