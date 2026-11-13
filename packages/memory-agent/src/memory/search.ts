@@ -62,7 +62,7 @@ export interface Match {
    * agent and verifier are subagents of their Goal's conversation.
    */
   readonly parentSessionId: string | null;
-  /** The subagent's name, when it has one: `card-<card>-g<n>` runs a card, `…-verify` checks one. */
+  /** The subagent's name, when it has one: `card-<card>-g<n>` runs a card, `…-verify-<run>` checks one. */
   readonly agent: string | null;
   /**
    * A progress memo entry (`note`): an agent's own note, not anything the user confirmed, with the

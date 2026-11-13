@@ -302,11 +302,17 @@ const make = Effect.gen(function* () {
       readonly worktree: CardWorktree;
       /** Each verification is its own run: Work Trace refuses a second invocation under one run. */
       readonly runPrefix: string;
+      /**
+       * Each verification also gets its own agent, named this plus the run's id. A named agent keeps
+       * its conversation, so a reused verifier saw its earlier verdict and judged again without
+       * recording one, while each run's recorder starts empty.
+       */
       readonly agent: string;
       readonly message: string;
       readonly instructions: string;
     }) {
-      const runId = `${input.runPrefix}:${yield* crypto.uuidV7()}`;
+      const id = yield* crypto.uuidV7();
+      const runId = `${input.runPrefix}:${id}`;
       const { project, mcp, skills, selection } = yield* cardSetting(
         input.sessionId,
         input.projectId,
@@ -341,7 +347,11 @@ const make = Effect.gen(function* () {
               ],
               gated: mcp.gated,
             },
-            { agent: input.agent, message: input.message, instructions: input.instructions },
+            {
+              agent: `${input.agent}-${id}`,
+              message: input.message,
+              instructions: input.instructions,
+            },
             () => Effect.void,
           );
           return Option.getOrElse(yield* recorder.verdict, () =>
