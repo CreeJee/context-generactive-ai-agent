@@ -10,9 +10,8 @@
 
 ## Interface
 
-- `Skills` — `Context.Service` 태그 "memory-agent/skills/skills". 멤버는 `globalDirectory`, `catalog(project)`, `shared`, `read(project, name)`. `Skills.layer(options)`가 NodeFileSystem과 NodeCrypto 레이어를 붙인다
+- `Skills` — `Context.Service` 태그 "memory-agent/skills/skills". 멤버는 `globalDirectory`, `catalog(project)`, `read(project, name)`. `Skills.layer(options)`가 NodeFileSystem과 NodeCrypto 레이어를 붙인다
 - `Skills.catalog` — 프로젝트의 `SkillCatalog`(directories는 global/project만, skills, problems)를 돌려준다
-- `Skills.shared` — 모든 프로젝트가 가진 builtin·global 스킬(이름이 같으면 global이 이긴다)
 - `Skills.read` — 이름으로 `SkillDocument`(front matter를 뺀 body, 한 단계 파일 목록)를 돌려준다. 없으면 `null`
 - `Skills.catalog` · `Skills.read`의 `committed` — 주면 그 이름의 프로젝트 스킬 폴더만 센다. `ProjectSkills`가 git이 커밋한 폴더만 넘긴다
 - `AgentSkills` — `skill_candidates`·`promoted_skills` 표 서비스. `visible(projectId, sessionId?)`는 그 대화의 후보와, 이름이 겹치지 않는 정식 스킬을 이름순으로 돌려준다. `saveCandidate`는 대화의 후보를 같은 이름이면 바꿔 저장한다. `contentSha256(files)`는 경로순으로 놓은 파일의 해시다

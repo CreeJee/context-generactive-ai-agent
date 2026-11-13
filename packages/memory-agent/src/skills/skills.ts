@@ -316,8 +316,6 @@ const make = (options: SkillsOptions) =>
           problems,
         };
       }),
-      /** The skills of every project, before a project's own skills replace any of them. */
-      shared: Effect.map(merged(sharedScans), ({ entries }) => entries.map((entry) => entry.skill)),
       read: Effect.fn("Skills.read")(function* (
         project: Project,
         name: string,
