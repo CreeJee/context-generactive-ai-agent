@@ -448,9 +448,9 @@ export const openAIModelToolCapabilities = {
   "gpt-5.6-luna-pro": [],
   "gpt-5.6-sol-pro": [],
   "gpt-5.6-terra-pro": [],
-  // Offered only to subscription accounts, with no public API page. The subscription backend
-  // accepted these tool types for it on 2026-11-13 and refused the others, as it does for
-  // gpt-6-luna.
+  // Offered only to subscription accounts, with no public API page. On 2026-11-13 the subscription
+  // backend accepted these tool types for it from a non-Pro account and refused the others, as it
+  // did for gpt-6-luna. A Pro account was not checked.
   "gpt-reserve": ["web_search", "image_generation"],
 } as const satisfies ToolCapabilitiesByName<OpenAIChatModel>;
 
