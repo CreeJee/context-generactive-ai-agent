@@ -145,7 +145,7 @@ const toolInput = (serialized: string): ToolArguments =>
 
 /** Models whose adaptive thinking cannot be turned off and is bound to the request prefix. */
 const anthropicThinkingAlwaysOn = (model: string) =>
-  /^claude-(?:opus-5-5|fable-5-1)(?:-\d{8})?(?:\[1m\])?$/.test(model);
+  /^claude-(?:opus-5-5|fable-5-[12])(?:-\d{8})?(?:\[1m\])?$/.test(model);
 
 /**
  * Models that think when the request does not ask for it, and by default show none of it: their

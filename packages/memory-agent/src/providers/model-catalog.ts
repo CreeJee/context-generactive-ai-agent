@@ -1,26 +1,29 @@
 import { Schema } from "effect";
 
 /**
- * The provider models this app knows, in the order @tanstack/ai-anthropic and @tanstack/ai-openai
- * 1.0.0 listed them. The app owns the lists so the provider packages can go
- * (docs/effect-ai-migration.md step 2); a model a provider adds is added here.
+ * The provider models this app knows. The app owns the lists so the provider packages can go
+ * (docs/effect-ai-migration.md step 2); a model a provider adds is added here. Anthropic models
+ * are grouped by family, newest first, because the model picker shows them in this order. The
+ * OpenAI lists keep the order @tanstack/ai-openai 1.0.0 listed them in, and new models are added
+ * at the end.
  */
 
 export const AnthropicChatModel = Schema.Literals([
-  "claude-haiku-5-5",
-  "claude-sonnet-5-5",
-  "claude-opus-5-5",
+  "claude-fable-5-2",
   "claude-fable-5-1",
+  "claude-fable-5",
+  "claude-opus-5-5",
   "claude-opus-5",
+  "claude-opus-4-8",
+  "claude-opus-4-7",
   "claude-opus-4-6",
   "claude-opus-4-5",
+  "claude-sonnet-5-5",
+  "claude-sonnet-5",
   "claude-sonnet-4-6",
   "claude-sonnet-4-5",
+  "claude-haiku-5-5",
   "claude-haiku-4-5",
-  "claude-opus-4-7",
-  "claude-opus-4-8",
-  "claude-fable-5",
-  "claude-sonnet-5",
 ]);
 export type AnthropicChatModel = typeof AnthropicChatModel.Type;
 export const ANTHROPIC_MODELS = AnthropicChatModel.literals;

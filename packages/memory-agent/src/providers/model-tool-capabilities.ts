@@ -567,6 +567,16 @@ export const anthropicModelToolCapabilities = {
     "text_editor",
     "memory",
   ],
+  "claude-fable-5-2": [
+    "web_search",
+    "web_fetch",
+    "code_execution",
+    "computer",
+    "computer_toolset",
+    "bash",
+    "text_editor",
+    "memory",
+  ],
   "claude-opus-5-5": [
     "web_search",
     "web_fetch",

@@ -190,7 +190,7 @@ function parseSubscriptionCatalogBody(
   pages: ReadonlyArray<unknown>,
 ): ReadonlyArray<ProviderModel> {
   const entries = catalogEntries(provider, pages);
-  const preferred = provider === "openai" ? "gpt-6-astra" : "claude-opus-5";
+  const preferred = provider === "openai" ? "gpt-6-astra" : "claude-opus-5-5";
   // A model listed twice keeps its first entry, and the place of that entry.
   const firsts = Arr.dedupeWith(
     entries.map((listed, index) => ({ ...listed, index })),
