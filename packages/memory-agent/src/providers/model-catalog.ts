@@ -82,6 +82,7 @@ export const OpenAIChatModel = Schema.Literals([
   "gpt-5.4-nano",
   "gpt-5.4-image-2",
   "gpt-chat-latest",
+  "gpt-reserve",
 ]);
 export type OpenAIChatModel = typeof OpenAIChatModel.Type;
 export const OPENAI_CHAT_MODELS = OpenAIChatModel.literals;

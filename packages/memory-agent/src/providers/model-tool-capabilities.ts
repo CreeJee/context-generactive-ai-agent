@@ -448,6 +448,10 @@ export const openAIModelToolCapabilities = {
   "gpt-5.6-luna-pro": [],
   "gpt-5.6-sol-pro": [],
   "gpt-5.6-terra-pro": [],
+  // Offered only to subscription accounts, with no public API page. The subscription backend
+  // accepted these tool types for it on 2026-11-13 and refused the others, as it does for
+  // gpt-6-luna.
+  "gpt-reserve": ["web_search", "image_generation"],
 } as const satisfies ToolCapabilitiesByName<OpenAIChatModel>;
 
 /** @tanstack/ai-anthropic 1.0.0's type-only model tool metadata, owned here as data. */
