@@ -371,10 +371,11 @@ const readOnlyWorkflowPhases = HashSet.fromIterable<WorkflowPhase>([
   "completed",
 ]);
 /**
- * Where the chat of a kanban board gets the board's tools: plain chat, and the running board whose
- * planner it is (read-only for the project, not for the board).
+ * Where the chat of a kanban board gets the board's tools: plain chat, the running board whose
+ * planner it is (read-only for the project, not for the board), and shaping, where a revised Plan
+ * waits to be confirmed while its board stays active.
  */
-const boardToolPhases = HashSet.fromIterable<WorkflowPhase>(["chat", "running"]);
+const boardToolPhases = HashSet.fromIterable<WorkflowPhase>(["chat", "shaping", "running"]);
 const workflowReadToolNames = HashSet.fromIterable([
   "find_memory",
   "read_evidence",

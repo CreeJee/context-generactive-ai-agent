@@ -175,6 +175,35 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
     }),
   );
 
+  it.effect("a Plan revised on a running board keeps its planner on the board", () =>
+    Effect.gen(function* () {
+      const env = yield* TestEnv;
+      const session = yield* planned([{ text: "Noted." }]);
+      yield* env.use(
+        Effect.flatMap(Workflows, (workflows) =>
+          workflows.holdCard(
+            session.id,
+            { cardId: "p1", hold: true },
+            BoardAuthor.cases.User.make({}),
+          ),
+        ),
+      );
+      yield* env.use(
+        Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, null, "run")),
+      );
+      yield* waitForBoard(session.board);
+      // A revised Plan waits to be confirmed in shaping while its board stays active.
+      const state = yield* env.use(
+        Effect.flatMap(Workflows, (workflows) => workflows.updatePlan(session.id, plan)),
+      );
+      expect(state.phase).toBe("shaping");
+      expect(yield* session.board).toBe(true);
+      yield* runTurn(session.id, `${session.id}-turn`, "Why does the Plan need confirming?");
+      const tools = session.invocations()[0]?.toolNames ?? [];
+      expect(tools).toEqual(expect.arrayContaining(["read_kanban_board", "edit_kanban_board"]));
+    }),
+  );
+
   it.effect("a Goal mode approval runs its Plan on the board that kept running", () =>
     Effect.gen(function* () {
       const env = yield* TestEnv;
