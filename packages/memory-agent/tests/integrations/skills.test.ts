@@ -125,7 +125,21 @@ testAgent()("global and project skills", (it) => {
           { scope: "global", directory: path.join(global, "broken"), problem: "no_description" },
         ]);
         const tools = yield* (yield* SkillTools).toolsFor(project, session.id);
-        expect(tools.instructions).toContain("- review (project): Project review.");
+        // The instructions name no skill: find_skill reads the skills as they are at the call.
+        expect(tools.instructions).not.toContain("review");
+        const found = (query: string) => callTool(tools.tools, "find_skill", { query });
+        const named = (name: string) => expect.objectContaining({ name });
+        expect(yield* found("project review")).toEqual({
+          skills: expect.arrayContaining([
+            { name: "review", scope: "project", description: "Project review." },
+          ]),
+        });
+        // A skill deleted or added after the run started is found as it is now.
+        yield* fs.remove(path.join(global, "deploy"), { recursive: true });
+        yield* writeSkill(global, "release", "description: Write the release notes.");
+        const now = yield* found("deploy the app or write release notes");
+        expect(now).toEqual({ skills: expect.arrayContaining([named("release")]) });
+        expect(now).not.toEqual({ skills: expect.arrayContaining([named("deploy")]) });
         // How to treat a skill comes with the skill read, not with the list.
         expect(yield* callTool(tools.tools, "read_skill", { name: "review" })).toMatchObject({
           scope: "project",
@@ -209,7 +223,7 @@ const send = Effect.fnUntraced(function* (session: string, runId: string, text: 
 
 testAgent({ testProvider: {} })("skills in a run", (it) => {
   it.effect.each(["chat", "goal"] as const)(
-    "a %s run lists skills and offers read_skill only when there are skills",
+    "a %s run offers find_skill and read_skill, which find a skill saved after it started",
     (phase) =>
       Effect.gen(function* () {
         const { project, skills } = yield* freshProject;
@@ -234,21 +248,23 @@ testAgent({ testProvider: {} })("skills in a run", (it) => {
           }
         }
         const without = yield* send(session, `${session}:without`, "hello");
-        expect(without.invocation?.toolNames).not.toContain("read_skill");
+        // Offered before the project has a skill of its own: both read the skills at the call.
+        expect(without.invocation?.toolNames).toEqual(
+          expect.arrayContaining(["find_skill", "read_skill"]),
+        );
         yield* writeSkill(
           skills,
           "greet",
           "name: greet\ndescription: Greet warmly.",
           "Say hello in Korean.",
         );
+        const found = yield* send(session, `${session}:find`, 'call find_skill {"query":"greet"}');
+        expect(found.invocation?.system.join("\n")).not.toContain("Greet warmly.");
+        expect(found.results.join("\n")).toContain("Greet warmly.");
         const withSkill = yield* send(
           session,
           `${session}:with`,
           'call read_skill {"name":"greet"}',
-        );
-        expect(withSkill.invocation?.toolNames).toContain("read_skill");
-        expect(withSkill.invocation?.system.join("\n")).toContain(
-          "- greet (project): Greet warmly.",
         );
         expect(withSkill.results.join("\n")).toContain("Say hello in Korean.");
       }),

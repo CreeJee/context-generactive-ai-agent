@@ -12,7 +12,7 @@ memory-agent의 임베딩 계층이다. 모델 표(`models.ts`)에서 고른 로
 - `EmbeddingError` — 임베더 실패를 나타내는 TaggedError(`cause: Defect`)
 - `EmbeddingMode` / `embedderIdentity(mode)` / `identityMode(identity)` — cpu/gpu 모드 Schema(`contracts.ts`), 로컬 모델의 그 모드 파일이 만드는 벡터의 identity(`<id>@<tag>/<output>/<maxTokens>/chunks-v<version>-<tokens>-<overlap>`), identity를 만든 모드(로컬 모델이 아니면 None)
 - `models.ts` — 모델 표. `EmbeddingModelName`(Schema.Literals)마다 `EmbeddingModel`(id, dimensions, `output`, `textOnly`, role별 `prompts`, 정정을 묶는 cosine `sameMeaning`, maxTokens, batchSize, batchCost, 모드별 `files{file, tag}`)을 둔다. 항목은 `granite-97m-r2`(384차원, CLS, prompt 없음, cpu `model_quint8_avx2`·gpu `model`)와 `embeddinggemma-2`(768차원, `sentence-embedding`, text 모델만, role별 prompt, 배치 비용 4×512², cpu `model_quantized`(q8)·gpu `model_fp16`)다. `localModel`은 앱이 돌리는 항목(현재 `embeddinggemma-2`)이고, `modelFile(mode)`는 모델 캐시 안의 `onnx/<file>.onnx` 경로다
-- `EmbeddingRole` — `query`(검색 질의, 규칙을 고르는 글)·`document`(색인하는 노드, 규칙, 서로 견주는 정정). prompt가 있는 모델은 role마다 다른 prefix를 붙인다
+- `EmbeddingRole` — `query`(검색 질의, 스킬을 찾는 글)·`document`(색인하는 노드, 스킬의 이름과 설명, 서로 견주는 정정). prompt가 있는 모델은 role마다 다른 prefix를 붙인다
 - `EmbeddingOutput` — 워커가 벡터를 읽는 곳. `cls`는 첫 토큰의 hidden state, `sentence-embedding`은 모델 그래프가 직접 pooling한 출력
 - `normalize` — Float32Array를 L2 정규화한다
 - `planBatches` — dual 함수. 토큰 수 오름차순으로 크기·비용 제한 안에서 배치 인덱스를 묶는다

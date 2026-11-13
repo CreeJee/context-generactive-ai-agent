@@ -23,6 +23,7 @@ export const builtinToolEffects = {
   delete_outside_file: "effectful",
   save_code_skill: "effectful",
   run_skill: "effectful",
+  find_skill: "read",
   read_skill: "read",
   // A program may call any of the run's effectful tools.
   run_code: "effectful",

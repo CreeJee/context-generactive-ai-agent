@@ -78,6 +78,7 @@ const toolLabels = {
   delete_outside_file: msg`프로젝트 밖 파일 삭제`,
   kagi_search: msg`웹 검색`,
   kagi_extract: msg`웹 페이지 읽기`,
+  find_skill: msg`skill 찾기`,
   read_skill: msg`skill 읽기`,
   run_subagent: msg`서브에이전트 실행`,
   // Calls recorded before run_subagent took a helper name.

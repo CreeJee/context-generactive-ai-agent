@@ -1012,6 +1012,10 @@ msgstr "run 오류 {code}"
 msgid "skill 읽기"
 msgstr "skill 읽기"
 
+#: app/entry/chat/message.tsx
+msgid "skill 찾기"
+msgstr "skill 찾기"
+
 #: app/entry/settings/pages/skills.tsx
 msgid "SKILL.md가 너무 커서 쓰지 않습니다."
 msgstr "SKILL.md가 너무 커서 쓰지 않습니다."

@@ -57,8 +57,6 @@ export const maxSkillCharacters = 32_000;
 /** Size past which a SKILL.md cannot fit: UTF-8 spends at most 3 bytes per UTF-16 unit. */
 export const maxSkillBytes = maxSkillCharacters * 3;
 export const maxDescriptionCharacters = 1_024;
-/** How many skills the instructions list at most. */
-export const maxListedSkills = 100;
 
 export interface SkillDocument extends Skill {
   /** SKILL.md without its front matter. */

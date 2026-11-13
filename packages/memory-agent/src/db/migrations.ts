@@ -3068,6 +3068,17 @@ export const migrations: readonly string[] = [
   DROP TABLE turn_summary_blocks;
   `,
   `
+  -- The vector of a skill's name and description that find_skill compares a request with, by the
+  -- embedder that made it and the SHA-256 of the text it embedded: a skill changed or saved again
+  -- with the same text reuses it. Vectors of another embedder are deleted as new ones are saved.
+  CREATE TABLE skill_vectors (
+    embedder TEXT NOT NULL,
+    text_sha256 TEXT NOT NULL,
+    vector BLOB NOT NULL,
+    PRIMARY KEY (embedder, text_sha256)
+  ) WITHOUT ROWID;
+  `,
+  `
   -- A message one conversation leaves another conversation of the same project (decisions.md
   -- "세션 dispatch는 표에 영속으로 저장한다"). A row waits until the target conversation's next run
   -- delivers it, and the app restarts never lose one. BTW threads and subagent threads are not

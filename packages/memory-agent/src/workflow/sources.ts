@@ -79,7 +79,7 @@ function structuredWorkflowRulesBody(
 /**
  * Explicit project rules are data, not inferred prose. AGENTS.md remains human/model guidance;
  * machine-enforced workflow rules live in this bounded, schema-checked resource. Skills are not
- * rules: the model reads them from the skill list the run already shows.
+ * rules: the model finds them with find_skill.
  * TODO(organization-workflows): let admins opt into trusted MCP resources/prompts as centrally
  * managed recommended guidance. Keep discovery, trust review and source status out of the MVP.
  */

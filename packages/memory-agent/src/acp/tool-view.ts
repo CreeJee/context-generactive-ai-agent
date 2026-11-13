@@ -57,6 +57,7 @@ const titles = {
   }),
   kagi_search: msg({ message: "웹 검색", comment: "Tool call title in the editor" }),
   kagi_extract: msg({ message: "웹 페이지 읽기", comment: "Tool call title in the editor" }),
+  find_skill: msg({ message: "skill 찾기", comment: "Tool call title in the editor" }),
   read_skill: msg({ message: "skill 읽기", comment: "Tool call title in the editor" }),
   run_subagent: msg({ message: "서브에이전트 실행", comment: "Tool call title in the editor" }),
   message_subagent: msg({
@@ -93,6 +94,7 @@ const views = HashMap.fromIterable<string, ToolViewMessage>([
   ["delete_outside_file", { title: titles.delete_outside_file, kind: "delete" }],
   ["kagi_search", { title: titles.kagi_search, kind: "fetch" }],
   ["kagi_extract", { title: titles.kagi_extract, kind: "fetch" }],
+  ["find_skill", { title: titles.find_skill, kind: "search" }],
   ["read_skill", { title: titles.read_skill, kind: "read" }],
   ["run_subagent", { title: titles.run_subagent, kind: "other" }],
   // Calls recorded before run_subagent took a helper name.

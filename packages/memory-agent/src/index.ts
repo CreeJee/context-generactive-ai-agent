@@ -590,7 +590,6 @@ export {
   Skills,
   globalSkillsDirectory,
   maxDescriptionCharacters,
-  maxListedSkills,
   maxSkillBytes,
   parseFrontMatter,
   projectSkillsDirectory,
@@ -602,6 +601,7 @@ export {
 export { SkillTools, skillsInstructions } from "./tools/skills.ts";
 export { AgentSkills } from "./skills/agent-skills.ts";
 export { ProjectSkills } from "./skills/project-skills.ts";
+export { SkillSearch } from "./skills/skill-search.ts";
 export {
   DelegateTools,
   delegateInstructions,

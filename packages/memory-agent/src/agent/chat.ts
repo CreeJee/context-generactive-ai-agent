@@ -382,6 +382,7 @@ const workflowReadToolNames = HashSet.fromIterable([
   "list_files",
   "search_files",
   "read_file",
+  "find_skill",
   "read_skill",
   "get_background_result",
   "kagi_search",
@@ -1969,7 +1970,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             context: Effect.all(
               {
                 skills: unlessReport(skillTools.toolsFor(project, sessionId), {
-                  skills: [],
                   tools: [],
                   instructions: null,
                 }),

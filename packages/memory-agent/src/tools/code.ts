@@ -59,6 +59,7 @@ const programCallable = {
   delete_outside_file: true,
   save_code_skill: true,
   run_skill: true,
+  find_skill: true,
   read_skill: true,
   kagi_search: true,
   kagi_extract: true,

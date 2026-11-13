@@ -47,6 +47,11 @@ msgstr "OS 키체인을 쓸 수 없습니다."
 msgid "skill 읽기"
 msgstr "skill 읽기"
 
+#. Tool call title in the editor
+#: src/acp/tool-view.ts
+msgid "skill 찾기"
+msgstr "skill 찾기"
+
 #. Choice of a permission request in the editor: reject this tool call
 #: src/acp/agent-bridge.ts
 msgid "거부"

@@ -12,7 +12,7 @@
 
 - `Skills` — `Context.Service` 태그 "memory-agent/skills/skills". 멤버는 `globalDirectory`, `catalog(project)`, `shared`, `read(project, name)`. `Skills.layer(options)`가 NodeFileSystem과 NodeCrypto 레이어를 붙인다
 - `Skills.catalog` — 프로젝트의 `SkillCatalog`(directories는 global/project만, skills, problems)를 돌려준다
-- `Skills.shared` — 모든 프로젝트가 가진 builtin·global 스킬(이름이 같으면 global이 이긴다). 앱이 시작할 때 이 스킬들의 작업 규칙 벡터를 미리 만든다(`EmbeddingSetup`)
+- `Skills.shared` — 모든 프로젝트가 가진 builtin·global 스킬(이름이 같으면 global이 이긴다)
 - `Skills.read` — 이름으로 `SkillDocument`(front matter를 뺀 body, 한 단계 파일 목록)를 돌려준다. 없으면 `null`
 - `Skills.catalog` · `Skills.read`의 `committed` — 주면 그 이름의 프로젝트 스킬 폴더만 센다. `ProjectSkills`가 git이 커밋한 폴더만 넘긴다
 - `AgentSkills` — `skill_candidates`·`promoted_skills` 표 서비스. `visible(projectId, sessionId?)`는 그 대화의 후보와, 이름이 겹치지 않는 정식 스킬을 이름순으로 돌려준다. `saveCandidate`는 대화의 후보를 같은 이름이면 바꿔 저장한다. `contentSha256(files)`는 경로순으로 놓은 파일의 해시다
@@ -21,11 +21,12 @@
 - `AgentSkills`의 검토 멤버 — `recordRuns`, `unreviewed`, `unreviewedFound`, `promotedCopies`, `syncFound(projectId, origin, folders)`, `runsOf`, `keep`(유지 이유 기록), `promote`(후보를 `promoted_skills`로 옮기고 이전 사본 해시를 돌려줌), `copied`
 - `committedSkillFolders(root)` — `git ls-tree HEAD -- .agents/skills/`로 커밋된 스킬 폴더 이름을 돌려준다. git이 답하지 못하면(git 없음, 저장소 아님, 커밋 없음) `None`이고, 그때는 모든 폴더를 센다
 - `ProjectSkills` — `catalog(project, sessionId?)`, `find(project, sessionId, name)`(`FoundSkill` = `stored` | `folder`), `read`, `storedFile`. layer는 `AgentSkills`도 함께 준다
+- `SkillSearch` — `find_skill`이 쓰는 검색 서비스(`skill-search.ts`). `find(project, sessionId, query, limit)`는 부르는 순간의 카탈로그에서 단어 일치와 임베딩 cosine을 reciprocal rank fusion으로 합해 상위 `limit`개를 돌려준다. `prepare(project, sessionId)`는 카탈로그에서 벡터가 없는 스킬을 background로 임베딩한다. layer는 `NodeCrypto`를 붙이고 `ProjectSkills`·`Embedder`·`SqlClient`를 요구한다
 - `SkillsOptions` — 테스트용 `home`과 `builtin` 경로를 덮어쓰는 옵션
 - `SkillScope` — `Schema.Literals(["builtin","global","project","promoted","candidate"])`와 같은 이름의 타입. `contracts.ts`에 있고 `skills.ts`가 다시 내보낸다
 - `builtinSkillsDirectory` — Effect. `runtimeRoot`가 있으면 그것을, 없으면 `memory-agent/package.json` 위치를 써서 `skills/` 경로를 정한다
 - `globalSkillsDirectory(home)` / `projectSkillsDirectory(projectRoot)` — `<base>/.agents/skills` 경로
-- `maxSkillCharacters`(32_000자) / `maxSkillBytes`(`maxSkillCharacters * 3`, UTF-8 최대 3바이트/UTF-16 단위) / `maxDescriptionCharacters`(1024) / `maxListedSkills`(100) — 스킬 크기와 목록 한도 상수
+- `maxSkillCharacters`(32_000자) / `maxSkillBytes`(`maxSkillCharacters * 3`, UTF-8 최대 3바이트/UTF-16 단위) / `maxDescriptionCharacters`(1024) — 스킬 크기와 설명 한도 상수
 - `Skill` / `SkillProblem` / `SkillCatalog` / `SkillDocument` — 스킬 메타(scope, name, description, directory, contentHash), 문제(no_description, too_large, unreadable), 카탈로그와 문서. 앞의 셋은 `contracts.ts`의 Schema 타입이고(앱 API projects group `skills`가 돌려준다), `SkillDocument`는 `skills.ts`의 인터페이스다
 - `parseFrontMatter(text)` / `FrontMatter` — SKILL.md front matter의 작은 YAML 부분집합을 `MutableHashMap` 필드와 body로 파싱한다. 지원 형식은 `key: value`, 따옴표 값, `>`, `|`, `>-`, `|-` 블록이다
 - `CodeSkills` — 코드 스킬 `Context.Service`이고 `CodeSkills.layer`를 가진다. 구현 `make`는 프로젝트 파일 생성, 읽기, 교체, 삭제와 SKILL.md 생성을 다룬다
