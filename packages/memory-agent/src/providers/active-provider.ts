@@ -6,6 +6,7 @@ import { GlobalConfig, type Settings } from "../config/global-config.ts";
 import {
   type AgentRole,
   AuthConnectionState,
+  type ModelRole,
   ModelUnavailable,
   type ModelSelection,
   type ProviderId,
@@ -18,7 +19,8 @@ const roleModelKeys = {
   planner: "plannerModel",
   executor: "executorModel",
   verifier: "verifierModel",
-} as const satisfies Record<AgentRole, keyof Settings>;
+  skillRouter: "skillRouterModel",
+} as const satisfies Record<ModelRole, keyof Settings>;
 
 export interface ResolvedProvider {
   readonly selection: ModelSelection;
@@ -39,18 +41,19 @@ const make = Effect.gen(function* () {
       : Effect.succeed(null),
   );
 
-  /** A role's own model, or null when it runs on the selected model. */
-  const chosenFor = (role: AgentRole) =>
+  /** A role's own model, or null when the user chose none. */
+  const chosenFor = (role: ModelRole) =>
     Effect.map(config.read, (settings) => settings[roleModelKeys[role]] ?? null);
   /** The model a role runs on: its own when the user chose one, else the selected model. */
   const selectedFor = (role: AgentRole) =>
     Effect.filterOrElse(chosenFor(role), Predicate.isNotNull, () => selected);
   /**
-   * Saves a role's model after checking the provider lists it with that effort; null goes back to
-   * the selected model. The global selection is not touched.
+   * Saves a role's model after checking the provider lists it with that effort. null clears it: a
+   * Goal's role goes back to the selected model and the skill router is off. The global selection
+   * is not touched.
    */
   const chooseFor = Effect.fn("ActiveProvider.chooseFor")(function* (
-    role: AgentRole,
+    role: ModelRole,
     selection: ModelSelection | null,
   ) {
     if (selection !== null) {

@@ -1,9 +1,12 @@
 import { Context, Effect, Option, Layer, Schema } from "effect";
 import type { Fenced } from "../files/paths.ts";
 import type { Project } from "../projects/projects.ts";
+import { ActiveProvider } from "../providers/active-provider.ts";
+import { fallbackLogged } from "../runtime/logged-failures.ts";
 import { ProjectSkills } from "../skills/project-skills.ts";
+import { SkillRouter } from "../skills/skill-router.ts";
 import { SkillSearch } from "../skills/skill-search.ts";
-import type { SkillScope } from "../skills/skills.ts";
+import type { Skill, SkillScope } from "../skills/skills.ts";
 import { runTool, type RunTool } from "./run-tool.ts";
 
 /**
@@ -53,10 +56,15 @@ const findSkill = {
 
 /** How many skills a search gives at most. */
 const foundSkills = 8;
+/** How many of the search's best the skill router chooses among. */
+const routedCandidates = 20;
 
 /** Why a search may miss a skill described in other words. */
 const wordsOnlyNote = (count: number) =>
   `${count} skills were compared by words only, since the embedding model is loading or has not embedded them yet: a skill described in other words may be missing, so search again later.`;
+/** Why the skills given may include ones that do not fit. */
+const unroutedNote =
+  "The skill router did not answer, so these are the search's best matches by words and meaning, and some may not fit.";
 
 /**
  * How the model finds and treats skills. They are not listed: a list made as a run starts goes
@@ -74,6 +82,8 @@ export interface SkillToolset {
 const make = Effect.gen(function* () {
   const skills = yield* ProjectSkills;
   const search = yield* SkillSearch;
+  const skillRouter = yield* SkillRouter;
+  const active = yield* ActiveProvider;
 
   const instructionsOf = (project: Fenced<Project>, sessionId: string, name: string) =>
     Effect.map(skills.read(project, sessionId, name), (document) =>
@@ -107,19 +117,46 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const find = (
+  /** What find_skill answers: the skills, and why some may be missing or not fit. */
+  const answer = (found: readonly Skill[], notes: readonly string[]) => {
+    const skills = found.map(({ name, scope, description }) => ({ name, scope, description }));
+    return notes.length === 0 ? { skills } : { skills, note: notes.join(" ") };
+  };
+
+  /**
+   * The search's best skills, or, when the user chose a skill router model, the ones that model
+   * chooses among more of them. A router that fails gives the search's best instead.
+   */
+  const find = Effect.fn("SkillTools.find")(function* (
     project: Fenced<Project>,
     sessionId: string,
     { query }: typeof FindSkillInput.Type,
-  ) =>
-    Effect.map(search.find(project, sessionId, query, foundSkills), (found) => {
-      const skills = found.skills.map(({ name, scope, description }) => ({
-        name,
-        scope,
-        description,
-      }));
-      return found.wordsOnly === 0 ? { skills } : { skills, note: wordsOnlyNote(found.wordsOnly) };
+  ) {
+    const router = yield* active
+      .chosenFor("skillRouter")
+      .pipe(fallbackLogged("Skill router setting not read", () => null));
+    const found = yield* search.find(
+      project,
+      sessionId,
+      query,
+      router === null ? foundSkills : routedCandidates,
+    );
+    const wordsOnly = found.wordsOnly === 0 ? [] : [wordsOnlyNote(found.wordsOnly)];
+    if (router === null) return answer(found.skills, wordsOnly);
+    const routed = yield* skillRouter
+      .choose({
+        sessionId,
+        selection: router,
+        query,
+        candidates: found.skills,
+        limit: foundSkills,
+      })
+      .pipe(Effect.asSome, fallbackLogged("Skill router did not choose", Option.none));
+    return Option.match(routed, {
+      onNone: () => answer(found.skills.slice(0, foundSkills), [...wordsOnly, unroutedNote]),
+      onSome: (chosen) => answer(chosen, wordsOnly),
     });
+  });
 
   return {
     /**
@@ -147,8 +184,8 @@ const make = Effect.gen(function* () {
 export class SkillTools extends Context.Service<SkillTools, Effect.Success<typeof make>>()(
   "memory-agent/tools/skills/SkillTools",
 ) {
-  /** Also gives the `SkillSearch` its find_skill reads. */
+  /** Also gives the `SkillSearch` its find_skill reads and the `SkillRouter` that chooses. */
   static readonly layer = Layer.effect(SkillTools, make).pipe(
-    Layer.provideMerge(SkillSearch.layer),
+    Layer.provideMerge(Layer.merge(SkillSearch.layer, SkillRouter.layer)),
   );
 }

@@ -2,12 +2,15 @@ import { Effect, FileSystem, Path, Schedule } from "effect";
 import { SqlClient } from "effect/sql";
 import { expect } from "vite-plus/test";
 import { Projects } from "../../src/projects/projects.ts";
+import { ActiveProvider } from "../../src/providers/active-provider.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
+import { routerInstructions } from "../../src/skills/skill-router.ts";
 import {
   Skills,
   builtinSkillsDirectory,
   maxDescriptionCharacters,
 } from "../../src/skills/skills.ts";
+import type { ScriptedResponder } from "../../src/testing/index.ts";
 import { SkillTools } from "../../src/tools/skills.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { runTurn, toolResults } from "../support/chat-client.ts";
@@ -287,6 +290,59 @@ testAgent({ testProvider: {} })("skills in a run", (it) => {
           'call read_skill {"name":"greet"}',
         );
         expect(withSkill.results.join("\n")).toContain("Say hello in Korean.");
+      }),
+  );
+});
+
+/** The router's answers, in order, and the requests it was asked. */
+const routerAnswers: string[] = [];
+const routerPrompts: string[] = [];
+const routerResponder: ScriptedResponder = (invocation) => {
+  if (!invocation.system.join("\n").includes(routerInstructions))
+    return { text: "Not a router call." };
+  routerPrompts.push(JSON.stringify(invocation.history));
+  return { text: routerAnswers.shift() ?? "no answer queued" };
+};
+
+testAgent({ testProvider: { responder: routerResponder } })("skill router", (it) => {
+  it.effect(
+    "chooses find_skill's results among the search's when the user chose a model for it",
+    () =>
+      Effect.gen(function* () {
+        const { project, skills } = yield* freshProject;
+        const session = (yield* (yield* Sessions).create(project.id)).id;
+        yield* writeSkill(skills, "release", "description: Write the release notes.");
+        yield* writeSkill(skills, "deploy", "description: Deploy the app to production.");
+        yield* writeSkill(skills, "review", "description: Review the release branch.");
+        const tools = yield* (yield* SkillTools).toolsFor(project, session);
+        const found = (query: string) => callTool(tools.tools, "find_skill", { query });
+        const named = (name: string) => expect.objectContaining({ name });
+        // Off until the user chooses a model: the search's own order, no model call.
+        expect(yield* found("release notes")).toMatchObject({
+          skills: expect.arrayContaining([named("release")]),
+        });
+        expect(routerPrompts).toEqual([]);
+        const active = yield* ActiveProvider;
+        yield* active.chooseFor("skillRouter", yield* selectTestModel());
+        // The router keeps only candidates, in its order, and may choose none.
+        routerAnswers.push('{"skills":["release","invented","release"]}');
+        expect(yield* found("release notes")).toMatchObject({ skills: [named("release")] });
+        expect(routerPrompts.at(-1)).toContain("Query: release notes");
+        expect(routerPrompts.at(-1)).toContain("- deploy: Deploy the app to production.");
+        routerAnswers.push('{"skills":[]}');
+        expect(yield* found("bake bread")).toMatchObject({ skills: [] });
+        // An unreadable answer gives the search's best, saying they may not fit.
+        routerAnswers.push("I think release fits.");
+        expect(yield* found("release notes")).toMatchObject({
+          skills: expect.arrayContaining([named("release")]),
+          note: expect.stringContaining("The skill router did not answer"),
+        });
+        // Cleared, it is off again.
+        yield* active.chooseFor("skillRouter", null);
+        expect(yield* active.chosenFor("skillRouter")).toBeNull();
+        const asked = routerPrompts.length;
+        yield* found("release notes");
+        expect(routerPrompts).toHaveLength(asked);
       }),
   );
 });

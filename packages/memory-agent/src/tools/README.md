@@ -31,7 +31,7 @@
 - `CodeTools` — 모델이 쓴 프로그램이 run의 도구를 코드 샌드박스에서 호출하게 하는 서비스(`CodeSandbox.layer` 제공)
 - `MemoryTools` / `memoryRunTools` / `memoryReadRunTools` / `memoryToolNames` / `MemoryToolEnvironment` / `MemoryToolRunBinding` / `MemoryToolScope` — 읽기 전용 메모리 도구와, run이 속한 대화의 저장된 도구 결과를 읽는 `read_tool_result`
 - `KagiTools` / `kagiToolNames` / `kagiInstructions` / `maxPageCharacters` — Kagi 웹 검색(`kagi_search`, `kagi_extract`), 페이지 최대 40,000자
-- `DelegateTools` / `delegateToolName` / `delegateInstructions` / `DelegateToolset` / `DelegateBinding` 및 `SkillTools` / `skillsInstructions` / `SkillToolset` — 다른 에이전트 위임(`delegate_to_agent`)과 스킬 도구
+- `DelegateTools` / `delegateToolName` / `delegateInstructions` / `DelegateToolset` / `DelegateBinding` 및 `SkillTools` / `skillsInstructions` / `SkillToolset` — 다른 에이전트 위임(`delegate_to_agent`)과 스킬 도구. `find_skill`은 skill router 모델(`ActiveProvider.chosenFor("skillRouter")`)이 없으면 검색 상위 8개를, 있으면 검색 상위 20개 중 router가 고른 것(0~8개)을 준다. router가 실패하면 검색 상위 8개와 맞지 않을 수 있다는 `note`를 준다. layer는 `SkillSearch`와 `SkillRouter`를 함께 준다
 - `lazyToolsFor` / `discoveryToolName` / `isDiscoveryCall` / `ToolLookup` 및 `repeatGuardHook` / `RepeatedToolCall` / `repeatedToolCallCode` — history 기반 lazy 도구 발견, 같은 호출 반복을 막는 `RunHook`
 - `reportRunToolsForSession` / `reportBinding` / `initialReportEvidence` / `ReportBinding` 및 `prepareRepaired` / `repairedInput` / `jsonSchemaIssues` — 리포트 세션 증거 도구, 보낸 인수가 안 맞으면 수리된 인수로 호출을 준비하는 입력 수리
 - `toolsPrompts` — 리포트 증거 스냅샷에서 모델이 읽는 지침(`prompts.ts`)

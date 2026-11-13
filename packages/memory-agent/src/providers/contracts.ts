@@ -67,6 +67,13 @@ export type ModelSelection = typeof ModelSelection.Type;
 export const AgentRole = Schema.Literals(["planner", "executor", "verifier"]);
 export type AgentRole = typeof AgentRole.Type;
 
+/**
+ * The roles the user can give a model of their own: a Goal's roles, which run on the selected
+ * model when unset, and find_skill's skill router, which is off when unset.
+ */
+export const ModelRole = Schema.Literals([...AgentRole.literals, "skillRouter"]);
+export type ModelRole = typeof ModelRole.Type;
+
 export const SubscriptionModelSelection = Schema.Struct({
   ...ModelSelection.fields,
   provider: SubscriptionAccountProvider,
