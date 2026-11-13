@@ -1,11 +1,10 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { Effect, FileSystem, Layer, Path } from "effect";
 import { layer } from "@effect/vitest";
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect } from "vite-plus/test";
 import type { Project } from "../projects/projects.ts";
-import type { Skill } from "../skills/skills.ts";
 import { RuleSource } from "./rules.ts";
-import { projectWorkflowRules, projectWorkflowRulesPath, skillWorkflowRules } from "./sources.ts";
+import { projectWorkflowRules, projectWorkflowRulesPath } from "./sources.ts";
 
 const project = Effect.fnUntraced(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -97,28 +96,5 @@ describe("workflow rule sources", () => {
         });
       }),
     );
-  });
-
-  test("turns skill metadata into recommended read_skill rules", () => {
-    const skill: Skill = {
-      name: "repair-pr",
-      scope: "project",
-      description: "Repair CI and review feedback on a pull request.",
-      directory: "/project/.agents/skills/repair-pr",
-      contentHash: "abc123",
-    };
-
-    expect(skillWorkflowRules([skill])).toEqual([
-      expect.objectContaining({
-        id: "skill.project.repair-pr",
-        priority: "recommended",
-        terms: [skill.name, skill.description],
-        source: RuleSource.cases.skill.make({
-          name: skill.name,
-          scope: skill.scope,
-          contentHash: skill.contentHash,
-        }),
-      }),
-    ]);
   });
 });

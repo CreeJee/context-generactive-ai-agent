@@ -18,8 +18,6 @@ import { Indexer } from "./indexer.ts";
 import { Reranker } from "../rerank/reranker.ts";
 import { memoryPrompts } from "../prompts.ts";
 import { WorkflowRules } from "../../workflow/rules.ts";
-import { skillWorkflowRules } from "../../workflow/sources.ts";
-import { Skills } from "../../skills/skills.ts";
 
 /** Whether WebGPU was found to work here, or is being checked now (`contracts.ts`). */
 export type GpuState = EmbeddingOverview["gpu"];
@@ -35,7 +33,6 @@ const make = Effect.gen(function* () {
   const downloads = yield* ModelDownloads;
   const reranker = yield* Reranker;
   const workflowRules = yield* WorkflowRules;
-  const skills = yield* Skills;
   const layerScope = yield* Effect.scope;
   const checking = yield* Ref.make(false);
 
@@ -89,17 +86,9 @@ const make = Effect.gen(function* () {
   const loadAndBackfill = Effect.forkIn(
     embedder.embed([memoryPrompts.warmUp], "query").pipe(
       Effect.catch(logFailure("memory_embedder_warm_up_failed")),
-      // With the rules of the skills every project has; a project's own skills are embedded by its
-      // first turn. A turn embeds what is still missing, as it did before.
+      // A project's own rules are embedded by its first turn.
       Effect.andThen(
-        skills.shared.pipe(
-          Effect.map(skillWorkflowRules),
-          Effect.catchTag("PlatformError", (error) =>
-            Effect.as(logFailure("workflow_skill_rules_unread")(error), []),
-          ),
-          Effect.flatMap(workflowRules.prepare),
-          Effect.catch(logFailure("workflow_rule_vectors_failed")),
-        ),
+        workflowRules.prepare().pipe(Effect.catch(logFailure("workflow_rule_vectors_failed"))),
       ),
       Effect.andThen(indexer.indexAll()),
       Effect.catchTags({

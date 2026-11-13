@@ -5,7 +5,6 @@ import { sha256 } from "../runtime/synchronous-crypto.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { Data, Effect, FileSystem, HashSet, Iterable, Path, Schema, Struct } from "effect";
 import type { Project } from "../projects/projects.ts";
-import type { Skill } from "../skills/skills.ts";
 import {
   RuleSource,
   WorkflowRule,
@@ -42,7 +41,6 @@ export type StructuredRuleOrigin = Data.TaggedEnum<{
 export const StructuredRuleOrigin = Data.taggedEnum<StructuredRuleOrigin>();
 
 const digest = (text: string) => sha256(text);
-const ruleName = (value: string) => value.toLocaleLowerCase().replace(/[^a-z0-9._-]+/g, "-");
 const sourceName = StructuredRuleOrigin.$match({
   project: ({ path }) => path,
 });
@@ -80,7 +78,10 @@ function structuredWorkflowRulesBody(
 
 /**
  * Explicit project rules are data, not inferred prose. AGENTS.md remains human/model guidance;
- * machine-enforced workflow rules live in this bounded, schema-checked resource.
+ * machine-enforced workflow rules live in this bounded, schema-checked resource. Skills are not
+ * rules: the model reads them from the skill list the run already shows.
+ * TODO(organization-workflows): let admins opt into trusted MCP resources/prompts as centrally
+ * managed recommended guidance. Keep discovery, trust review and source status out of the MVP.
  */
 export const projectWorkflowRules = Effect.fn("projectWorkflowRules")(function* (project: Project) {
   const fs = yield* FileSystem.FileSystem;
@@ -110,42 +111,3 @@ export const projectWorkflowRules = Effect.fn("projectWorkflowRules")(function* 
     Effect.catchTag("PlatformError", () => Effect.succeed(problem("unreadable"))),
   );
 });
-
-/**
- * A skill description becomes a searchable recommendation to read that skill, not an eagerly
- * injected copy of SKILL.md and never a permission or required policy.
- */
-export function skillWorkflowRules(skills: readonly Skill[]): readonly WorkflowRuleValue[] {
-  return skills.map((skill) => ({
-    id: `skill.${skill.scope}.${ruleName(skill.name)}`,
-    version: 1,
-    title: `Use the ${skill.name} skill when applicable`,
-    phases: ["goal", "plan", "execute", "verify"],
-    priority: "recommended",
-    terms: [skill.name, skill.description],
-    instruction: `If this task matches the skill description, call read_skill with name ${JSON.stringify(skill.name)} before following its guidance. Skill description: ${skill.description}`,
-    requiredEvidence: [`The ${skill.name} skill was read before its guidance was applied`],
-    source: RuleSource.cases.skill.make({
-      name: skill.name,
-      scope: skill.scope,
-      contentHash: skill.contentHash,
-    }),
-  }));
-}
-
-/**
- * Local structured resources for one run.
- * TODO(organization-workflows): let admins opt into trusted MCP resources/prompts as centrally
- * managed recommended guidance. Keep discovery, trust review and source status out of the MVP.
- */
-export const localWorkflowRules: {
-  (skills: readonly Skill[]): (project: Project) => ReturnType<typeof localWorkflowRulesBody>;
-} & typeof localWorkflowRulesBody = EffectFunction.dual(2, localWorkflowRulesBody);
-function localWorkflowRulesBody(project: Project, skills: readonly Skill[]) {
-  return projectWorkflowRules(project).pipe(
-    Effect.map((projectRules): LoadedRuleSources => ({
-      rules: [...projectRules.rules, ...skillWorkflowRules(skills)],
-      problems: projectRules.problems,
-    })),
-  );
-}

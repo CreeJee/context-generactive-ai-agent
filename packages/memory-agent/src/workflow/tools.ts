@@ -307,7 +307,6 @@ const ruleSource = (rule: ResolvedRules["rules"][number]) =>
   RuleSource.match(rule.source, {
     builtin: ({ name }) => `builtin:${name}`,
     project: ({ path, contentHash }) => `project:${path}#${contentHash.slice(0, 12)}`,
-    skill: ({ scope, name, contentHash }) => `skill:${scope}/${name}#${contentHash.slice(0, 12)}`,
   });
 
 /** An outcome line; on a board it carries the outcome ledger's status and verdict. */

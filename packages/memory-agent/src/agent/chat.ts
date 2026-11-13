@@ -192,7 +192,7 @@ import {
   GoalExecutionPayload,
 } from "../workflow/goal-execution-contracts.ts";
 import { rulePhases, WorkflowRules } from "../workflow/rules.ts";
-import { localWorkflowRules } from "../workflow/sources.ts";
+import { projectWorkflowRules } from "../workflow/sources.ts";
 import {
   LifecycleOutcome,
   LifecycleRequest,
@@ -1753,7 +1753,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           const { resolvedRules, goalInstanceId, onKanbanBoard, reportSnapshot, workspace } =
             yield* Effect.all(
               {
-                resolvedRules: localWorkflowRules(project, skillset.skills).pipe(
+                resolvedRules: projectWorkflowRules(project).pipe(
                   Effect.provideContext(workflowRuleContext),
                   Effect.flatMap((localRules) =>
                     Effect.map(

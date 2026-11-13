@@ -1,5 +1,4 @@
 import { isTruthy } from "../truthy.ts";
-import { SkillScope } from "../skills/contracts.ts";
 import {
   Array as EffectArray,
   HashMap,
@@ -38,11 +37,6 @@ export const rulePhases = {
 export const RuleSource = Schema.TaggedUnion({
   builtin: { name: Schema.String },
   project: { path: Schema.String, contentHash: Schema.String },
-  skill: {
-    name: Schema.String,
-    scope: SkillScope,
-    contentHash: Schema.String,
-  },
 });
 export type RuleSource = typeof RuleSource.Type;
 
@@ -62,7 +56,7 @@ export type WorkflowRule = typeof WorkflowRule.Type;
 export interface RuleQuery {
   readonly phases: ReadonlyArray<RulePhase>;
   readonly text: string;
-  /** Additional project or skill rules. Built-in ids cannot be overridden. */
+  /** The project's own rules. Built-in ids cannot be overridden. */
   readonly rules?: readonly WorkflowRule[];
   readonly limit?: number;
 }
