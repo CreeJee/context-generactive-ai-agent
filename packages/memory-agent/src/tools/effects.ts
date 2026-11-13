@@ -42,6 +42,7 @@ export const builtinToolEffects = {
   read_report_item: "read",
   start_new_goal: "effectful",
   update_goal: "effectful",
+  edit_goal: "effectful",
   update_plan: "effectful",
   edit_plan: "effectful",
   close_plan: "effectful",

@@ -61,6 +61,7 @@ import {
 } from "./contracts.ts";
 import { notStartedStatus, validatePlanDependencies } from "./plan-schedule.ts";
 import { validateStepOutcomes } from "./step-outcomes.ts";
+import { applyGoalEdits, type EditGoal } from "./goal-edit.ts";
 import {
   BoardEditPlan,
   BoardEditRefused,
@@ -815,6 +816,59 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         ORDER BY id DESC LIMIT 1`,
     });
 
+    /** The next Goal version `input` makes of the current state, with the phase it moves to. */
+    const reviseGoal = (sessionId: string, current: WorkflowState, input: UpdateGoal) =>
+      Effect.gen(function* () {
+        const now = yield* nowIso;
+        // Only the first Goal in a new session is unambiguously new. A legacy Goal
+        // without a recorded identity stays unbound; guessing it from text is unsafe.
+        yield* Effect.when(
+          Effect.flatMap(crypto.uuidV4(), (goalInstanceId) =>
+            insertGoalIdentity(sessionId, goalInstanceId, now),
+          ),
+          Effect.succeed(current.goal === null),
+        );
+        const goal: GoalArtifact = {
+          ...input,
+          evidence: [],
+          verification: verificationDefault,
+          version: (current.goal?.version ?? 0) + 1,
+          updatedAt: now,
+        };
+        // A kanban board keeps executing: its orchestrator classifies each card against the new
+        // Goal instead (docs/kanban-orchestration.md "식별자와 Goal 변경").
+        const { standing } = goalTransitions.GoalEdited(
+          goalState(current),
+          GoalEvent.GoalEdited({ status: input.status, kanban: yield* kanbanBoard(sessionId) }),
+        );
+        const revised = withStanding(
+          {
+            ...current,
+            goal,
+            ledger: [
+              ...current.ledger,
+              event(current, "goal_updated", `goal v${goal.version} (${goal.status})`, now),
+            ],
+          },
+          standing,
+          now,
+        );
+        return revised.phase === current.phase
+          ? revised
+          : {
+              ...revised,
+              ledger: [
+                ...revised.ledger,
+                event(
+                  revised,
+                  "phase_changed",
+                  `${current.phase} -> ${revised.phase} (goal revised)`,
+                  now,
+                ),
+              ],
+            };
+      });
+
     return {
       get: (sessionId: string) => persisted(get(sessionId)),
       /** The session's current Goal as it stood at `version`; none when no revision holds it. */
@@ -1027,57 +1081,17 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
       ),
 
       updateGoal: (sessionId: string, input: UpdateGoal) =>
+        change(sessionId, (current) => reviseGoal(sessionId, current, input)),
+
+      /**
+       * Applies a run's small Goal edits in order to the Goal version it read and saves the result
+       * as one next version, as {@link updateGoal} would save it. A refused edit saves none of them.
+       */
+      editGoal: (sessionId: string, input: EditGoal) =>
         change(sessionId, (current) =>
-          Effect.gen(function* () {
-            const now = yield* nowIso;
-            // Only the first Goal in a new session is unambiguously new. A legacy Goal
-            // without a recorded identity stays unbound; guessing it from text is unsafe.
-            yield* Effect.when(
-              Effect.flatMap(crypto.uuidV4(), (goalInstanceId) =>
-                insertGoalIdentity(sessionId, goalInstanceId, now),
-              ),
-              Effect.succeed(current.goal === null),
-            );
-            const goal: GoalArtifact = {
-              ...input,
-              evidence: [],
-              verification: verificationDefault,
-              version: (current.goal?.version ?? 0) + 1,
-              updatedAt: now,
-            };
-            // A kanban board keeps executing: its orchestrator classifies each card against the new
-            // Goal instead (docs/kanban-orchestration.md "식별자와 Goal 변경").
-            const { standing } = goalTransitions.GoalEdited(
-              goalState(current),
-              GoalEvent.GoalEdited({ status: input.status, kanban: yield* kanbanBoard(sessionId) }),
-            );
-            const revised = withStanding(
-              {
-                ...current,
-                goal,
-                ledger: [
-                  ...current.ledger,
-                  event(current, "goal_updated", `goal v${goal.version} (${goal.status})`, now),
-                ],
-              },
-              standing,
-              now,
-            );
-            return revised.phase === current.phase
-              ? revised
-              : {
-                  ...revised,
-                  ledger: [
-                    ...revised.ledger,
-                    event(
-                      revised,
-                      "phase_changed",
-                      `${current.phase} -> ${revised.phase} (goal revised)`,
-                      now,
-                    ),
-                  ],
-                };
-          }),
+          Effect.flatMap(applyGoalEdits(current.goal, input), (goal) =>
+            reviseGoal(sessionId, current, goal),
+          ),
         ),
 
       updatePlan: (sessionId: string, input: UpdatePlan, author?: BoardAuthor) =>

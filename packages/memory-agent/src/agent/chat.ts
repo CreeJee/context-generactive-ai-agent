@@ -387,6 +387,7 @@ const workflowReadToolNames = HashSet.fromIterable([
   "kagi_search",
   "kagi_extract",
   "update_goal",
+  "edit_goal",
   // Explicit workflow artifact action, not a project mutation grant. The owner
   // still requires a quiescent session and never exempts the invoking live run.
   "start_new_goal",

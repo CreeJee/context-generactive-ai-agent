@@ -18,6 +18,7 @@ import { WorkflowExecution } from "./execution.ts";
 import { BoardAuthor, stepProgressStatus } from "./card.ts";
 import { cardCapabilities } from "./card-capabilities.ts";
 import { EditPlan, type GoalOutcome } from "./contracts.ts";
+import { EditGoal } from "./goal-edit.ts";
 import {
   PlanDependencyIssue,
   planDependencyIssues,
@@ -43,8 +44,19 @@ const startNewGoal = {
 const updateGoal = {
   name: "update_goal",
   description:
-    "Save the session's canonical Goal artifact. Use after discovering or revising the problem, outcomes, constraints, assumptions, non-goals, or blocking questions. This creates the next version. Reflect explicit user decisions, including an authorized change to implementation scope, without asking for the same approval again. Never remove constraints or non-goals merely to make execution possible. Revising a Goal while its Plan runs returns the workflow to shaping, unless a kanban board runs it; synchronize the Plan with the new Goal before running it is confirmed.",
+    "Save the whole canonical Goal artifact. Use to write a Goal or rewrite most of it; to change a few parts use edit_goal, which does not resend the Goal. Use after discovering or revising the problem, outcomes, constraints, assumptions, non-goals, or blocking questions. This creates the next version. Reflect explicit user decisions, including an authorized change to implementation scope, without asking for the same approval again. Never remove constraints or non-goals merely to make execution possible. Revising a Goal while its Plan runs returns the workflow to shaping, unless a kanban board runs it; synchronize the Plan with the new Goal before running it is confirmed.",
   parameters: UpdateGoal,
+} as const;
+
+const editGoal = {
+  name: "edit_goal",
+  description: `Change some parts of the current Goal without resending it. goalVersion is the Goal version you last read; a newer Goal refuses the call with goal_version_conflict. The edits apply in order and save as one next Goal version, with the same effects as update_goal; a refused edit saves none of them and names its 0-based position. edits[].action picks the change:
+- set_statement, set_status (draft or active; otherwise a draft stays draft and any other Goal becomes active).
+- add_outcome, edit_outcome (new text, same meaning), remove_outcome: an outcome by id. Give a changed meaning a new id with remove_outcome and add_outcome.
+- add_item, edit_item, remove_item: an item of list constraints, nonGoals or assumptions, named by its exact current text.
+- add_question, edit_question (question and/or blocking), remove_question: an open question by id.
+Never call this in parallel with update_goal or edit_goal.`,
+  parameters: EditGoal,
 } as const;
 
 const updatePlan = {
@@ -72,7 +84,13 @@ const closePlan = {
   parameters: ClosePlanInput,
 } as const;
 
-type WorkflowTool = "startNewGoal" | "updateGoal" | "updatePlan" | "editPlan" | "closePlan";
+type WorkflowTool =
+  | "startNewGoal"
+  | "updateGoal"
+  | "editGoal"
+  | "updatePlan"
+  | "editPlan"
+  | "closePlan";
 
 /**
  * What a Plan save answers: the saved version and each step's id, title, status and dependencies.
@@ -99,8 +117,8 @@ const savedPlan = ({ phase, plan }: WorkflowState) => ({
 
 /** The workflow tools each phase offers, in the order the model sees them. */
 const phaseTools = {
-  shaping: ["updateGoal", "updatePlan", "editPlan", "closePlan", "startNewGoal"],
-  running: ["updateGoal", "updatePlan", "editPlan", "closePlan"],
+  shaping: ["updateGoal", "editGoal", "updatePlan", "editPlan", "closePlan", "startNewGoal"],
+  running: ["updateGoal", "editGoal", "updatePlan", "editPlan", "closePlan"],
   completed: ["startNewGoal"],
   chat: [],
 } as const satisfies Record<WorkflowPhase, ReadonlyArray<WorkflowTool>>;
@@ -149,6 +167,28 @@ const make = Effect.gen(function* () {
                 goalInstanceId,
               })),
             ),
+          ),
+          Effect.provideContext(runtime),
+        ),
+
+      // The edited parts are what the call sent, so only the saved version answers it.
+      editGoal: (input: EditGoal) =>
+        Effect.flatMap(Workflows, (workflows) => workflows.editGoal(sessionId, input)).pipe(
+          published,
+          Effect.flatMap((state) =>
+            Effect.flatMap(Workflows, (workflows) =>
+              Effect.map(workflows.goalInstanceId(sessionId), (goalInstanceId) => ({
+                phase: state.phase,
+                goal:
+                  state.goal === null
+                    ? null
+                    : { version: state.goal.version, status: state.goal.status },
+                goalInstanceId,
+              })),
+            ),
+          ),
+          Effect.catchTag("GoalEditRefused", ({ reason, edit }) =>
+            Effect.succeed({ error: "goal_edit_refused" as const, reason, edit }),
           ),
           Effect.provideContext(runtime),
         ),
@@ -218,6 +258,7 @@ const make = Effect.gen(function* () {
       const tools = {
         startNewGoal: runTool({ ...startNewGoal, handler: calls.startNewGoal }),
         updateGoal: runTool({ ...updateGoal, handler: calls.updateGoal }),
+        editGoal: runTool({ ...editGoal, handler: calls.editGoal }),
         updatePlan: runTool({ ...updatePlan, handler: calls.updatePlan }),
         editPlan: runTool({ ...editPlan, handler: calls.editPlan }),
         closePlan: runTool({ ...closePlan, handler: calls.closePlan }),
@@ -326,7 +367,7 @@ Current Goal instance ID: ${goalInstanceId ?? "(none; legacy/unbound)"}. For sta
 Goal and Plan are durable artifacts, not substitutes for a conversational answer.
 Use only the workflow artifact tools available in this phase, and update an artifact when the user's decisions materially change it.
 Never claim an artifact was stored unless its update tool completed.
-When an explicit user decision changes saved Goal constraints or non-goals, persist that decision with update_goal before proceeding; do not treat an artifact you can update as an external dependency or ask the user to use an unverified Goal editor. Do not ask again for an approval already explicitly given, and never infer permission from a generic resume request. While the Plan runs, update_goal returns the workflow to shaping unless a kanban board runs it. Synchronize the Plan with the revised Goal and wait until running it is confirmed.
+When an explicit user decision changes saved Goal constraints or non-goals, persist that decision with edit_goal (or update_goal) before proceeding; do not treat an artifact you can update as an external dependency or ask the user to use an unverified Goal editor. Do not ask again for an approval already explicitly given, and never infer permission from a generic resume request. While the Plan runs, a Goal revision returns the workflow to shaping unless a kanban board runs it. Synchronize the Plan with the revised Goal and wait until running it is confirmed.
 Applicable workflow rules (reference these ids from Plan steps; do not copy their text into the artifact):
 ${applicableRules || "(none)"}${resolved.degraded.includes("embedding") ? "\nOptional semantic rule retrieval was unavailable; required metadata rules still apply." : ""}${resolved.degraded.includes("source") ? "\nOne or more optional structured rule sources were invalid or unreadable and were skipped." : ""}`;
 

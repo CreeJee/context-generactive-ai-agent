@@ -4,6 +4,7 @@ import type { RunTool } from "../tools/run-tool.ts";
 const parentToolNames = HashSet.fromIterable([
   "start_new_goal",
   "update_goal",
+  "edit_goal",
   "update_plan",
   "edit_plan",
   "close_plan",

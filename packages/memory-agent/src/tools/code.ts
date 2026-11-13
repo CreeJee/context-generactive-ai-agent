@@ -73,6 +73,7 @@ const programCallable = {
   read_report_item: true,
   start_new_goal: false,
   update_goal: false,
+  edit_goal: false,
   update_plan: false,
   edit_plan: false,
   close_plan: false,

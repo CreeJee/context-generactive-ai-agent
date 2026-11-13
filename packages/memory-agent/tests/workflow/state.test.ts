@@ -388,6 +388,62 @@ testAgent()("Workflows", (it) => {
     }),
   );
 
+  it.effect("edits parts of the Goal through edit_goal as one next version", () =>
+    Effect.gen(function* () {
+      const id = yield* freshSession;
+      const workflows = yield* Workflows;
+      yield* workflows.move(id, "goal");
+      yield* workflows.updateGoal(id, goal);
+      const editGoal = yield* workflowTool(id, "shaping", "edit_goal");
+      expect(
+        yield* editGoal({
+          goalVersion: 1,
+          edits: [
+            { action: "add_outcome", outcome: { id: "O2", text: "The page shows the Plan" } },
+            {
+              action: "edit_item",
+              list: "constraints",
+              text: "Keep prompts thin",
+              newText: "No prompt over 2KB",
+            },
+            { action: "remove_item", list: "nonGoals", text: "Automatic execution" },
+            {
+              action: "add_question",
+              question: { id: "q1", question: "Which page?", blocking: false },
+            },
+            { action: "edit_question", questionId: "q1", blocking: true },
+          ],
+        }),
+      ).toMatchObject({ phase: "shaping", goal: { version: 2, status: "active" } });
+      expect((yield* workflows.get(id)).goal).toMatchObject({
+        version: 2,
+        statement: goal.statement,
+        outcomes: [goal.outcomes[0], { id: "O2", text: "The page shows the Plan" }],
+        constraints: ["No prompt over 2KB"],
+        nonGoals: [],
+        assumptions: goal.assumptions,
+        openQuestions: [{ id: "q1", question: "Which page?", blocking: true }],
+      });
+      // A refused edit saves none of the call's edits and names its position.
+      expect(
+        yield* editGoal({
+          goalVersion: 2,
+          edits: [
+            { action: "set_statement", statement: "Changed" },
+            { action: "remove_outcome", outcomeId: "O9" },
+          ],
+        }),
+      ).toEqual({ error: "goal_edit_refused", reason: "outcome_missing", edit: 1 });
+      expect(
+        yield* editGoal({ goalVersion: 1, edits: [{ action: "set_status", status: "draft" }] }),
+      ).toEqual({ error: "goal_edit_refused", reason: "goal_version_conflict", edit: null });
+      expect((yield* workflows.get(id)).goal).toMatchObject({
+        version: 2,
+        statement: goal.statement,
+      });
+    }),
+  );
+
   it.effect("keeps an older Plan visibly tied to its Goal version", () =>
     Effect.gen(function* () {
       const id = yield* freshSession;

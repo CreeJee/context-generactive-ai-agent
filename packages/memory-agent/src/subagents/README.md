@@ -20,7 +20,7 @@
 - `SubagentBinding` — subagent 도구 호출이 속한 부모 run 정보(project, sessionId, runId, selection, abortSignal, tools, systemPrompts, gated, origin). `origin`은 자식 지시가 부모의 subagent 호출이 아닌 곳에서 올 때의 출처 node다(카드 에이전트와 검증자의 Plan 버전 node).
 - `SubagentReceipt` — 도구 호출이 부모 모델에게 돌려주는 receipt(status, subagentId, agent, taskId, attemptId, delivery).
 - `SubagentReport` — `get_subagent_reports`가 돌려주는 보고서 union 타입이며 `SubagentReceipt`와 `SubagentStatus`를 기반으로 한다. 답이 있는 보고서는 자식 세션의 진행 메모(`memo`, `memoView` 모양)도 담는다.
-- `childRunTools` (`role.ts`) — `RunTool` 배열에서 부모 전용 도구(`start_new_goal`, `update_goal`, `update_plan`, `edit_plan`, `close_plan`, `delegate_to_agent`, `cancel_background_task`, `get_background_result`, `update_memo`)를 뺀다. 부모의 `update_memo`는 부모 세션의 메모를 쓰므로, 자식은 자기 세션에 묶인 `update_memo`를 따로 받는다.
+- `childRunTools` (`role.ts`) — `RunTool` 배열에서 부모 전용 도구(`start_new_goal`, `update_goal`, `edit_goal`, `update_plan`, `edit_plan`, `close_plan`, `delegate_to_agent`, `cancel_background_task`, `get_background_result`, `update_memo`)를 뺀다. 부모의 `update_memo`는 부모 세션의 메모를 쓰므로, 자식은 자기 세션에 묶인 `update_memo`를 따로 받는다.
 - `SubagentStatus` (`subagent-state.ts`) — `"running" | "completed" | "failed" | "cancelled" | "interrupted"` Schema.
 - `SubagentView` (`subagent-state.ts`) — 채팅 화면이 보는 하위 에이전트 상태 Schema(id, name(일회성이면 null), status, lastTask, lastAnswer, error, createdAt, updatedAt).
 - 내부 모델 도구 정의(export 아님) — `run_subagent`(task, agent, instructions, ownership, acceptanceCriteria), `resume_subagent`(taskId, expectedAttemptId, confirmUncertain), `get_subagent_reports`(attempts 1~100).
