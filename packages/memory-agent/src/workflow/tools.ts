@@ -134,6 +134,18 @@ const make = Effect.gen(function* () {
       BoardAuthor.cases.Orchestrator.make({ runId, toolCallId: call.toolCallId });
     const published = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       Effect.tap(effect, () => events.publishSession(sessionId, "run-state"));
+    /**
+     * What a Goal save answers: the saved version and status and the Goal instance. The Goal text is
+     * what the call itself sent, and the workflow instructions carry it in full.
+     */
+    const savedGoal = ({ phase, goal }: WorkflowState) =>
+      Effect.flatMap(Workflows, (workflows) =>
+        Effect.map(workflows.goalInstanceId(sessionId), (goalInstanceId) => ({
+          phase,
+          goal: goal === null ? null : { version: goal.version, status: goal.status },
+          goalInstanceId,
+        })),
+      );
     return {
       // A run only asks; the owner applies it once the run completes.
       startNewGoal: (input: StartNewGoal) =>
@@ -159,34 +171,14 @@ const make = Effect.gen(function* () {
       updateGoal: (input: UpdateGoal) =>
         Effect.flatMap(Workflows, (workflows) => workflows.updateGoal(sessionId, input)).pipe(
           published,
-          Effect.flatMap((state) =>
-            Effect.flatMap(Workflows, (workflows) =>
-              Effect.map(workflows.goalInstanceId(sessionId), (goalInstanceId) => ({
-                phase: state.phase,
-                goal: state.goal,
-                goalInstanceId,
-              })),
-            ),
-          ),
+          Effect.flatMap(savedGoal),
           Effect.provideContext(runtime),
         ),
 
-      // The edited parts are what the call sent, so only the saved version answers it.
       editGoal: (input: EditGoal) =>
         Effect.flatMap(Workflows, (workflows) => workflows.editGoal(sessionId, input)).pipe(
           published,
-          Effect.flatMap((state) =>
-            Effect.flatMap(Workflows, (workflows) =>
-              Effect.map(workflows.goalInstanceId(sessionId), (goalInstanceId) => ({
-                phase: state.phase,
-                goal:
-                  state.goal === null
-                    ? null
-                    : { version: state.goal.version, status: state.goal.status },
-                goalInstanceId,
-              })),
-            ),
-          ),
+          Effect.flatMap(savedGoal),
           Effect.catchTag("GoalEditRefused", ({ reason, edit }) =>
             Effect.succeed({ error: "goal_edit_refused" as const, reason, edit }),
           ),

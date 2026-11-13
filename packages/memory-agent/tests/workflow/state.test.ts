@@ -630,10 +630,11 @@ testAgent()("WorkflowTools live refresh", (it) => {
         const updateGoal = yield* workflowTool(id, "running", "update_goal");
         expect(yield* updateGoal({ ...goal, nonGoals: [] })).toMatchObject({
           phase: "shaping",
-          goal: { version: 2, nonGoals: [] },
+          goal: { version: 2 },
           goalInstanceId: identity,
         });
         const revised = yield* workflows.get(id);
+        expect(revised.goal?.nonGoals).toEqual([]);
         expect(revised.plan).toEqual(before.plan);
         expect(revised.goal?.verification.status).toBe("not_run");
         expect(revised.ledger.at(-1)).toMatchObject({
