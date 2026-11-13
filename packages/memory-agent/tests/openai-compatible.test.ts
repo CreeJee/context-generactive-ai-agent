@@ -399,6 +399,34 @@ describe("OpenAI compatible settings", () => {
       }),
     ),
   );
+  effectTest.effect("reads the context window each server publishes in its model list", () =>
+    Effect.gen(function* () {
+      const f = fixture(
+        nativeFetch(() =>
+          Effect.sync(() =>
+            Response.json({
+              data: [
+                { id: "vllm", owned_by: "vllm", max_model_len: 1_048_576 },
+                { id: "llamacpp", meta: { n_ctx: 65_536, n_ctx_train: 262_144 } },
+                { id: "openrouter", context_length: 200_000 },
+                { id: "plain" },
+                { id: "too-small", max_model_len: 512 },
+              ],
+            }),
+          ),
+        ),
+      );
+      yield* f.api.update(configuration);
+      expect(yield* f.api.listModels).toEqual([
+        { id: "vllm", contextWindow: 1_048_576 },
+        // The context a request slot serves, not the length the model was trained on.
+        { id: "llamacpp", contextWindow: 65_536 },
+        { id: "openrouter", contextWindow: 200_000 },
+        { id: "plain" },
+        { id: "too-small" },
+      ]);
+    }),
+  );
   effectTest.effect(
     "keeps models without the image input setting off for a list without the field",
     () =>
@@ -484,7 +512,7 @@ describe("OpenAI compatible settings", () => {
         ),
       );
       yield* f.api.update(configuration);
-      expect(yield* f.api.listModels).toEqual([configuration.model]);
+      expect(yield* f.api.listModels).toEqual([{ id: configuration.model }]);
       expect((yield* f.api.services.models.list)[0]?.supportedReasoningEfforts).toEqual([
         "default",
       ]);
@@ -1092,7 +1120,7 @@ describe("OpenAI compatible settings", () => {
             const f = fixture();
             const settings = { ...configuration, baseUrl: `${url}/v1` };
             yield* f.api.update(settings);
-            expect(yield* f.api.listModels).toEqual(["discovered"]);
+            expect(yield* f.api.listModels).toEqual([{ id: "discovered" }]);
             const selection = yield* f.api.services.models.select(configuration.model);
             const toolkit = Toolkit.make(
               Tool.dynamic("lookup", {

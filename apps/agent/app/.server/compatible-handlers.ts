@@ -51,9 +51,7 @@ export const compatibleAccountAction = (command: CompatibleAccountCommand) =>
           remove: ({ accountId }) => Effect.map(settings.remove(accountId), accountsView),
           test: ({ accountId, modelId }) => settings.test(accountId, modelId),
           discover: ({ accountId }) =>
-            Effect.map(settings.discover(accountId), (ids) => ({
-              models: ids.map((id) => ({ id })),
-            })),
+            Effect.map(settings.discover(accountId), (models) => ({ models })),
         }),
       ),
     ),

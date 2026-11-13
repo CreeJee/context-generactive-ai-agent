@@ -69,6 +69,8 @@ export const CompatibleModelList = Schema.Struct({
       id: Schema.String,
       /** Whether the endpoint advertises image input for the model, when it says. */
       imageInput: Schema.optional(Schema.Boolean),
+      /** The context window, in tokens, the endpoint publishes for the model, when it says. */
+      contextWindow: Schema.optional(Schema.Int),
     }),
   ),
 });

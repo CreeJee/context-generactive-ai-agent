@@ -20,6 +20,12 @@ export const CompatibleModelPage = Schema.Struct({
           input_modalities: Schema.optional(Schema.Array(Schema.String)),
         }),
       ),
+      /** The longest request vLLM serves for the model. */
+      max_model_len: Schema.optional(Schema.Unknown),
+      /** llama.cpp's server details; `n_ctx` is the context one request slot serves. */
+      meta: Schema.optional(Schema.Unknown),
+      /** The model's context length, as OpenRouter publishes it. */
+      context_length: Schema.optional(Schema.Unknown),
     }),
   ),
 });
@@ -103,3 +109,24 @@ export const readCompatibleImageInput =
       ),
       Option.getOrUndefined,
     );
+
+/** A context window a model can be registered with; a value outside it says nothing. */
+const ListedContextWindow = Schema.Int.pipe(
+  Schema.check(Schema.isGreaterThanOrEqualTo(1024), Schema.isLessThanOrEqualTo(10_000_000)),
+);
+const decodeContextWindow = Schema.decodeUnknownOption(ListedContextWindow);
+const decodeLlamaCppMeta = Schema.decodeUnknownOption(
+  Schema.Struct({ n_ctx: ListedContextWindow }),
+);
+
+/**
+ * The context window the model list publishes for an entry: vLLM's `max_model_len`, llama.cpp's
+ * `meta.n_ctx` (not `n_ctx_train`, which the server may not serve), or OpenRouter's
+ * `context_length`. An entry without these fields reports nothing.
+ */
+export const readCompatibleContextWindow = (entry: CompatibleModelEntry): number | undefined =>
+  decodeContextWindow(entry.max_model_len).pipe(
+    Option.orElse(() => Option.map(decodeLlamaCppMeta(entry.meta), ({ n_ctx }) => n_ctx)),
+    Option.orElse(() => decodeContextWindow(entry.context_length)),
+    Option.getOrUndefined,
+  );

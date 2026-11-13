@@ -49,6 +49,7 @@ import {
 } from "./openai-compatible-config.ts";
 import {
   CompatibleModelPage,
+  readCompatibleContextWindow,
   readCompatibleImageInput,
   readCompatibleReasoning,
 } from "./compatible-model-discovery.ts";
@@ -500,8 +501,9 @@ function makeOpenAICompatibleSettingsBody(
       ),
     );
   /**
-   * The endpoint's model list, for suggestions when registering a model. Reasoning efforts it
-   * publishes for registered models are saved with them.
+   * The endpoint's model list, for suggestions when registering a model, with the context window
+   * the list publishes for each. Reasoning efforts it publishes for registered models are saved
+   * with them.
    */
   const discover = (id: string) =>
     Effect.flatMap(
@@ -518,7 +520,10 @@ function makeOpenAICompatibleSettingsBody(
       ({ page, requested }) =>
         updates.withPermit(
           Effect.gen(function* () {
-            const ids = page.data.map((entry) => entry.id);
+            const listed = page.data.map((entry) => ({
+              id: entry.id,
+              ...optionalProperty("contextWindow", readCompatibleContextWindow(entry)),
+            }));
             const stored = yield* config.read;
             const all = compatibleAccountsOf(stored);
             yield* Option.match(
@@ -577,7 +582,7 @@ function makeOpenAICompatibleSettingsBody(
                   ),
               },
             );
-            return ids;
+            return listed;
           }),
         ),
     );
