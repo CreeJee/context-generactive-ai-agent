@@ -279,25 +279,14 @@ testAgent({ testProvider: {} })("skills in a run", (it) => {
         const found = yield* send(session, `${session}:find`, 'call find_skill {"query":"greet"}');
         expect(found.invocation?.system.join("\n")).not.toContain("Greet warmly.");
         expect(found.results.join("\n")).toContain("Greet warmly.");
-        // The user's message gets the skills that may fit it, right after it.
-        expect(without.invocation?.history.at(-1)).not.toHaveProperty("orchestrator");
-        expect(found.invocation?.history.at(-1)).toMatchObject({
-          role: "user",
-          content: expect.stringContaining("- greet (project): Greet warmly."),
-          orchestrator: { next: "run", skills: ["greet"] },
-        });
+        // Nothing is added after the user's message: the model finds skills when it searches.
+        expect(found.invocation?.history.at(-1)).not.toHaveProperty("orchestrator");
         const withSkill = yield* send(
           session,
           `${session}:with`,
           'call read_skill {"name":"greet"}',
         );
         expect(withSkill.results.join("\n")).toContain("Say hello in Korean.");
-        // One for each message the user sent with the skill there, none for a later model step.
-        expect(
-          withSkill.invocation?.history.filter(
-            (message) => message.role === "user" && message.orchestrator?.skills !== undefined,
-          ),
-        ).toHaveLength(2);
       }),
   );
 });

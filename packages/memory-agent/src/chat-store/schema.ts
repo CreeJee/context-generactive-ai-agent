@@ -50,7 +50,10 @@ export const OrchestratorNote = Schema.Struct({
   next: Schema.Literals(["results", "plan", "board", "run"]),
   /** The background tasks and subagents whose end the message reports. */
   ended: Schema.Struct({ background: Schema.Int, subagent: Schema.Int }),
-  /** The skills it suggests for the user's message before it, by name. */
+  /**
+   * The skills it suggested for the user's message before it, by name. Only messages stored while
+   * the app suggested skills after every message (2026-11-13) have it; none is made any more.
+   */
   skills: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 export type OrchestratorNote = typeof OrchestratorNote.Type;
