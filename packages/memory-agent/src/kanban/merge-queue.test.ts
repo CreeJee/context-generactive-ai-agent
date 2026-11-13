@@ -13,7 +13,12 @@ import {
   waitForCards,
   type KanbanFixture,
 } from "../testing/kanban.ts";
-import { CardAgentOutcome, CardVerdict, type CardAgentRun } from "./card-agent.ts";
+import {
+  CardAgentOutcome,
+  CardVerdict,
+  type CardAgentRun,
+  type GoalConflictResolution,
+} from "./card-agent.ts";
 import { GoalMergeState, GoalSchedules } from "./goal-schedules.ts";
 import {
   DecisionAnswer,
@@ -123,7 +128,119 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "asks a person when the user's branch conflicts with the Goal branch",
+    "has an agent resolve a conflict with the user's branch, then checks and merges the result",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const write = yield* writer;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const gate = yield* Deferred.make<void>();
+        const started = yield* Deferred.make<void>();
+        const asked = yield* Ref.make(Arr.empty<GoalConflictResolution>());
+        const checked = yield* Ref.make(Arr.empty<string>());
+        const readHead = yield* headReader;
+        const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
+          agent: (agent) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(started, undefined);
+              yield* Deferred.await(gate);
+              yield* write(agent, "a.txt", "card\n");
+              return finished;
+            }),
+          resolveConflict: (input) =>
+            Effect.gen(function* () {
+              yield* Ref.update(asked, Arr.append(input));
+              yield* fs
+                .writeFileString(path.join(input.checkout.toolRoot, "a.txt"), "card\nuser\n")
+                .pipe(Effect.orDie);
+              return finished;
+            }),
+          verifyGoal: (input) =>
+            Effect.gen(function* () {
+              yield* Ref.update(checked, Arr.append(yield* readHead(input.checkout.toolRoot)));
+              return passed;
+            }),
+        });
+        yield* run(
+          Effect.gen(function* () {
+            const board = yield* executingPlan(fixture, [card("a1")]);
+            yield* (yield* GoalSchedules).setProtectedBranches(board.projectId, []);
+            yield* (yield* KanbanOrchestrator).start(board.sessionId);
+            yield* Deferred.await(started);
+            const user = yield* userCommit(fixture, "a.txt", "user\n");
+            yield* Deferred.succeed(gate, undefined);
+            yield* eventually(mergeOf(board.goalInstanceId), mergeIs("Merged"));
+            expect(yield* (yield* HumanDecisions).pending(board.sessionId)).toEqual([]);
+            // The resolved merge holds the user's commit, was checked, and is what main is now.
+            const main = yield* git(fixture.project, "rev-parse", "main");
+            yield* git(fixture.project, "merge-base", "--is-ancestor", user, main);
+            expect(yield* Ref.get(checked)).toContain(main);
+            expect(yield* git(fixture.project, "show", "main:a.txt")).toBe("card\nuser");
+          }),
+        );
+        const [resolution, ...more] = yield* Ref.get(asked);
+        expect(more).toEqual([]);
+        expect(resolution).toMatchObject({ targetBranch: "main", files: ["a.txt"], notes: [] });
+      }),
+    gitTimeout,
+  );
+
+  it.effect(
+    "gives the agent three tries and then asks a person when conflict markers remain",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const write = yield* writer;
+        const gate = yield* Deferred.make<void>();
+        const started = yield* Deferred.make<void>();
+        const notes = yield* Ref.make(Arr.empty<ReadonlyArray<string>>());
+        const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
+          agent: (agent) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(started, undefined);
+              yield* Deferred.await(gate);
+              yield* write(agent, "a.txt", "card\n");
+              return finished;
+            }),
+          // Reports done without touching the markers.
+          resolveConflict: (input) =>
+            Effect.as(Ref.update(notes, Arr.append(input.notes)), finished),
+        });
+        yield* run(
+          Effect.gen(function* () {
+            const board = yield* executingPlan(fixture, [card("a1")]);
+            yield* (yield* GoalSchedules).setProtectedBranches(board.projectId, []);
+            yield* (yield* KanbanOrchestrator).start(board.sessionId);
+            yield* Deferred.await(started);
+            const user = yield* userCommit(fixture, "a.txt", "user\n");
+            yield* Deferred.succeed(gate, undefined);
+            const [request] = yield* eventually(
+              (yield* HumanDecisions).pending(board.sessionId),
+              (pending) => pending.length > 0,
+            );
+            expect(request?.kind).toMatchObject({ _tag: "MergeConflict", files: ["a.txt"] });
+            yield* eventually(
+              mergeOf(board.goalInstanceId),
+              GoalMergeState.guards.AwaitingDecision,
+            );
+            // The unresolved merge was never committed: the Goal branch does not hold main.
+            expect(yield* git(fixture.project, "rev-parse", "main")).toBe(user);
+            expect(
+              yield* git(fixture.project, "merge-base", user, `ctx/goal/${board.goalInstanceId}`),
+            ).not.toBe(user);
+          }),
+        );
+        const tries = yield* Ref.get(notes);
+        expect(tries).toHaveLength(3);
+        expect(tries[0]).toEqual([]);
+        expect(tries[1]?.[0]).toContain("a.txt");
+      }),
+    gitTimeout,
+  );
+
+  it.effect(
+    "asks a person when the agent cannot resolve a conflict with the user's branch",
     () =>
       Effect.gen(function* () {
         const fixture = yield* kanbanFixture;

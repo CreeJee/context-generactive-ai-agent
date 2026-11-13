@@ -96,6 +96,31 @@ export class GoalVerifier extends Context.Service<
   { readonly verify: (input: GoalVerification) => Effect.Effect<CardVerdict> }
 >()("memory-agent/kanban/card-agent/GoalVerifier") {}
 
+/** A conflicted take-in of the user's branch, left in a checkout of the Goal branch. */
+export interface GoalConflictResolution {
+  readonly sessionId: string;
+  readonly projectId: string;
+  readonly goalInstanceId: string;
+  readonly goal: GoalArtifact;
+  /** The user's branch whose changes meet the Goal's. */
+  readonly targetBranch: string;
+  /** Files git left with conflict markers. */
+  readonly files: readonly string[];
+  /** The checkout holding the unfinished merge. */
+  readonly checkout: CardWorktree;
+  /** What the owner found after an earlier try in the same checkout. */
+  readonly notes: readonly string[];
+}
+
+/**
+ * Resolves the conflicts of taking the user's branch into the Goal branch. The owner commits the
+ * merge afterwards, and the Goal-level check runs on it before the user's branch moves.
+ */
+export class GoalConflictResolver extends Context.Service<
+  GoalConflictResolver,
+  { readonly resolve: (input: GoalConflictResolution) => Effect.Effect<CardAgentOutcome> }
+>()("memory-agent/kanban/card-agent/GoalConflictResolver") {}
+
 /** One outcome of the Goal, once every card serving it is done. */
 export interface OutcomeVerification {
   readonly sessionId: string;

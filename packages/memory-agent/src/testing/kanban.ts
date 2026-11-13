@@ -11,16 +11,19 @@ import { canonicalPathEffect } from "../files/paths.ts";
 import { nodePlatformLayer } from "../runtime/node-platform.ts";
 import {
   CardAgent,
+  CardAgentOutcome,
   CardVerdict,
   CardVerifier,
+  GoalConflictResolver,
   GoalVerifier,
   OutcomeVerifier,
-  type CardAgentOutcome,
   type CardAgentRun,
   type CardVerification,
+  type GoalConflictResolution,
   type GoalVerification,
   type OutcomeVerification,
 } from "../kanban/card-agent.ts";
+import { CardFailure } from "../kanban/failures.ts";
 import { CardApprovalReviewer } from "../kanban/card-approval.ts";
 import { GoalOrder } from "../kanban/goal-order.ts";
 import { GoalSchedules } from "../kanban/goal-schedules.ts";
@@ -185,6 +188,19 @@ export const passingOutcomeVerifier = Layer.succeed(
   }),
 );
 
+/** A conflict resolver without a model: every conflict goes to a person. */
+export const unavailableConflictResolver = Layer.succeed(
+  GoalConflictResolver,
+  GoalConflictResolver.of({
+    resolve: () =>
+      Effect.succeed(
+        CardAgentOutcome.Failed({
+          failure: CardFailure.cases.Agent.make({ code: "model_selection_required" }),
+        }),
+      ),
+  }),
+);
+
 /** An auto mode reviewer that approves every card. */
 export const approvingCardReviewer = Layer.succeed(
   CardApprovalReviewer,
@@ -201,6 +217,7 @@ export const kanbanBoardOwner = (owner: {
   readonly verifier: Layer.Layer<CardVerifier>;
   readonly goalVerifier?: Layer.Layer<GoalVerifier>;
   readonly outcomeVerifier?: Layer.Layer<OutcomeVerifier>;
+  readonly conflictResolver?: Layer.Layer<GoalConflictResolver>;
   readonly cardReviewer?: Layer.Layer<CardApprovalReviewer>;
   readonly cores?: number;
 }) =>
@@ -215,6 +232,7 @@ export const kanbanBoardOwner = (owner: {
     Layer.provideMerge(owner.verifier),
     Layer.provideMerge(owner.goalVerifier ?? passingGoalVerifier),
     Layer.provideMerge(owner.outcomeVerifier ?? passingOutcomeVerifier),
+    Layer.provideMerge(owner.conflictResolver ?? unavailableConflictResolver),
     Layer.provideMerge(OutcomeLedger.layer),
     Layer.provideMerge(kanbanOwner(owner)),
   );
@@ -233,6 +251,8 @@ export const openKanbanOwner = Effect.fnUntraced(function* (
     readonly verify?: (input: CardVerification) => Effect.Effect<CardVerdict>;
     readonly verifyGoal?: (input: GoalVerification) => Effect.Effect<CardVerdict>;
     readonly verifyOutcome?: (input: OutcomeVerification) => Effect.Effect<CardVerdict>;
+    /** Resolves a conflict with the user's branch; without it every conflict goes to a person. */
+    readonly resolveConflict?: (input: GoalConflictResolution) => Effect.Effect<CardAgentOutcome>;
     /** The auto mode review of cards the planner added; approves them unless told otherwise. */
     readonly reviewCards?: CardApprovalReviewer["Service"]["review"];
     readonly cores?: number;
@@ -271,6 +291,13 @@ export const openKanbanOwner = Effect.fnUntraced(function* (
                 )),
           }),
         ),
+        conflictResolver:
+          options.resolveConflict === undefined
+            ? unavailableConflictResolver
+            : Layer.succeed(
+                GoalConflictResolver,
+                GoalConflictResolver.of({ resolve: options.resolveConflict }),
+              ),
         cardReviewer: Layer.succeed(
           CardApprovalReviewer,
           CardApprovalReviewer.of({ review: options.reviewCards ?? (() => Effect.succeedNone) }),

@@ -35,10 +35,12 @@ import {
   CardAgentOutcome,
   CardVerdict,
   CardVerifier,
+  GoalConflictResolver,
   GoalVerifier,
   OutcomeVerifier,
   type CardAgentRun,
   type CardVerification,
+  type GoalConflictResolution,
   type GoalVerification,
   type OutcomeVerification,
 } from "./card-agent.ts";
@@ -82,6 +84,15 @@ const outcomeVerifierInstructions = [
   "You check whether one outcome of a Goal is met, now that every card serving it is done. Your tools are rooted at the Goal's work; read its files and run its checks, but change nothing.",
   "- Judge the outcome itself, not only the cards' acceptance criteria: the cards are how the outcome was meant to be reached. When the outcome depends on tests or a build, run them with the code skill that runs them; when no saved skill covers a check, report it as not run, since you cannot save skills.",
   "- Call record_card_verdict exactly once before your final message: passed when the outcome is met, otherwise not passed with what is missing as the reason.",
+].join("\n");
+
+const conflictResolverInstructions = [
+  "You resolve merge conflicts on the Goal branch of a kanban board. The user's branch was merged into the Goal branch in the folder your tools are rooted at, and git stopped on conflicts in the listed files.",
+  "- Resolve every conflict block (the lines between <<<<<<<, ======= and >>>>>>>) so the Goal's work and the user's branch's changes both stay. When they cannot both stay, keep what the user's branch does and adapt the Goal's change to it.",
+  "- Remove every conflict marker, and change only what the resolution needs.",
+  "- Do not commit, abort the merge or otherwise change git state; the owner commits the merge after you finish. Read-only git commands (git status, git diff, git log, git show) are fine as a sh code skill.",
+  "- When the project's checks (tests, a build, a lint) have code skills that cover the files you changed, run them.",
+  "- Reply with a short report of how you resolved each file. If you cannot resolve one, say why; do not claim it is resolved.",
 ].join("\n");
 
 /** Where the MCP servers a card's agent or verifier calls look, beside their own guides. */
@@ -258,6 +269,37 @@ const make = Effect.gen(function* () {
     CardAgentOutcome.Failed({ failure: CardFailure.cases.Agent.make({ code }) });
   const unavailable = <E extends { readonly _tag: string }>(error: E) =>
     Effect.as(logFailure("Kanban card agent unavailable")(error), failed("unavailable"));
+  /** How a working subagent's run ended, as the board reads it. */
+  const endedAs = (outcome: Effect.Success<ReturnType<Subagents["Service"]["runAttempt"]>>) =>
+    Option.match(Option.fromNullishOr(outcome), {
+      onNone: () => failed("not_started"),
+      onSome: (ended) =>
+        Match.value(ended).pipe(
+          Match.discriminatorsExhaustive("status")({
+            completed: ({ answer }) => CardAgentOutcome.Finished({ report: answer }),
+            failed: () => failed("failed"),
+            cancelled: () => failed("cancelled"),
+            interrupted: () => failed("cancelled"),
+          }),
+        ),
+    });
+  /** The tools a working subagent gets in `project`: the card agent's, which the planner was told. */
+  const workTools = (
+    project: Project,
+    projectId: string,
+    sessionId: string,
+    mcp: { readonly tools: readonly RunTool[] },
+    skills: SkillToolset,
+  ) => [
+    ...allowed(cardAgentToolNames)([
+      ...fileTools.toolsFor(project),
+      ...outsideTools.toolsFor(project),
+      ...approvedTools.toolsFor(project, sessionId, "gate"),
+      ...evidenceTools(projectId, sessionId),
+      ...skills.tools,
+    ]),
+    ...mcp.tools,
+  ];
   const agent = CardAgent.of({
     run: Effect.fnUntraced(
       function* (run: CardAgentRun) {
@@ -289,16 +331,7 @@ const make = Effect.gen(function* () {
                 origin: Effect.succeed(origin),
                 runId: boardRunId(run.goalInstanceId, run.card.id, run.attemptNo),
                 selection: chosen,
-                tools: [
-                  ...allowed(cardAgentToolNames)([
-                    ...fileTools.toolsFor(project),
-                    ...outsideTools.toolsFor(project),
-                    ...approvedTools.toolsFor(project, run.sessionId, "gate"),
-                    ...skills.tools,
-                    ...evidenceTools(run.projectId, run.sessionId),
-                  ]),
-                  ...mcp.tools,
-                ],
+                tools: workTools(project, run.projectId, run.sessionId, mcp, skills),
                 systemPrompts: [
                   ...mcp.systemPrompts,
                   ...(skills.instructions === null ? [] : [skills.instructions]),
@@ -312,18 +345,7 @@ const make = Effect.gen(function* () {
               },
               (handle) => run.register({ runId: handle.chatRunId, traceAttemptId: handle.id }),
             );
-            return Option.match(Option.fromNullishOr(outcome), {
-              onNone: () => failed("not_started"),
-              onSome: (ended) =>
-                Match.value(ended).pipe(
-                  Match.discriminatorsExhaustive("status")({
-                    completed: ({ answer }) => CardAgentOutcome.Finished({ report: answer }),
-                    failed: () => failed("failed"),
-                    cancelled: () => failed("cancelled"),
-                    interrupted: () => failed("cancelled"),
-                  }),
-                ),
-            });
+            return endedAs(outcome);
           });
         return yield* Option.match(selection, {
           onNone: () => Effect.succeed(failed("model_selection_required")),
@@ -370,8 +392,8 @@ const make = Effect.gen(function* () {
             ...allowed(verifierToolNames)([
               ...fileTools.toolsFor(project),
               ...approvedTools.toolsFor(project, input.sessionId, "gate"),
-              ...skills.tools,
               ...evidenceTools(input.projectId, input.sessionId),
+              ...skills.tools,
             ]),
             ...mcp.tools,
             recorder.runTool,
@@ -478,21 +500,74 @@ const make = Effect.gen(function* () {
       instructions: outcomeVerifierInstructions,
     });
 
+  /** One run of its own per try: the checkout is the same, and the notes say what is left. */
+  const resolveConflict = Effect.fnUntraced(
+    function* (input: GoalConflictResolution) {
+      const id = yield* crypto.uuidV7();
+      const { project, mcp, skills, selection } = yield* cardSetting(
+        input.sessionId,
+        input.projectId,
+        input.checkout,
+        "executor",
+      );
+      const resolved = (chosen: Option.Option.Value<typeof selection>) =>
+        Effect.gen(function* () {
+          const origin = yield* planOrigin(input.sessionId);
+          const outcome = yield* subagents.runAttempt(
+            {
+              project,
+              sessionId: input.sessionId,
+              origin: Effect.succeed(origin),
+              runId: `${boardRunId(input.goalInstanceId, "goal", "merge")}:${id}`,
+              selection: chosen,
+              tools: workTools(project, input.projectId, input.sessionId, mcp, skills),
+              systemPrompts: [
+                ...mcp.systemPrompts,
+                ...(skills.instructions === null ? [] : [skills.instructions]),
+              ],
+              gated: mcp.gated,
+            },
+            {
+              agent: `goal-merge-${id}`,
+              message: [
+                `Goal: ${input.goal.statement}`,
+                `The user's branch ${input.targetBranch} was merged into the Goal branch and stopped on conflicts.`,
+                ...listed("Conflicted files", input.files),
+                ...listed("Since the last try", input.notes),
+              ].join("\n"),
+              instructions: conflictResolverInstructions,
+            },
+            () => Effect.void,
+          );
+          return endedAs(outcome);
+        });
+      return yield* Option.match(selection, {
+        onNone: () => Effect.succeed(failed("model_selection_required")),
+        onSome: resolved,
+      });
+    },
+    Effect.catch(unavailable),
+    // The resolver run's tool calls join this span's trace.
+    Effect.withSpan("CardAgent.resolveGoalConflict"),
+  );
+
   return {
     agent,
     verifier: CardVerifier.of({ verify }),
     goalVerifier: GoalVerifier.of({ verify: verifyGoal }),
     outcomeVerifier: OutcomeVerifier.of({ verify: verifyOutcome }),
+    conflictResolver: GoalConflictResolver.of({ resolve: resolveConflict }),
   };
 });
 
 /** Card agents and verifiers that run as session subagents in the card worktrees. */
 export const subagentCardAgentsLayer = Layer.effectContext(
-  Effect.map(make, ({ agent, verifier, goalVerifier, outcomeVerifier }) =>
+  Effect.map(make, ({ agent, verifier, goalVerifier, outcomeVerifier, conflictResolver }) =>
     Context.make(CardAgent, agent).pipe(
       Context.add(CardVerifier, verifier),
       Context.add(GoalVerifier, goalVerifier),
       Context.add(OutcomeVerifier, outcomeVerifier),
+      Context.add(GoalConflictResolver, conflictResolver),
     ),
   ),
 ).pipe(Layer.provide(NodeCrypto.layer));

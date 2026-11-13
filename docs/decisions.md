@@ -5168,3 +5168,17 @@
   - 카드 에이전트와 검증자의 도구, `.git`·credential 제한은 바꾸지 않는다. 보고서 세션은 전처럼 읽기만 한다.
 - 남은 한계: 계획자가 보드가 도는 중에 메인 checkout을 고치면 다음 카드가 시작하는 기준이 바뀔 수 있다. 지침으로만 막는다.
 - 대체하는 결정: 2c Goal 모드 구현의 "프로젝트 도구는 읽기만 한다".
+
+## Goal 브랜치가 사용자 브랜치와 충돌하면 에이전트가 먼저 푼다 (2026-11-13)
+
+- 계기: Goal 두 개가 대상 브랜치 `main`과 충돌해(각각 6개 파일, 1개 파일) `MergeConflict` 판단을 기다렸다. 사용자: 굴러가는 Goal의 충돌을 자동으로 풀고 싶다. 2026-11-11 결정은 이 충돌을 "사용자 브랜치를 건드리는 일"이라 범위 밖에 뒀다. 그런데 `mergeTargetIntoGoal`은 사용자 브랜치를 Goal 브랜치 **안으로** 합치고, 사용자 브랜치는 Goal 검증을 통과한 뒤에만 `--ff-only`로 움직인다. 그래서 충돌을 풀어도 사용자 브랜치가 위험해지지 않는다.
+- 결정(사용자):
+  - merge queue는 `GoalMergeConflict`를 받으면 merge 상태를 `ResolvingConflict{files}`로 두고, Goal 단위 checkout(`.goal`)에서 Goal head에 대상 commit을 `git merge`해 충돌 표시를 남긴다(`CardWorktrees.conflictCheckout`).
+  - 해결 에이전트(`GoalConflictResolver`, 실행자 모델, 카드 에이전트와 같은 도구)가 그 checkout에서 양쪽 변경을 살려 충돌 표시를 푼다. 둘 다 살릴 수 없으면 사용자 브랜치의 동작을 지키고 Goal 쪽을 맞춘다. 커밋·abort는 하지 않는다.
+  - owner가 merge commit을 만들고, Goal 브랜치를 merge를 시작한 head에서만 옮긴다(`update-ref` CAS). 그 commit이 대상 commit을 담는지 확인한다. 그다음은 전과 같다: `GoalVerifier`가 새 head를 검증하고, 통과하면 대상 브랜치를 옮긴다.
+  - 표시가 남으면 같은 checkout에서 남은 파일을 메모로 주고 다시 돌린다. 3번(`conflictTries`, 카드의 `conflictRoundsBeforePerson`과 같다)까지 풀지 못하거나 에이전트가 실패하면(모델 미선택 포함) 지금처럼 `MergeConflict`로 사람에게 묻는다. Goal 브랜치가 그사이 움직였으면 커밋하지 않고 merge 상태를 비워 다음 pass가 처음부터 한다.
+  - 같은 충돌(Goal, Goal head, 대상 head)은 owner 메모리에서 한 번만 에이전트에게 준다. 다시 나면 사람에게 묻는다. owner가 다시 시작하면 한 번 더 시도한다.
+- 남은 한계:
+  - 다른 Goal이 merge된 뒤 대상을 받아들이는 `takeUpstream`의 충돌은 전처럼 그 Goal의 merge 때 다룬다.
+  - 이미 `MergeConflict`를 기다리는 Goal은 그대로 기다린다. 판단에서 "해결함"을 고르면 다시 merge를 시도하며, 이번에는 에이전트가 먼저 푼다.
+- 대체하는 결정: 2026-11-11 "카드가 Goal 브랜치와 충돌하면…"의 범위 항목("Goal 브랜치를 사용자 브랜치에 merge하다 생긴 충돌은 그대로 사람에게 묻는다"), 칸반 프로젝트 스케줄러(2026-10-18)의 "대상과 충돌하면 `MergeConflict`를 묻는다".

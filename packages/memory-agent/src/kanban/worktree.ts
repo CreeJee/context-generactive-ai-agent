@@ -94,6 +94,28 @@ export type TargetAdvance = Data.TaggedEnum<{
 }>;
 export const TargetAdvance = Data.taggedEnum<TargetAdvance>();
 
+/** Committing a conflicted take-in of the user's branch once an agent resolved it. */
+export type GoalMergeResolution = Data.TaggedEnum<{
+  /** The merge commit `head` is now the Goal branch. */
+  Committed: { readonly head: string };
+  /** These files still carry conflict markers; nothing was written. */
+  Unresolved: { readonly files: readonly string[] };
+  /** The Goal branch moved since the merge started; nothing was written. */
+  GoalMoved: {};
+}>;
+export const GoalMergeResolution = Data.taggedEnum<GoalMergeResolution>();
+
+/** A checkout holding a conflicted take-in of the user's branch, and how to commit it. */
+export interface GoalConflictCheckout {
+  /** Where the resolving agent's tools are rooted. */
+  readonly checkout: CardWorktree;
+  /**
+   * Commits the resolved merge and moves the Goal branch to it, only from the head the merge
+   * started at. `Unresolved` while markers remain; the checkout stays for another try.
+   */
+  readonly commit: Effect.Effect<GoalMergeResolution, CardWorktreeFailed>;
+}
+
 /** Moving the Goal branch onto another branch of the user's before its cards add work to it. */
 export type GoalRetarget = Data.TaggedEnum<{
   /** The Goal branch now points at `head`, the new branch's commit. */
@@ -299,6 +321,15 @@ export interface CardWorktreesApi extends CardWorkspace {
     goal: GoalRef,
     head: string,
   ) => Effect.Effect<CardWorktree, CardWorktreeFailed, Scope.Scope>;
+  /**
+   * A checkout of the Goal branch at the conflict's Goal head with the conflict's target commit
+   * merged in and the conflicts left as markers, for an agent to resolve. It is the Goal-level
+   * checkout, so it waits for a running check, and it is removed when the scope closes.
+   */
+  readonly conflictCheckout: (
+    goal: GoalRef,
+    conflict: GoalMergeConflict,
+  ) => Effect.Effect<GoalConflictCheckout, CardWorktreeFailed, Scope.Scope>;
   /**
    * Pushes the Goal branch to `origin`, for a pull request a person asked for: the pushed branch,
    * or none when the push failed. A push is never repeated.

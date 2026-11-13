@@ -2153,6 +2153,10 @@ msgstr "대상 브랜치가 계속 바뀌어 다시 시도할 예정"
 msgid "대상 브랜치가 없어졌습니다"
 msgstr "대상 브랜치가 없어졌습니다"
 
+#: app/entry/chat/board-panel.tsx
+msgid "대상 브랜치와 충돌한 파일 {count}개를 에이전트가 해결하는 중"
+msgstr "대상 브랜치와 충돌한 파일 {count}개를 에이전트가 해결하는 중"
+
 #. Accessible name of the scrolling message list
 #. Conversation list section: the conversations not at work
 #: app/entry/chat/chat-history.tsx

@@ -90,7 +90,7 @@ type BoardAuthor =
 4. 카드가 모두 `done`이고 검증자가 Goal outcome을 모두 met으로 판정하면 Goal 브랜치에서 Goal 수준 통합 검증을 한다. 남은 outcome이 있으면 merge하지 않고 계획자가 카드를 더한다. merge가 일을 넘기면(merge됨, 수동 merge, PR 생성) Goal과 Plan이 함께 완료된다. worktree가 없는 Goal은 outcome이 모두 met일 때 바로 완료된다(2026-11-09, decisions.md "outcome 장부와 이어 쓰는 Plan").
 5. 통합 검증을 통과하면 Goal을 시작한 사용자 브랜치에 자동으로 merge한다(확정 2026-10-18). 예외: 대상이 보호 브랜치(프로젝트 설정, 기본 `main`·`staging`)면 자동 merge하지 않고 `human_decision`에서 PR 생성이나 수동 merge를 고른다.
    - 같은 대상 브랜치로 가는 merge는 owner가 대상 브랜치별로 하나씩 처리한다(merge queue).
-   - 사용자 브랜치가 그사이 앞으로 갔으면 Goal 브랜치에 먼저 merge하고 통합 검증을 다시 한다. 충돌은 `human_decision`으로 보낸다.
+   - 사용자 브랜치가 그사이 앞으로 갔으면 Goal 브랜치에 먼저 merge하고 통합 검증을 다시 한다. 충돌은 해결 에이전트가 Goal 단위 checkout에서 먼저 풀고, owner가 merge commit으로 Goal 브랜치에 올린 뒤 검증한다. 3번 안에 풀지 못하면 `human_decision`으로 보낸다(2026-11-13, decisions.md "Goal 브랜치가 사용자 브랜치와 충돌하면 에이전트가 먼저 푼다").
    - 대상 브랜치가 사용자 작업 트리에 checkout되어 있고 커밋하지 않은 변경이 있으면 merge하지 않고 기다린다. 사용자 작업 파일을 덮어쓰지 않는다.
 6. Goal에 자기 작업이 생기기 전에는 대상 브랜치를 프로젝트에 지금 checkout된 브랜치로 바꿀 수 있다. Goal 브랜치는 그 브랜치의 HEAD에서 다시 시작한다. 카드 브랜치가 하나라도 있거나, Goal 브랜치에 두 브랜치 어디에도 없는 커밋이 있거나, merge가 시작됐으면 바꾸지 않는다(2026-11-09, decisions.md "보드 대상 브랜치는 Goal에 작업이 생기기 전까지 바꿀 수 있다").
 

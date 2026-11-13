@@ -68,6 +68,8 @@ export type DecisionInboxItem = typeof DecisionInboxItem.Type;
 
 /** Where a Goal's merge into its target branch stands. Only metadata, never provider text. */
 export const GoalMergeState = Schema.TaggedUnion({
+  /** Taking in the target stopped on conflicts in `files`; an agent resolves them on the Goal branch. */
+  ResolvingConflict: { files: Schema.Array(Schema.String) },
   /** The Goal branch at `head` is being checked as a whole. */
   Verifying: { head: Schema.String },
   /** The Goal-level check failed at `head`; a new Goal branch commit is checked again. */

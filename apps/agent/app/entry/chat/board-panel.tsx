@@ -708,6 +708,10 @@ const stoppedMergeTexts = {
 export function mergeStateLabel(state: GoalMergeState | null): MessageDescriptor {
   if (state === null) return msg`카드가 모두 끝난 뒤 merge합니다`;
   return Match.valueTags(state, {
+    ResolvingConflict: ({ files }) => {
+      const count = files.length;
+      return msg`대상 브랜치와 충돌한 파일 ${count}개를 에이전트가 해결하는 중`;
+    },
     Verifying: () => msg`Goal 전체를 검증하는 중`,
     VerifyFailed: ({ verdict: failure }) => {
       const verdict = verdictText(failure);

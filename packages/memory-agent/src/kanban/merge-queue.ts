@@ -6,6 +6,7 @@ import {
   FiberMap,
   FileSystem,
   HashMap,
+  HashSet,
   Layer,
   Match,
   Option,
@@ -29,7 +30,7 @@ import {
   type OutcomeStanding,
 } from "../workflow/outcome-ledger.ts";
 import { Workflows } from "../workflow/workflow.ts";
-import { CardVerifier, GoalVerifier, OutcomeVerifier } from "./card-agent.ts";
+import { CardVerifier, GoalConflictResolver, GoalVerifier, OutcomeVerifier } from "./card-agent.ts";
 import { CardAttempts, type KanbanGoal } from "./card-attempts.ts";
 import { CardHoldReason, type VerdictFailure } from "./failures.ts";
 import { GoalMergeState, GoalSchedules, mergeSettled } from "./goal-schedules.ts";
@@ -42,7 +43,13 @@ import {
   HumanDecisions,
 } from "./human-decision.ts";
 import { overlappingBoundaries, ProjectScheduler } from "./scheduler.ts";
-import { type CardWorktree, CardWorktrees, type GoalRef } from "./worktree.ts";
+import {
+  type CardWorktree,
+  CardWorktrees,
+  type GoalMergeConflict,
+  GoalMergeResolution,
+  type GoalRef,
+} from "./worktree.ts";
 import { BoardHealth } from "./board-health.ts";
 import { LoopStep } from "../runtime/loop-health.ts";
 
@@ -51,8 +58,9 @@ import { LoopStep } from "../runtime/loop-health.ts";
  * "프로젝트 스케줄러"). A Goal whose cards are all done and whose outcomes the verifier judged all
  * met takes the user's branch in, passes the
  * Goal-level check, and then moves the user's branch to the Goal branch. Merges into one branch
- * run one at a time, by the owner and outside any sandbox. Protected branches and conflicts go to a
- * person; a checkout with uncommitted changes is waited for, never overwritten.
+ * run one at a time, by the owner and outside any sandbox. A conflict with the user's branch is
+ * resolved by an agent on the Goal branch and checked again; protected branches, and conflicts the
+ * agent leaves, go to a person. A checkout with uncommitted changes is waited for, never overwritten.
  *
  * A merged Goal tells the project's other Goals with the same target, which take the change in and
  * verify again only the finished cards it touches. Every step reads the refs again, so running a
@@ -66,6 +74,12 @@ const queueAuthor = (goalInstanceId: string): BoardAuthor =>
 
 /** How many times the user's branch may move under one merge before the next look tries again. */
 const mergeRounds = 3;
+
+/**
+ * How many runs the conflict resolver gets in one checkout before a person is asked; the same as a
+ * card's conflict rounds (`conflictRoundsBeforePerson` in the orchestrator).
+ */
+const conflictTries = 3;
 
 const merge = GoalMergeState.cases;
 
@@ -86,6 +100,7 @@ const make = Effect.gen(function* () {
   const worktrees = yield* CardWorktrees;
   const decisions = yield* HumanDecisions;
   const goalVerifier = yield* GoalVerifier;
+  const conflictResolver = yield* GoalConflictResolver;
   const cardVerifier = yield* CardVerifier;
   const outcomeVerifier = yield* OutcomeVerifier;
   const ledger = yield* OutcomeLedger;
@@ -137,6 +152,94 @@ const make = Effect.gen(function* () {
       author: queueAuthor(goal.goalInstanceId),
     });
     yield* setMerge(goal, merge.AwaitingDecision.make({ requestId: request.requestId }));
+  });
+
+  /**
+   * Conflicts the resolver already tried, by Goal, Goal head and target head. The same conflict
+   * goes to a person instead of the resolver again; in memory, so a restarted owner tries once more.
+   */
+  const triedConflicts = yield* Ref.make(HashSet.empty<string>());
+
+  /**
+   * Has an agent resolve a conflicted take-in of the target in a checkout of the Goal branch, up to
+   * {@link conflictTries} runs. The Goal branch's new head once the merge is committed. Otherwise a
+   * person is asked, or, when the Goal branch moved meanwhile, the next pass starts over.
+   */
+  const resolveConflict = Effect.fnUntraced(function* (
+    goal: KanbanGoal,
+    conflict: GoalMergeConflict,
+  ) {
+    const askPerson = Effect.as(
+      askGoal(goal, {
+        occasion: DecisionOccasion.MergeConflict({
+          goalHead: conflict.goalHead,
+          targetHead: conflict.targetHead,
+        }),
+        kind: DecisionKind.cases.MergeConflict.make({
+          targetBranch: conflict.targetBranch,
+          files: conflict.files,
+        }),
+      }),
+      Option.none<string>(),
+    );
+    const key = [goal.goalInstanceId, conflict.goalHead, conflict.targetHead].join("\n");
+    const artifact = (yield* workflows.get(goal.sessionId)).goal;
+    if (artifact === null || HashSet.has(yield* Ref.get(triedConflicts), key))
+      return yield* askPerson;
+    yield* Ref.update(triedConflicts, HashSet.add(key));
+    yield* setMerge(goal, merge.ResolvingConflict.make({ files: conflict.files }));
+    const resolution = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const { checkout, commit } = yield* worktrees.conflictCheckout(goalRef(goal), conflict);
+        /** One run, then the commit; markers left over give the next run its note. */
+        const tryOnce = (notes: readonly string[]) =>
+          Effect.flatMap(
+            conflictResolver.resolve({
+              sessionId: goal.sessionId,
+              projectId: goal.projectId,
+              goalInstanceId: goal.goalInstanceId,
+              goal: artifact,
+              targetBranch: conflict.targetBranch,
+              files: conflict.files,
+              checkout,
+              notes,
+            }),
+            (outcome) =>
+              Match.valueTags(outcome, {
+                Failed: () =>
+                  Effect.succeed([
+                    GoalMergeResolution.Unresolved({ files: conflict.files }),
+                    Option.none<readonly string[]>(),
+                  ] as const),
+                Finished: () =>
+                  Effect.map(commit, (result) =>
+                    GoalMergeResolution.$match(result, {
+                      Unresolved: ({ files }) =>
+                        [
+                          result,
+                          Option.some([
+                            `These files still carry conflict markers: ${files.join(", ")}. Resolve them.`,
+                          ]),
+                        ] as const,
+                      Committed: () => [result, Option.none<readonly string[]>()] as const,
+                      GoalMoved: () => [result, Option.none<readonly string[]>()] as const,
+                    }),
+                  ),
+              }),
+          );
+        return yield* Stream.paginate(Arr.empty<string>(), (notes: readonly string[]) =>
+          Effect.map(tryOnce(notes), ([result, next]) => [Arr.of(result), next] as const),
+        ).pipe(Stream.take(conflictTries), Stream.runLast);
+      }),
+    );
+    return yield* Option.match(resolution, {
+      onNone: () => askPerson,
+      onSome: GoalMergeResolution.$match({
+        Committed: ({ head }) => Effect.succeedSome(head),
+        Unresolved: () => askPerson,
+        GoalMoved: () => Effect.as(setMerge(goal, null), Option.none<string>()),
+      }),
+    });
   });
 
   /** Runs a command once and returns its exit code and output; nothing here repeats it. */
@@ -303,26 +406,12 @@ const make = Effect.gen(function* () {
      * the head verified by then when the target moved before it could advance.
      */
     const round = Effect.fnUntraced(function* (verifiedHead: string | null) {
-      const sync = yield* worktrees.mergeTargetIntoGoal(ref, target).pipe(
-        Effect.asSome,
-        Effect.catchTag("GoalMergeConflict", (conflict) =>
-          Effect.as(
-            askGoal(goal, {
-              occasion: DecisionOccasion.MergeConflict({
-                goalHead: conflict.goalHead,
-                targetHead: conflict.targetHead,
-              }),
-              kind: DecisionKind.cases.MergeConflict.make({
-                targetBranch: target,
-                files: conflict.files,
-              }),
-            }),
-            Option.none(),
-          ),
-        ),
+      const synced = yield* worktrees.mergeTargetIntoGoal(ref, target).pipe(
+        Effect.map((sync) => Option.some(sync.head)),
+        Effect.catchTag("GoalMergeConflict", (conflict) => resolveConflict(goal, conflict)),
       );
-      if (Option.isNone(sync)) return Option.none();
-      const head = sync.value.head;
+      if (Option.isNone(synced)) return Option.none();
+      const head = synced.value;
       if (verifiedHead !== head) {
         yield* setMerge(goal, merge.Verifying.make({ head }));
         const workflow = yield* workflows.get(goal.sessionId);

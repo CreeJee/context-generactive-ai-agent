@@ -28,6 +28,7 @@ import {
   CardWorktreeFailedReason,
   CardWorktrees,
   GoalMergeConflict,
+  GoalMergeResolution,
   GoalRetarget,
   GoalSync,
   TargetAdvance,
@@ -565,6 +566,60 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
         : fail(operation, reasons.WorktreeMissing.make({})),
     );
 
+  /**
+   * A detached worktree of the Goal branch at `head`; a checkout a crash left behind is removed
+   * first. A second checkout of the same Goal waits until the first one's scope closes.
+   */
+  const goalCheckoutAt = (goal: GoalRef, head: string) =>
+    Effect.flatMap(RcMap.get(checkoutHolders, goal.goalInstanceId), (holder) =>
+      Effect.acquireRelease(holder.take(1), () => holder.release(1)),
+    ).pipe(
+      Effect.andThen(
+        Effect.acquireRelease(
+          serially(
+            `checkout:${goal.goalInstanceId}`,
+            Effect.gen(function* () {
+              yield* checkIds("checkout", [goal.goalInstanceId]);
+              const { repository, prefix, base } = yield* repositoryOf(
+                "checkout",
+                goal.projectRoot,
+              );
+              const folder = path.join(base, goal.goalInstanceId, goalCheckoutFolder);
+              const leftover = yield* fs.exists(folder).pipe(Effect.mapError(onDisk("checkout")));
+              yield* leftover
+                ? discard("checkout", repository, folder)
+                : expect("checkout", repository, ["worktree", "prune"]);
+              yield* fs.makeDirectory(path.dirname(folder), { recursive: true, mode: 0o700 }).pipe(
+                Effect.mapError((cause) =>
+                  CardWorktreeFailed.make({
+                    operation: "checkout",
+                    reason: reasons.GitFailed.make({ exitCode: null }),
+                    cause,
+                  }),
+                ),
+              );
+              yield* expect("checkout", repository, ["worktree", "add", "--detach", folder, head]);
+              yield* installDependencies(folder);
+              yield* Ref.update(checkouts, HashSet.add(goalKey(goal)));
+              return {
+                repository,
+                branch: goalBranchName(goal.goalInstanceId),
+                path: folder,
+                toolRoot: prefix.length === 0 ? folder : path.join(folder, prefix),
+                worktreesBase: base,
+              } satisfies GitWorktree;
+            }),
+          ),
+          (checkout) =>
+            discard("checkout", checkout.repository, checkout.path).pipe(
+              Effect.catchTag("CardWorktreeFailed", logFailure("Goal checkout was not removed")),
+              // One left behind is removed with the Goal's folder.
+              Effect.ensuring(Ref.update(checkouts, HashSet.remove(goalKey(goal)))),
+            ),
+        ),
+      ),
+    );
+
   return CardWorktrees.of({
     /** Only a ref is written; the user's checkout, index and current branch stay as they are. */
     prepareGoal: Effect.fn("CardWorktrees.prepareGoal")(function* (goal: GoalRef) {
@@ -1036,68 +1091,74 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
       );
     }),
 
-    /**
-     * A detached worktree; a checkout a crash left behind is removed first. A second check of the
-     * same Goal waits until the first one's scope closes.
-     */
     goalCheckout: (goal: GoalRef, head: string) =>
-      Effect.flatMap(RcMap.get(checkoutHolders, goal.goalInstanceId), (holder) =>
-        Effect.acquireRelease(holder.take(1), () => holder.release(1)),
-      ).pipe(
-        Effect.andThen(
-          Effect.acquireRelease(
-            serially(
-              `checkout:${goal.goalInstanceId}`,
-              Effect.gen(function* () {
-                yield* checkIds("checkout", [goal.goalInstanceId]);
-                const { repository, prefix, base } = yield* repositoryOf(
-                  "checkout",
-                  goal.projectRoot,
-                );
-                const folder = path.join(base, goal.goalInstanceId, goalCheckoutFolder);
-                const leftover = yield* fs.exists(folder).pipe(Effect.mapError(onDisk("checkout")));
-                yield* leftover
-                  ? discard("checkout", repository, folder)
-                  : expect("checkout", repository, ["worktree", "prune"]);
-                yield* fs
-                  .makeDirectory(path.dirname(folder), { recursive: true, mode: 0o700 })
-                  .pipe(
-                    Effect.mapError((cause) =>
-                      CardWorktreeFailed.make({
-                        operation: "checkout",
-                        reason: reasons.GitFailed.make({ exitCode: null }),
-                        cause,
-                      }),
-                    ),
-                  );
-                yield* expect("checkout", repository, [
-                  "worktree",
-                  "add",
-                  "--detach",
-                  folder,
-                  head,
-                ]);
-                yield* installDependencies(folder);
-                yield* Ref.update(checkouts, HashSet.add(goalKey(goal)));
-                return {
-                  repository,
-                  branch: goalBranchName(goal.goalInstanceId),
-                  path: folder,
-                  toolRoot: prefix.length === 0 ? folder : path.join(folder, prefix),
-                  worktreesBase: base,
-                } satisfies GitWorktree;
-              }),
+      Effect.map(goalCheckoutAt(goal, head), (checkout) => toolView(goal.projectRoot, checkout)),
+
+    /**
+     * The merge runs in the Goal-level checkout as a person's `git merge` would; its commit moves
+     * the Goal branch under the Goal's lock, only from the head the merge started at.
+     */
+    conflictCheckout: Effect.fn("CardWorktrees.conflictCheckout")(function* (
+      goal: GoalRef,
+      conflict: GoalMergeConflict,
+    ) {
+      const checkout = yield* goalCheckoutAt(goal, conflict.goalHead);
+      // Exit 1 is the conflict this checkout is for; the markers are checked at commit.
+      const merged = yield* run("checkout", checkout.path, [
+        "merge",
+        "--no-ff",
+        "--no-edit",
+        "--no-verify",
+        "-m",
+        `Merge ${conflict.targetBranch} into ${goalBranchName(goal.goalInstanceId)}`,
+        conflict.targetHead,
+      ]).pipe(Effect.uninterruptible);
+      yield* Effect.when(
+        fail("checkout", reasons.GitFailed.make({ exitCode: merged.exitCode })),
+        Effect.succeed(merged.exitCode > 1),
+      );
+      const commit = serially(
+        goalKey(goal),
+        Effect.gen(function* (): Effect.fn.Return<GoalMergeResolution, CardWorktreeFailed> {
+          const files = yield* unresolved("goal_merge", checkout.path);
+          if (Arr.isReadonlyArrayNonEmpty(files)) return GoalMergeResolution.Unresolved({ files });
+          if (
+            (yield* goalHead("goal_merge", checkout.repository, goal.goalInstanceId)) !==
+            conflict.goalHead
+          )
+            return GoalMergeResolution.GoalMoved();
+          yield* commitIn(
+            "goal_merge",
+            checkout,
+            `Merge ${conflict.targetBranch} into ${goalBranchName(goal.goalInstanceId)}`,
+          );
+          const head = yield* expect("goal_merge", checkout.path, ["rev-parse", "HEAD"]);
+          // The merge must hold the target; anything else is not this conflict's resolution.
+          yield* Effect.when(
+            fail("goal_merge", reasons.ConflictUnresolved.make({})),
+            Effect.map(
+              answers("goal_merge", checkout.path, [
+                "merge-base",
+                "--is-ancestor",
+                conflict.targetHead,
+                head,
+              ]),
+              (contained) => !contained,
             ),
-            (checkout) =>
-              discard("checkout", checkout.repository, checkout.path).pipe(
-                Effect.catchTag("CardWorktreeFailed", logFailure("Goal checkout was not removed")),
-                // One left behind is removed with the Goal's folder.
-                Effect.ensuring(Ref.update(checkouts, HashSet.remove(goalKey(goal)))),
-              ),
-          ),
-        ),
-        Effect.map((checkout) => toolView(goal.projectRoot, checkout)),
-      ),
+          );
+          yield* expect("goal_merge", checkout.repository, [
+            "update-ref",
+            "-m",
+            `ctx: take in ${conflict.targetBranch}`,
+            `refs/heads/${goalBranchName(goal.goalInstanceId)}`,
+            head,
+            conflict.goalHead,
+          ]).pipe(Effect.uninterruptible);
+          return GoalMergeResolution.Committed({ head });
+        }),
+      );
+      return { checkout: toolView(goal.projectRoot, checkout), commit };
+    }),
 
     /** The Goal branch goes to `origin` under its own name. */
     pushGoalBranch: Effect.fn("CardWorktrees.pushGoalBranch")(function* (goal: GoalRef) {
