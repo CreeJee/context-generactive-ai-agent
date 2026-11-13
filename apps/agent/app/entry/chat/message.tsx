@@ -811,13 +811,14 @@ const nextLabels = {
  */
 const OrchestratorMessageView = ({ message }: { readonly message: OrchestratorMessage }) => {
   const { t } = useLingui();
-  const { next, ended } = message.note;
+  const { next, ended, skills } = message.note;
   const { background: backgroundCount, subagent: subagentCount } = ended;
+  const skillNames = skills?.join(", ");
   // What the orchestrator's message says, in the UI's words.
   const summary = [
     ...(backgroundCount > 0 ? [t`백그라운드 작업 ${backgroundCount}개 끝남`] : []),
     ...(subagentCount > 0 ? [t`서브에이전트 ${subagentCount}개 끝남`] : []),
-    t(nextLabels[next]),
+    skillNames === undefined ? t(nextLabels[next]) : t`맞을 수 있는 skill: ${skillNames}`,
   ].join(", ");
   return (
     <Message align="end">

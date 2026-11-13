@@ -50,6 +50,8 @@ export const OrchestratorNote = Schema.Struct({
   next: Schema.Literals(["results", "plan", "board", "run"]),
   /** The background tasks and subagents whose end the message reports. */
   ended: Schema.Struct({ background: Schema.Int, subagent: Schema.Int }),
+  /** The skills it suggests for the user's message before it, by name. */
+  skills: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 export type OrchestratorNote = typeof OrchestratorNote.Type;
 

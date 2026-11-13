@@ -85,6 +85,7 @@ import { FileTools } from "../tools/files.ts";
 import { DrawingPreviews } from "../attachments/previews.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { KagiTools, kagiInstructions } from "../tools/kagi.ts";
+import { SkillSearch } from "../skills/skill-search.ts";
 import { SkillTools, type SkillToolset } from "../tools/skills.ts";
 import { SkillReviews } from "../skills/skill-review.ts";
 import { DelegateTools } from "../tools/delegate.ts";
@@ -130,6 +131,7 @@ import {
   notificationLines,
   orchestratorMessage,
 } from "./orchestrator-message.ts";
+import { skillSuggestions } from "./skill-suggestions.ts";
 import { taskNotifications } from "./task-notifications.ts";
 import { dispatchNotifications } from "./dispatch-notifications.ts";
 import { ApiUsage, apiUsageHook } from "./api-usage.ts";
@@ -577,6 +579,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const kagiTools = yield* KagiTools;
   const mcpServers = yield* McpServers;
   const skillTools = yield* SkillTools;
+  const skillSearch = yield* SkillSearch;
   const skillReviews = yield* SkillReviews;
   const delegateTools = yield* DelegateTools;
   const subagents = yield* Subagents;
@@ -698,6 +701,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const crypto = yield* SecureRandom.SecureRandom;
   const notifications = taskNotifications({ trace: workTrace, background, crypto });
   const toldDispatches = dispatchNotifications({ dispatches: sessionDispatches, crypto });
+  const suggestions = skillSuggestions({ search: skillSearch, crypto });
   const scope = yield* Effect.scope;
   // One owner-process fence for durable workflow admission: a restarted owner cannot create a
   // second workflow execution for a run.
@@ -2225,6 +2229,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           yield* repeatGuardHook,
           ...gate,
           children.hook,
+          // Before the notifications: the suggestions are for the user's message they follow.
+          ...(reportSource !== null ? [] : [suggestions.hookFor(project, sessionId)]),
           notifications.hookFor(sessionId, runId),
           toldDispatches.hookFor(sessionId, runId),
           yield* recorder.hookFor(answers),

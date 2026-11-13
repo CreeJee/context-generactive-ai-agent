@@ -2443,6 +2443,10 @@ msgstr "만들기"
 msgid "맞는 프로젝트가 없습니다."
 msgstr "맞는 프로젝트가 없습니다."
 
+#: app/entry/chat/message.tsx
+msgid "맞을 수 있는 skill: {skillNames}"
+msgstr "맞을 수 있는 skill: {skillNames}"
+
 #. Goal outcome status: no card works on it
 #: app/entry/chat/outcome-checklist.tsx
 msgid "맡은 카드 없음"

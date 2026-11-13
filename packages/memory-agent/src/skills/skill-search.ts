@@ -15,7 +15,7 @@ import { Digest } from "effect/crypto";
 import { Hex } from "effect/encoding";
 import { SqlClient, SqlSchema } from "effect/sql";
 import type { Fenced } from "../files/paths.ts";
-import { Embedder } from "../memory/embedding/embedder.ts";
+import { Embedder, EmbedderRuntime } from "../memory/embedding/embedder.ts";
 import type { Project } from "../projects/projects.ts";
 import { fallbackLogged, ignoreLogged } from "../runtime/logged-failures.ts";
 import { ProjectSkills } from "./project-skills.ts";
@@ -119,6 +119,13 @@ const make = Effect.gen(function* () {
     );
   }, oneAtATime.withPermits(1));
 
+  /** Whether a query embeds without first waiting for the local model to load. */
+  const modelLoaded = () =>
+    EmbedderRuntime.$match(embedder.runtime(), {
+      local: ({ device }) => device !== null,
+      other: () => true,
+    });
+
   /** Embeds the missing vectors in the background; nothing waits for it. */
   const inBackground = <E extends { readonly _tag: string }>(work: Effect.Effect<void, E>) =>
     Effect.asVoid(Effect.forkIn(work.pipe(ignoreLogged("Skill vectors not made")), scope));
@@ -126,12 +133,14 @@ const make = Effect.gen(function* () {
   /**
    * The skills of `catalog` that fit `query` best, at most `limit`: the ones naming its words and
    * the ones closest in meaning, by reciprocal rank fusion. A skill with no vector yet is ranked by
-   * its words alone, and every skill is when the query cannot be embedded.
+   * its words alone, and every skill is when the query cannot be embedded, or, unless
+   * `waitForModel`, while the embedding model is not loaded yet.
    */
   const rank = Effect.fn("SkillSearch.rank")(function* (
     catalog: readonly Skill[],
     query: string,
     limit: number,
+    waitForModel: boolean,
   ) {
     const queryWords = words(query);
     const byWords = catalog.flatMap((skill) => {
@@ -145,7 +154,10 @@ const make = Effect.gen(function* () {
     const { stored, queryVector } = yield* Effect.all(
       {
         stored: storedVectors(texts.map(({ hash }) => hash)),
-        queryVector: Effect.map(embedder.embed([query], "query"), EffectArray.head),
+        queryVector:
+          waitForModel || modelLoaded()
+            ? Effect.map(embedder.embed([query], "query"), EffectArray.head)
+            : Effect.succeedNone,
       },
       { concurrency: "unbounded" },
     ).pipe(
@@ -204,16 +216,18 @@ const make = Effect.gen(function* () {
     /**
      * The skills a run of `sessionId` can use now that fit `query` best. The catalog is read as it
      * is at the call, so a skill deleted meanwhile is never found and one saved meanwhile is.
+     * Without `waitForModel`, a model still loading leaves the meaning out instead of waiting.
      */
     find: Effect.fn("SkillSearch.find")(function* (
       project: Fenced<Project>,
       sessionId: string,
       query: string,
       limit: number,
+      waitForModel = true,
     ) {
       const { skills: catalog } = yield* skills.catalog(project, sessionId);
       yield* inBackground(embedMissing(catalog));
-      return yield* rank(catalog, query, limit);
+      return yield* rank(catalog, query, limit, waitForModel);
     }),
   };
 });
