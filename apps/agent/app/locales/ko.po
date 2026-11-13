@@ -282,13 +282,13 @@ msgstr "{hours}시간"
 msgid "{itemCount}개 항목"
 msgstr "{itemCount}개 항목"
 
-#. Model select of a kanban role; {label} is the role's name
-#: app/entry/settings/pages/kanban.tsx
+#. Model select of a settings field; {label} is the field's name
+#: app/entry/settings/model-selection-field.tsx
 msgid "{label}: 모델"
 msgstr "{label}: 모델"
 
-#. Reasoning effort select of a kanban role; {label} is the role's name
-#: app/entry/settings/pages/kanban.tsx
+#. Reasoning effort select of a settings field; {label} is the field's name
+#: app/entry/settings/model-selection-field.tsx
 msgid "{label}: 추론 단계"
 msgstr "{label}: 추론 단계"
 
@@ -1007,6 +1007,10 @@ msgstr "run 없는 항목 ({count})"
 #: app/entry/report/report-bundle.tsx
 msgid "run 오류 {code}"
 msgstr "run 오류 {code}"
+
+#: app/entry/settings/pages/skills.tsx
+msgid "skill 고르기 모델"
+msgstr "skill 고르기 모델"
 
 #: app/entry/chat/message.tsx
 msgid "skill 읽기"
@@ -2539,7 +2543,7 @@ msgid "모델 ID"
 msgstr "모델 ID"
 
 #. Placeholder of the model select before one is picked
-#: app/entry/settings/pages/kanban.tsx
+#: app/entry/settings/model-selection-field.tsx
 msgid "모델 고르기"
 msgstr "모델 고르기"
 
@@ -2556,7 +2560,7 @@ msgstr "모델 등록"
 msgid "모델 목록 불러오기"
 msgstr "모델 목록 불러오기"
 
-#: app/entry/settings/pages/kanban.tsx
+#: app/entry/settings/model-selection-field.tsx
 msgid "모델 목록을 읽지 못했습니다. 그 제공자에 로그인했는지 확인해 주십시오."
 msgstr "모델 목록을 읽지 못했습니다. 그 제공자에 로그인했는지 확인해 주십시오."
 
@@ -2645,6 +2649,10 @@ msgstr "모델을 선택해 주십시오."
 msgid "모델을 저장했습니다."
 msgstr "모델을 저장했습니다."
 
+#: app/entry/settings/pages/skills.tsx
+msgid "모델이 skill을 검색하면, 검색 결과에서 작업에 맞는 것만 이 모델이 골라 줍니다. 검색할 때마다 이 모델을 한 번 부릅니다. 모든 프로젝트에 같이 쓰입니다."
+msgstr "모델이 skill을 검색하면, 검색 결과에서 작업에 맞는 것만 이 모델이 골라 줍니다. 검색할 때마다 이 모델을 한 번 부릅니다. 모든 프로젝트에 같이 쓰입니다."
+
 #: app/entry/session/run-state.tsx
 msgid "모델이 도구만 쓰고 답을 쓰지 않은 채 마쳤습니다. 이어서 답해 달라고 다시 보내 주십시오."
 msgstr "모델이 도구만 쓰고 답을 쓰지 않은 채 마쳤습니다. 이어서 답해 달라고 다시 보내 주십시오."
@@ -2657,13 +2665,13 @@ msgstr "모델이 밝힌 이유: {modelReason}"
 msgid "모델이 오류를 보냈습니다"
 msgstr "모델이 오류를 보냈습니다"
 
-#: app/entry/settings/pages/skills.tsx
-msgid "모델이 이름과 설명을 보고 작업에 맞는 skill을 읽어 따릅니다. skill은 지침일 뿐이라 승인을 대신하지 않습니다."
-msgstr "모델이 이름과 설명을 보고 작업에 맞는 skill을 읽어 따릅니다. skill은 지침일 뿐이라 승인을 대신하지 않습니다."
-
 #: app/entry/chat/approval.tsx
 msgid "모델이 이유를 적지 않았습니다."
 msgstr "모델이 이유를 적지 않았습니다."
+
+#: app/entry/settings/pages/skills.tsx
+msgid "모델이 작업에 맞는 skill을 검색해 읽고 따릅니다. skill은 지침일 뿐이라 승인을 대신하지 않습니다."
+msgstr "모델이 작업에 맞는 skill을 검색해 읽고 따릅니다. skill은 지침일 뿐이라 승인을 대신하지 않습니다."
 
 #: app/entry/settings/pages/failed-interpretations.tsx
 msgid "모델이 주제와 정정 관계를 붙이지 못한 발언입니다. 그래서 기억 검색이 이미 정정된 옛 내용을 그대로 보일 수 있습니다. 다시 시도하면 답변이 끝날 때마다 조금씩 다시 해석합니다."
@@ -3106,7 +3114,9 @@ msgid "사용 기록에서 신호를 모으는 중입니다."
 msgstr "사용 기록에서 신호를 모으는 중입니다."
 
 #. Option: never send image prompts from Claude to OpenAI
+#. Option: no model chooses among the skills a search found
 #: app/entry/settings/pages/image.tsx
+#: app/entry/settings/pages/skills.tsx
 msgid "사용 안 함"
 msgstr "사용 안 함"
 
@@ -3513,6 +3523,7 @@ msgid "설정에서 이미지 생성을 먼저 켜 주십시오"
 msgstr "설정에서 이미지 생성을 먼저 켜 주십시오"
 
 #: app/entry/settings/pages/kanban.tsx
+#: app/entry/settings/pages/skills.tsx
 #: app/entry/settings/shared.tsx
 msgid "설정을 바꾸지 못했습니다."
 msgstr "설정을 바꾸지 못했습니다."
@@ -4606,6 +4617,7 @@ msgid "이 메시지를 보내지 못했습니다. 보내기를 누르면 다시
 msgstr "이 메시지를 보내지 못했습니다. 보내기를 누르면 다시 보냅니다."
 
 #: app/entry/settings/pages/kanban.tsx
+#: app/entry/settings/pages/skills.tsx
 msgid "이 모델을 쓸 수 없습니다. 그 제공자 로그인 상태와 모델, 추론 단계가 맞는지 확인해 주십시오."
 msgstr "이 모델을 쓸 수 없습니다. 그 제공자 로그인 상태와 모델, 추론 단계가 맞는지 확인해 주십시오."
 
@@ -5161,6 +5173,7 @@ msgstr "재연결 중단"
 #: app/entry/chat/board/card-peek.tsx
 #: app/entry/chat/chat-composer.tsx
 #: app/entry/chat/composer-status.tsx
+#: app/entry/settings/model-selection-field.tsx
 #: app/entry/settings/pages/conversation.tsx
 #: app/entry/settings/pages/kanban.tsx
 #: app/entry/settings/pages/web.tsx
@@ -5188,7 +5201,7 @@ msgstr "저장된 로그인 정보를 확인하지 못했습니다. 계정을 �
 msgid "저장소 본체"
 msgstr "저장소 본체"
 
-#: app/entry/settings/pages/kanban.tsx
+#: app/entry/settings/model-selection-field.tsx
 msgid "저장하면 다음 실행부터 적용됩니다."
 msgstr "저장하면 다음 실행부터 적용됩니다."
 
@@ -5427,8 +5440,8 @@ msgstr "지금 다시 연결"
 msgid "지금 진행"
 msgstr "지금 진행"
 
-#. Which provider, model and reasoning effort a kanban role runs on
-#: app/entry/settings/pages/kanban.tsx
+#. Which provider, model and reasoning effort a settings field runs on
+#: app/entry/settings/model-selection-field.tsx
 msgid "지금은 {provider} / {model} ({effort})로 실행합니다."
 msgstr "지금은 {provider} / {model} ({effort})로 실행합니다."
 
@@ -5443,6 +5456,10 @@ msgstr "지금은 대화를 바꿀 수 없습니다. 실행 상태를 확인한 
 #: app/entry/settings/pages/kanban.tsx
 msgid "지금은 선택된 모델로 실행합니다."
 msgstr "지금은 선택된 모델로 실행합니다."
+
+#: app/entry/settings/pages/skills.tsx
+msgid "지금은 쓰지 않고, 검색 순위의 앞쪽을 그대로 줍니다."
+msgstr "지금은 쓰지 않고, 검색 순위의 앞쪽을 그대로 줍니다."
 
 #: app/entry/chat/context-meter.tsx
 msgid "지난 대화 일부를 요약으로 바꿔 보냈습니다."

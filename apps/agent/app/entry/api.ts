@@ -818,6 +818,10 @@ export const api = {
         payload: KanbanSettingsCommand.SetRoleModel({ role, selection }),
       }),
     ),
+  skillRouterSettings: () => appCall((client) => client.settings.skillRouter()),
+  /** find_skill's results are chosen by this model from its next call; null turns it off. */
+  setSkillRouterModel: (model: ModelSelection | null) =>
+    appCall((client) => client.settings.setSkillRouter({ payload: { model } })),
   /** Puts the project in front of `before` (or last) in the scheduler's order of projects. */
   moveProject: (projectId: string, before: string | null) =>
     appCall((client) =>

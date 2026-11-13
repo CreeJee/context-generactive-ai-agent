@@ -13,7 +13,7 @@
 - `AppEventInput` — `AppChangedEvent`에서 `revision`을 뺀 publish 입력 유니온
 - `SessionEventTopic` — "all"|"run-state"|"queue"|"subagents"|"relayed-approvals" (`contracts.ts`, 아래 둘도 같다)
 - `ProjectEventTopic` — "all"|"sessions"
-- `GlobalEventTopic` — "all"|"auth"|"imports"|"embedding"|"projects"|"kanban"
+- `GlobalEventTopic` — "all"|"auth"|"imports"|"embedding"|"projects"|"kanban"|"skillRouter"
 - `AppEventsApi.publishSession` — 세션의 projectId를 조회해 세션 이벤트 발행. 세션을 모르면 null
 - `AppEventsApi.sessionStream`/`projectStream`/`globalStream`/`allStream` — 실행될 때 구독하고, scope·id로 거른 `AppEventFrame` Stream을 돌려줌 (`ready`, `changed`, `heartbeat`)
 - `AppEventsApi.revision` — 현재 revision 번호 조회

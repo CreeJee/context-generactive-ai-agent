@@ -85,6 +85,15 @@ export function useRoleModelMutation() {
   });
 }
 
+/** Gives find_skill a model that chooses its results, or null to turn the router off. */
+export function useSkillRouterMutation() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: api.setSkillRouterModel,
+    onSuccess: (settings) => client.setQueryData(globalQueries.skillRouter().queryKey, settings),
+  });
+}
+
 /** Moves a project in the scheduler's order of projects. */
 export function useProjectOrderMutation() {
   const client = useQueryClient();

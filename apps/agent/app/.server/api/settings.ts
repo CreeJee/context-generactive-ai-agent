@@ -143,6 +143,25 @@ export const SettingsApiHandlers = HttpApiBuilder.group(
             SchemaError: storageFailed,
           }),
         ),
+      skillRouter: () =>
+        active.chosenFor("skillRouter").pipe(
+          Effect.map((model) => ({ model })),
+          Effect.catchTag("GlobalConfigFailed", settingsFailed),
+        ),
+      setSkillRouter: ({ payload }) =>
+        active.chooseFor("skillRouter", payload.model).pipe(
+          Effect.map((model) => ({ model })),
+          // Other windows' skill settings show the model, so they read it again.
+          Effect.tap(() => events.publishGlobal("skillRouter")),
+          Effect.catchTags({
+            GlobalConfigFailed: settingsFailed,
+            // A model the provider does not list, or a provider that cannot list its models now.
+            ModelUnavailable: () => Effect.fail({ error: "role_model_unavailable" } as const),
+            ProviderUnavailable: () => Effect.fail({ error: "role_model_unavailable" } as const),
+            ProviderOperationFailed: () =>
+              Effect.fail({ error: "role_model_unavailable" } as const),
+          }),
+        ),
       kagi: () =>
         kagi.status.pipe(
           Effect.catchTags({

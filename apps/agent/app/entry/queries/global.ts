@@ -54,6 +54,8 @@ export const globalQueries = {
           : false,
     }),
   kanban: () => queryOptions({ queryKey: appQueryKeys.global.kanban, queryFn: api.kanbanSettings }),
+  skillRouter: () =>
+    queryOptions({ queryKey: appQueryKeys.global.skillRouter, queryFn: api.skillRouterSettings }),
   models: (provider: ProviderId) =>
     queryOptions({
       queryKey: appQueryKeys.global.models(provider),
@@ -91,6 +93,7 @@ export const useKagiQuery = () => useSuspenseQuery(globalQueries.kagi());
 export const useConversationSettingsQuery = () => useSuspenseQuery(globalQueries.conversation());
 export const useRecallSettingsQuery = () => useSuspenseQuery(globalQueries.recall());
 export const useKanbanSettingsQuery = () => useSuspenseQuery(globalQueries.kanban());
+export const useSkillRouterQuery = () => useSuspenseQuery(globalQueries.skillRouter());
 export const useImprovementsQuery = () => useSuspenseQuery(globalQueries.improvements());
 const useModelsQueryBody = (provider: ProviderId, enabled: boolean) =>
   useQuery({ ...globalQueries.models(provider), enabled });

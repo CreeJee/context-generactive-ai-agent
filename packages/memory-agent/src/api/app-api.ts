@@ -67,6 +67,7 @@ export {
   RecallSettings,
   RoleModels,
   ScanCommand,
+  SkillRouterSettings,
 } from "./app-api/settings.ts";
 export {
   ExternalAgentCommand,

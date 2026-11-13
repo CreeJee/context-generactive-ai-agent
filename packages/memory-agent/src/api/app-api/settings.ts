@@ -57,6 +57,10 @@ export const KanbanSettings = Schema.Struct({
 });
 export type KanbanSettings = typeof KanbanSettings.Type;
 
+/** The model that chooses find_skill's results; null when the skill router is off. */
+export const SkillRouterSettings = Schema.Struct({ model: Schema.NullOr(ModelSelection) });
+export type SkillRouterSettings = typeof SkillRouterSettings.Type;
+
 /** A user value, or null to go back to the machine default; or a project's place in the tree. */
 export const KanbanSettingsCommand = Schema.TaggedUnion({
   SetConcurrency: { concurrency: Schema.NullOr(KanbanConcurrency) },
@@ -143,6 +147,8 @@ const KanbanRefusals = [
   ]),
 ] as const;
 
+const SkillRouterRefusals = [appRefusal(400, ["role_model_unavailable"]), SettingsFailed] as const;
+
 /** `reason` is the keychain operation that failed. */
 const KagiRefusals = [
   appRefusal(409, ["kagi_key_required"]),
@@ -156,6 +162,7 @@ const ImprovementFailed = appRefusal(500, ["improvement_failed"]);
 export const settingsRefusals = [
   SettingsFailed,
   ...KanbanRefusals,
+  ...SkillRouterRefusals,
   ...KagiRefusals,
   ImprovementFailed,
 ];
@@ -204,6 +211,20 @@ export class SettingsGroup extends HttpApiGroup.make("settings")
       payload: KanbanSettingsCommand,
       success: KanbanSettings,
       error: KanbanRefusals,
+    }),
+    /** The model that chooses find_skill's results, if the user chose one. */
+    HttpApiEndpoint.get("skillRouter", "/api/settings/skill-router", {
+      success: SkillRouterSettings,
+      error: SkillRouterRefusals,
+    }),
+    /**
+     * find_skill uses this model from its next call; null turns the router off. A model the
+     * provider does not list is refused.
+     */
+    HttpApiEndpoint.post("setSkillRouter", "/api/settings/skill-router", {
+      payload: SkillRouterSettings,
+      success: SkillRouterSettings,
+      error: SkillRouterRefusals,
     }),
     /** Whether a key is registered and Kagi is on. The key is never returned (R19). */
     HttpApiEndpoint.get("kagi", "/api/settings/kagi", {

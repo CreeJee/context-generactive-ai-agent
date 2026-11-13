@@ -13,7 +13,7 @@
 - `useSelectModelMutation(provider)` — 모델과 effort를 선택하고 `publishModelSelection`으로 모든 provider의 models 캐시의 `selected`를 고친다.
 - `useAccountActionMutation(provider)` — 구독 계정 동작 결과 view를 accounts 캐시에 쓰고, quota·auth·models 쿼리를 무효화한다.
 - `useCompatibleAccountMutation` — `compatibleClient.change`로 openai-compatible endpoint와 모델을 추가·수정·삭제한다.
-- `useConversationSettingsMutation` / `useKanbanSettingsMutation` / `useRecallSettingsMutation` / `useProjectOrderMutation` — 응답 스냅샷을 해당 global 쿼리에 `setQueryData`로 바로 쓴다. `useProjectOrderMutation`은 `api.moveProject`로 스케줄러의 프로젝트 순서를 바꾼다.
+- `useConversationSettingsMutation` / `useKanbanSettingsMutation` / `useRecallSettingsMutation` / `useProjectOrderMutation` / `useSkillRouterMutation` — 응답 스냅샷을 해당 global 쿼리에 `setQueryData`로 바로 쓴다. `useProjectOrderMutation`은 `api.moveProject`로 스케줄러의 프로젝트 순서를 바꾼다.
 - `useImageGenerationEnabledMutation` / `useCrossProviderConsentMutation` / `useKagiMutation` / `useImportMutation` / `useEmbeddingMutation` / `useAddProjectMutation` — 설정 쓰기 후 해당 global 쿼리를 무효화한다.
 - `useGoalOrderMutation(projectId)` — `api.moveGoal`로 대화 Goal 순서를 바꾼다. 성공하면 project kanban 캐시에 쓰고, 끝나면 boards를 무효화한다.
 - `AgentChange` / `useExternalAgentMutation(projectId)` — 외부 에이전트 trust와 reconnect용 tagged enum과 그 mutation

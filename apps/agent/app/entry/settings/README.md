@@ -8,6 +8,7 @@
 
 - `openSettingsOverlay` — `{ project: Project | null; initialPage?: "web" }`를 받아 overlay-kit `overlay.open`으로 `SettingsOverlay`를 연다. 닫을 때 `close()` 후 `unmount()`를 호출한다
 - `SettingsOverlay` — `{ project, open, onClose, initialPage?: SettingsPage }` 설정 Dialog 컴포넌트다. `settingsGroups`의 탭(web, image, mcp, agents, conversation, recall, imports, embedding, kanban, improvements, skills)을 그리고 `pageBodies`로 각 페이지를 렌더한다
+- `ModelSelectionField` (`model-selection-field.tsx`) — 설정 한 칸의 모델(공급자·모델·추론 단계, 또는 없음)을 고르고 `onSave(selection | null)`로 넘기는 폼이다. 칸반 역할 모델과 skill router 모델이 쓴다
 - `errorMessage` — `ApiError | null`을 한국어 오류 문구로 바꾼다. `keychain_failed`와 `kagi_key_required`는 전용 문구를 쓰고, 나머지는 기본 문구를 쓴다
 - `PageHeader` — 설정 페이지 상단 컴포넌트다. 제목, 배지, 설명, 선택 프로젝트 배지(`project`가 있을 때), 주 동작을 보여 준다
 - `PageError` — 오류 문자열이 truthy일 때만 destructive `Alert`를 렌더한다
