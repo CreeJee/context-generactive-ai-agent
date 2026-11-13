@@ -353,6 +353,43 @@ testAgent()("explicit new Goal transition", (it) => {
     }),
   );
 
+  // A failed or cancelled card agent once held every later new Goal back, since nothing a user
+  // could do settled its task further.
+  it.effect.each([
+    ...(["completed", "failed", "cancelled", "archived"] as const).map((status) => ({
+      status,
+      holds: false,
+    })),
+    ...(
+      ["queued", "running", "waiting", "blocked", "interrupted", "resumable", "resuming"] as const
+    ).map((status) => ({ status, holds: true })),
+  ])("a $status task of the session holds the new Goal back: $holds", ({ status, holds }) =>
+    Effect.gen(function* () {
+      const { project } = yield* TestEnv;
+      const f = yield* withInvokingRun();
+      const task = `${f.session}:task`;
+      yield* sqlRun(
+        `INSERT INTO work_tasks (id, project_id, origin_session_id, parent_run_id,
+          parent_tool_call_id, agent_name, status, title, request, created_at, updated_at)
+          VALUES (?, ?, ?, 'kanban:card', 'call', 'card', ?, 'card', 'card', 1, 1)`,
+        task,
+        project.id,
+        f.session,
+        status,
+      );
+      const call = yield* goalTool(f.session, f.invoking);
+      expect(yield* call(transition(f.old))).toMatchObject(
+        holds
+          ? {
+              error: "new_goal_transition_refused",
+              reason: "execution_outstanding",
+              taskIds: [task],
+            }
+          : { status: "accepted", runId: f.invoking },
+      );
+    }),
+  );
+
   it.effect("legacy historical Goal and revisions remain unbound after explicit new Goal", () =>
     Effect.gen(function* () {
       const { project } = yield* TestEnv;

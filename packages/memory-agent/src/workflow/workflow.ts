@@ -59,6 +59,7 @@ import {
   decodedPlace,
   storedPlaceFields,
 } from "./contracts.ts";
+import type { TaskStatus } from "../work-trace/contracts.ts";
 import { notStartedStatus, validatePlanDependencies } from "./plan-schedule.ts";
 import { validateStepOutcomes } from "./step-outcomes.ts";
 import { applyGoalEdits, type EditGoal } from "./goal-edit.ts";
@@ -198,7 +199,23 @@ export class NewGoalTransitionRefused extends Schema.TaggedError<
     "owner_effect_uncertain",
     "execution_outstanding",
   ]),
+  /** The session's tasks that are not finished yet, when they are why the request is refused. */
+  taskIds: Schema.optionalKey(Schema.Array(Schema.String)),
 }) {}
+
+/**
+ * Task statuses that still hold a new Goal back: the task runs, waits, or can still be resumed.
+ * A failed or cancelled task has ended, so it no longer does.
+ */
+const unfinishedTaskStatuses: ReadonlyArray<TaskStatus> = [
+  "queued",
+  "running",
+  "waiting",
+  "blocked",
+  "interrupted",
+  "resumable",
+  "resuming",
+];
 
 /** Where a run's queued new Goal stands once the owner settles it; `none` when it queued none. */
 export type NewGoalSettlement = Data.TaggedEnum<{
@@ -668,11 +685,14 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             AND NOT ${sql.literal(acknowledgedRunSql("b"))} LIMIT 1`)
       )
         return yield* refuseNewGoal("owner_effect_uncertain");
-      if (
-        yield* exists(sql`SELECT id FROM work_tasks WHERE origin_session_id = ${sessionId}
-          AND status NOT IN ('completed', 'archived') LIMIT 1`)
-      )
-        return yield* refuseNewGoal("execution_outstanding");
+      const unfinished = yield* sql<{ readonly id: string }>`SELECT id FROM work_tasks
+        WHERE origin_session_id = ${sessionId} AND status IN ${sql.in(unfinishedTaskStatuses)}
+        ORDER BY created_at LIMIT 10`;
+      if (unfinished.length > 0)
+        return yield* NewGoalTransitionRefused.make({
+          reason: "execution_outstanding",
+          taskIds: unfinished.map(({ id }) => id),
+        });
       return { current, identity, standing: source.standing };
     });
     const commitNewGoal = Effect.fnUntraced(function* (sessionId: string, input: StartNewGoal) {
