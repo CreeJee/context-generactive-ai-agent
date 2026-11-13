@@ -142,15 +142,14 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
         Effect.flatMap(Workflows, (workflows) => workflows.get(session.id)),
       );
       expect([state.phase, state.plan?.status]).toEqual(["running", "executing"]);
-      // The planner had no project write tools and no progress tool.
+      // The planner keeps the project's tools; only its prompt leaves the cards to the board.
       const tools = session.invocations()[0]?.toolNames ?? [];
-      expect(tools).toEqual(expect.arrayContaining(["update_goal", "update_plan"]));
+      expect(tools).toEqual(expect.arrayContaining(["update_goal", "update_plan", "write_file"]));
       expect(tools).not.toContain("update_workflow_progress");
-      expect(tools).not.toContain("write_file");
     }),
   );
 
-  it.effect("the planner of a running board reads the project only but changes the board", () =>
+  it.effect("the planner of a running board keeps the project's tools and changes the board", () =>
     Effect.gen(function* () {
       const env = yield* TestEnv;
       const session = yield* planned([{ text: "Noted." }]);
@@ -170,8 +169,9 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
       yield* waitForBoard(session.board);
       yield* runTurn(session.id, `${session.id}-turn`, "How is the board going?");
       const tools = session.invocations()[0]?.toolNames ?? [];
-      expect(tools).toEqual(expect.arrayContaining(["read_kanban_board", "edit_kanban_board"]));
-      expect(tools).not.toContain("write_file");
+      expect(tools).toEqual(
+        expect.arrayContaining(["read_kanban_board", "edit_kanban_board", "write_file"]),
+      );
     }),
   );
 

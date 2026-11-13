@@ -68,7 +68,7 @@ import {
 import { createSubscriptionRuntimeImplementation } from "../providers/subscription-runtime.ts";
 import { ProviderRegistry } from "../providers/registry.ts";
 import { ProviderToolRuntime } from "../providers/tool-policy.ts";
-import { McpServers, isMcpToolName, mcpInstructionsForMode } from "../mcp/servers.ts";
+import { McpServers, mcpInstructionsForMode } from "../mcp/servers.ts";
 import { Indexer } from "../memory/embedding/indexer.ts";
 import { Interpreter } from "../memory/interpret.ts";
 import { Nodes } from "../memory/nodes.ts";
@@ -361,44 +361,12 @@ const cancelWaitMs = 5_000;
 const afterRunBudget = 200;
 
 /**
- * Outside plain chat the conversation plans, and the board's card agents do the work: it never
- * receives project mutation, outside access or delegation tools, and receives only the MCP tools
- * their servers mark read-only.
- */
-const readOnlyWorkflowPhases = HashSet.fromIterable<WorkflowPhase>([
-  "shaping",
-  "running",
-  "completed",
-]);
-/**
  * Where the chat of a kanban board gets the board's tools: plain chat, the running board whose
- * planner it is (read-only for the project, not for the board), and shaping, where a revised Plan
- * waits to be confirmed while its board stays active.
+ * planner it is, and shaping, where a revised Plan waits to be confirmed while its board stays
+ * active. In every phase the chat keeps the project's tools: its prompt, not a smaller tool set,
+ * leaves the cards' work to the board.
  */
 const boardToolPhases = HashSet.fromIterable<WorkflowPhase>(["chat", "shaping", "running"]);
-const workflowReadToolNames = HashSet.fromIterable([
-  "find_memory",
-  "read_evidence",
-  "trace_evidence",
-  // Compaction points a shortened result at this tool, so a read-only phase needs it too.
-  "read_tool_result",
-  "list_files",
-  "search_files",
-  "read_file",
-  "find_skill",
-  "read_skill",
-  "get_background_result",
-  "kagi_search",
-  "kagi_extract",
-  "update_goal",
-  "edit_goal",
-  // Explicit workflow artifact action, not a project mutation grant. The owner
-  // still requires a quiescent session and never exempts the invoking live run.
-  "start_new_goal",
-  "update_plan",
-  "edit_plan",
-  "close_plan",
-]);
 
 type InternalFollowup = Data.TaggedEnum<{
   notification: {};
@@ -1684,7 +1652,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ...optionalProperty("route", imageRoute?.executorMediaRouteId),
           });
 
-        const workflowReadOnly = HashSet.has(readOnlyWorkflowPhases, workflow.phase);
         // Not tied to the request: a reload or a closed tab must not stop the run (R10). Only an
         // explicit cancel aborts it.
         const cancellation = yield* cancellations.allocate(serviceShutdown);
@@ -1844,9 +1811,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           const prompts = [
             ...(isTruthy(reportSnapshot) ? [reportSnapshot] : []),
             ...(isTruthy(skillset.instructions) ? [skillset.instructions] : []),
-            ...(!workflowReadOnly && isTruthy(delegationInstructions)
-              ? [delegationInstructions]
-              : []),
+            ...(isTruthy(delegationInstructions) ? [delegationInstructions] : []),
             ...(reportSource !== null ? [] : [workspace]),
             ...(!(reportSource !== null) && isTruthy(workflowPrompt) ? [workflowPrompt] : []),
             ...(onKanbanBoard ? [kanbanInstructions] : []),
@@ -1952,7 +1917,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             )
           : [];
         const answers = { projectId, sessionId, runId, replyTo: Effect.asSome(userNodeId) };
-        const readOnly = workflowReadOnly || reportSource !== null;
+        const readOnly = reportSource !== null;
         /** What a report session gets instead: it never connects or loads anything more. */
         const unlessReport = <A, E, R>(effect: Effect.Effect<A, E, R>, none: NoInfer<A>) =>
           reportSource !== null ? Effect.succeed(none) : effect;
@@ -1966,12 +1931,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           {
             // Present only while the user has Kagi turned on with a key (R19).
             webTools: unlessReport(kagiTools.runTools, []),
-            mcp: unlessReport(
-              workflowReadOnly
-                ? mcpServers.readOnlyRunTools(project)
-                : mcpServers.runTools(project),
-              { tools: [], guides: [] },
-            ),
+            mcp: unlessReport(mcpServers.runTools(project), { tools: [], guides: [] }),
             context: Effect.all(
               {
                 skills: unlessReport(skillTools.toolsFor(project, sessionId), {
@@ -2033,11 +1993,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           Match.exhaustive,
         );
         const gate = yield* Effect.forEach(gateBindings, permissionGate.hookFor);
-        // Outside plain chat the approved tools, which can mutate, are not offered.
+        // A report session is not offered the approved tools, which can mutate.
         const phaseApproved = (binding?: BackgroundBinding) =>
-          reportSource !== null || workflowReadOnly
-            ? []
-            : approvedTools.toolsFor(project, sessionId, undefined, binding);
+          readOnly ? [] : approvedTools.toolsFor(project, sessionId, undefined, binding);
         const phaseApprovedTools = phaseApproved({
           sessionId,
           runId,
@@ -2068,12 +2026,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                   workTrace.taskTree(reportSource.sourceSessionId),
                 ),
               )
-            : allSharedTools.filter(
-                ({ tool }) =>
-                  !workflowReadOnly ||
-                  HashSet.has(workflowReadToolNames, tool.name) ||
-                  isMcpToolName(tool.name),
-              );
+            : allSharedTools;
         /** The standing rules of this run's agent and of its children. */
         const standingPrompts = [
           ...(reportSource !== null ? [reportAnalysisInstructions] : [memoryInstructions]),
@@ -2106,7 +2059,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           gated,
         });
         // The board's tools are the parent's alone; card agents never change the board. A running
-        // board's chat is its planner: it reads only the project, but it changes the board.
+        // board's chat is its planner, and it changes the board.
         const boardTools =
           situation.onKanbanBoard && HashSet.has(boardToolPhases, workflow.phase)
             ? kanbanTools.toolsFor(sessionId, runId)
@@ -2299,7 +2252,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             source: runModel.source,
             system: promptLayout(standingPrompts, situation.prompts, [
               ...(holdsImages ? [attachmentInstructions] : []),
-              ...(!workflowReadOnly ? [subagentInstructions] : []),
+              subagentInstructions,
             ]),
             tools: runTools.value,
             providerTools: providerTools.map(({ modelTool }) => modelTool),
