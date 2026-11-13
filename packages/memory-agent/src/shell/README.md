@@ -11,7 +11,7 @@
 - `CommandOptions` — `runCommand` 입력 타입
 - `CommandStartFailed` — 프로세스 spawn 실패를 나타내는 `Schema.TaggedError`(`reason: SpawnFailed`, `cause: Defect`)
 - `stopAllCommands(force?)` — 이 프로세스가 소유한 모든 셸 명령을 취소한다. `force`면 `SIGKILL`로 즉시 죽인다. 서버 종료 때 쓴다
-- `commandEnvironment(source)` — 비밀로 보이는 환경 변수를 빼고 `TERM=dumb`, `NO_COLOR`, `PAGER=cat`, `GIT_PAGER=cat`, `GIT_TERMINAL_PROMPT=0`을 넣은 env를 만든다
+- `commandEnvironment(source)` — 비밀로 보이는 환경 변수와 에이전트 자신의 trace 내보내기 설정(`OTEL_*`)을 빼고 `TERM=dumb`, `NO_COLOR`, `PAGER=cat`, `GIT_PAGER=cat`, `GIT_TERMINAL_PROMPT=0`을 넣은 env를 만든다
 - `hostShell(source)` — 명령이 실행될 셸 파일 경로(로그인 셸, `/bin/sh` 또는 `cmd.exe`)를 돌려주는 Effect
 - `defaultTimeoutSeconds` / `maxTimeoutSeconds` — 명령 타임아웃 기본값 120초, 최대값 1800초
 - `runSandboxed` — dual 함수 `(setup, run)`. worker를 띄워 `Prepare`로 감싼 명령을 받고, `run`으로 실행한 뒤 `Finish`로 stderr에 위반 내역을 덧붙인다. 오류는 `E | SandboxUnavailable`이고 `FileSystem`이 필요하다
@@ -36,7 +36,7 @@
 - 샌드박스 정책: 쓰기는 `projectRoot`(카드에서는 카드 worktree), `/tmp`, 임시 폴더, 홈의 캐시 경로만 허용하고 모두 실제 경로로 넘긴다. root와 임시 폴더는 `files/path-policy.ts`가 파일 도구·`run_skill` workdir와 같은 기준으로 정한다. 사용자 프로젝트 폴더는 카드에서 쓰기 목록에 없다. 대신 카드에서 스크립트가 적은 사용자 프로젝트 폴더 경로는 카드 worktree 경로로 바꿔 실행한다(`tools/approved.ts`). 카드 worktree에 없고 사용자 폴더에만 있는 경로(`.env`, `node_modules`)는 그대로 두어 사용자 폴더에서 읽는다. 읽기는 자격 증명 저장소와 `storageRoot` 밖이면 막지 않으므로 이 읽기도 된다. `<projectRoot>/.agents/skills`(실제 경로)는 쓰기 금지다(`save_code_skill`로만 바꾼다). 홈의 자격 증명 저장소와 `storageRoot`는 읽기 금지다. loopback 바인딩은 `network`에 `localhost`가 있을 때만 허용한다
 - `activeCommands` 레지스트리는 `globalThis.__contextGeneractiveAgentShellProcessState`에 하나만 둔다. 번들 중복이나 dev reload로 모듈이 여러 번 평가돼도 exit hook은 하나만 설치된다
 - process `'exit'` 훅이 `activeCommands`를 동기로 읽으므로, 레지스트리는 네이티브 `MutableHashSet`이어야 한다. force 경로의 kill은 동기로 시작한다
-- 명령 환경은 `extendEnv: false`인 `commandEnvironment`를 쓴다. 이름이 `TOKEN`/`SECRET`/`PASSWORD`/`API_KEY`/`AUTH` 등에 맞는 변수는 명령에 넘기지 않는다(R14)
+- 명령 환경은 `extendEnv: false`인 `commandEnvironment`를 쓴다. 이름이 `TOKEN`/`SECRET`/`PASSWORD`/`API_KEY`/`AUTH` 등에 맞는 변수는 명령에 넘기지 않는다(R14). `OTEL_*`도 넘기지 않는다. 넘기면 카드가 돌린 테스트의 worker span이 에이전트 수집기로 가고, `OTEL_EXPORTER_OTLP_HEADERS`에 든 인증 헤더도 명령에 보인다
 - POSIX에서는 `detached: true`로 자체 프로세스 그룹을 만든다. 중지는 `SIGTERM`으로 시작하고 3000ms 뒤 `SIGKILL`을 보낸다. 그 뒤 pipe와 `exitStatus`를 각각 최대 100ms만 기다린다(detached 자손이 pipe를 붙잡고 있을 수 있음)
 - 출력 캡처는 stream마다 앞 2KiB와 뒤 14KiB만 남기고, 생략한 바이트 수를 표시한다. 상한은 모델 컨텍스트 크기에 맞춘 값이다
 - `runCommand`는 호스트 실행이라 경로 규칙이 샌드박스하지 않는다. 샌드박스는 `runSandboxed`를 거쳐야 한다

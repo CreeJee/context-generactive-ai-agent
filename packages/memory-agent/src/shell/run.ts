@@ -70,11 +70,19 @@ export const maxTimeoutSeconds = 1_800;
 const secretVariable =
   /(TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL|COOKIE|SESSION_?KEY|AUTH)/i;
 
+/**
+ * The agent's own trace export settings. A command given them sends its spans to the agent's
+ * collector, so a test run from a card fills the dev span file with spans of test workers.
+ * `OTEL_EXPORTER_OTLP_HEADERS` can also carry an authorization header that `secretVariable` misses.
+ */
+const agentTelemetryVariable = /^OTEL_/i;
+
 export function commandEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return {
     ...Object.fromEntries(
       Object.entries(source).filter(
-        ([name, value]) => value !== undefined && !secretVariable.test(name),
+        ([name, value]) =>
+          value !== undefined && !secretVariable.test(name) && !agentTelemetryVariable.test(name),
       ),
     ),
     TERM: "dumb",

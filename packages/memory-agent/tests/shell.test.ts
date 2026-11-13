@@ -223,5 +223,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(result.stdout).not.toContain("secret");
       }),
     );
+
+    it("does not pass the agent's trace export settings to commands", () => {
+      const keys = Object.keys(
+        commandEnvironment({
+          ...env,
+          OTEL_TRACES_EXPORTER: "otlp",
+          OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:4318",
+          OTEL_EXPORTER_OTLP_HEADERS: "authorization=Bearer abc",
+        }),
+      );
+      expect(keys.filter((name) => name.startsWith("OTEL_"))).toEqual([]);
+    });
   });
 });
