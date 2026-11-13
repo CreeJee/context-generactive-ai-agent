@@ -2215,6 +2215,12 @@
 - 배경: 0.1.0 발행 때 smoke의 낡은 기대값 하나가 두 플랫폼 업로드를 모두 막았다.
 - 빌드·압축 단계는 두 파일에 같은 내용으로 둔다. 한쪽을 고치면 다른 쪽도 맞춘다.
 
+### React Router typegen 산출물은 워크트리마다 스킬로 재생성 (2026-11-13)
+
+- apps/agent의 route module 타입(`import type { Route } from "./+types/*"`)은 `react-router typegen`이 `.react-router/` 아래에 만드는 gitignored 로컬 빌드 산물이다. 저장소에 없으므로 새 checkout이나 검증 워크트리에서는 `vp check`(tsc) 전에 다시 생성해야 하고, 없으면 tsc가 그 import를 TS2307로 실패한다.
+- 설치된 React Router 8.4.0은 라우트 타입을 선언 파일이 아니라 `.ts`로 앱 디렉터리 구조를 미러링해 쓴다: `.react-router/types/app/+types/<route>.ts`와 요약 `.react-router/types/+routes.ts`, 그리고 `.react-router/types/+server-build.d.ts`. 이전 버전의 `.react-router/types/+types/root.d.ts` 같은 배치는 이 버전의 산출물이 아니다. `tsconfig.json`의 `include`(`.react-router/types/**/*`)와 `rootDirs`는 이미 이 배치를 가리키므로 설정 변경은 없다.
+- 재생성은 저장한 코드 스킬 `react-router-typegen`(apps/agent에서 `react-router typegen`을 돌리고 산출물을 나열한다)으로 한다. dev 서버와 `vp run agent#typecheck`도 같은 명령을 돌리므로 산출물 형태가 바뀌면 스킬과 typecheck 태스크를 함께 맞춘다.
+
 ## 테스트
 
 ### 테스트의 고정 대기 줄이기 (2026-09-29)
