@@ -1,4 +1,11 @@
-import { Array as EffectArray, Function as EffectFunction, Schema } from "effect";
+import {
+  Array as EffectArray,
+  Function as EffectFunction,
+  HashSet,
+  Iterable,
+  Schema,
+  String as Str,
+} from "effect";
 import type { WorkflowPhase } from "./workflow.ts";
 
 /**
@@ -10,7 +17,8 @@ export type RulePhase = typeof RulePhase.Type;
 
 /**
  * The rules a conversation in each phase reads: shaping defines the Goal and plans; while the Plan
- * runs the conversation only revises it, and card agents read no rules.
+ * runs the conversation only revises it. A card's agent and verifier read only the rules its
+ * `ruleRefs` name (`referencedRules`).
  */
 export const rulePhases = {
   chat: [],
@@ -170,3 +178,23 @@ function workflowRulesForBody(
     ...applicable.filter((rule) => rule.priority === "recommended"),
   ];
 }
+
+/**
+ * The rules a card's `ruleRefs` (`id@version` or `id`) name that guide `phase`, as they stand
+ * now. A ref to a rule that no longer exists, such as a skill rule of an older Plan, is left out, and
+ * so is one for another phase: a planning rule says nothing to the card's agent.
+ */
+export const referencedRules = ({
+  refs,
+  projectRules,
+  phase,
+}: {
+  readonly refs: readonly string[];
+  readonly projectRules: readonly WorkflowRule[];
+  readonly phase: RulePhase;
+}): readonly WorkflowRule[] => {
+  const ids = HashSet.fromIterable(
+    Iterable.map(refs, (ref) => EffectArray.headNonEmpty(Str.split(ref, "@"))),
+  );
+  return workflowRulesFor(projectRules, [phase]).filter((rule) => HashSet.has(ids, rule.id));
+};

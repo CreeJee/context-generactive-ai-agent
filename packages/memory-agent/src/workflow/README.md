@@ -43,7 +43,7 @@
 - `revisionStateSql` / `currentStatesSql` — revision 행에서 워크플로 상태 JSON을 만드는 SQL 조각과, 세션의 현재 revision을 붙인 표(`state-rows.ts`)
 - `toolLedger` / `uncertainRuns` / `UncertainContinue` / `UncertainRunsFailed` — tool 부수효과 ledger와 결과 불확실 run 처리
 - `planSchedule` / `PlanSchedule` / `planDependencyIssues` / `validatePlanDependencies` / `PlanDependenciesRejected` / `notStartedStatus` — Plan 의존성 검증과 실행 가능 step 스케줄
-- `workflowRulesFor` / `WorkflowRule` / `RuleSource` / `builtInWorkflowRules` / `projectWorkflowRules` / `structuredWorkflowRules` / `projectWorkflowRulesPath` — 워크플로 규칙 해석과 소스 로딩. 규칙 소스는 내장 규칙과 프로젝트의 `.agents/workflow-rules.json`뿐이다. 스킬은 규칙으로 바꾸지 않고, 모델은 run이 보여 주는 스킬 목록에서 고른다. `workflowRulesFor(projectRules, phases)`는 그 phase의 규칙을 모두 required 먼저 돌려준다. 순위를 매기거나 임베딩하지 않는다. recommended 규칙은 적고 짧아 모두 보내고, 어느 것이 맞는지는 모델이 판단한다
+- `workflowRulesFor` / `WorkflowRule` / `RuleSource` / `builtInWorkflowRules` / `projectWorkflowRules` / `structuredWorkflowRules` / `projectWorkflowRulesPath` — 워크플로 규칙 해석과 소스 로딩. 규칙 소스는 내장 규칙과 프로젝트의 `.agents/workflow-rules.json`뿐이다. 스킬은 규칙으로 바꾸지 않고, 모델은 run이 보여 주는 스킬 목록에서 고른다. `workflowRulesFor(projectRules, phases)`는 그 phase의 규칙을 모두 required 먼저 돌려준다. 순위를 매기거나 임베딩하지 않는다. recommended 규칙은 적고 짧아 모두 보내고, 어느 것이 맞는지는 모델이 판단한다. `referencedRules`는 카드의 `ruleRefs`가 가리키는 규칙 중 한 phase(`execute`, `verify`)의 것을 돌려준다. 카드 에이전트와 검증자 메시지에 들어간다
 - `WorkflowTools` / `workflowInstructions` / `ProviderRetries` / `providerRetryLayer` / `providerRetryIdempotencyKey` / `providerRetryDelay` / `providerRetryLimits` — 모델용 워크플로 도구, 지시문 생성, provider 재시도 서비스
 - 문구 — Lingui 런타임 매크로 메시지(`msg`)로 쓰는 곳에 두고 `src/i18n.ts`로 푼다. `src/locales/ko.po`로 추출되고 `lint/wording`가 검사한다
 

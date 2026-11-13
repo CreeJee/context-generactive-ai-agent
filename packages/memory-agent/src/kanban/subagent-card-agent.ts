@@ -1,5 +1,17 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { Context, Effect, HashSet, Iterable, Layer, Match, Option, Ref, Schema } from "effect";
+import {
+  Context,
+  Effect,
+  FileSystem,
+  HashSet,
+  Iterable,
+  Layer,
+  Match,
+  Option,
+  Path,
+  Ref,
+  Schema,
+} from "effect";
 import { McpServers, mcpInstructionsForMode } from "../mcp/servers.ts";
 import { SecureRandom } from "effect/crypto";
 import { ActiveProvider } from "../providers/active-provider.ts";
@@ -15,6 +27,8 @@ import { OutsideTools } from "../tools/outside.ts";
 import { runTool, type RunTool } from "../tools/run-tool.ts";
 import { SkillTools, type SkillToolset } from "../tools/skills.ts";
 import type { PlanStep } from "../workflow/workflow.ts";
+import { referencedRules, type RulePhase, type WorkflowRule } from "../workflow/rules.ts";
+import { projectWorkflowRules } from "../workflow/sources.ts";
 import { cardAgentToolNames, verifierToolNames } from "../workflow/card-capabilities.ts";
 import {
   CardAgent,
@@ -47,13 +61,14 @@ const cardInstructions = [
   "- Do the card's work in that folder and nowhere else. Other cards may run at the same time in folders of their own.",
   "- Leave your changes in the files and do not commit, branch, merge or otherwise change git state; the owner handles that after you finish. Read-only git commands (git status, git diff, git log, git show) are fine as a sh code skill.",
   "- When a check the card needs (tests, a build, a lint) has no code skill yet, save one with save_code_skill and run it: the card's verifier cannot save skills and runs the one you saved.",
+  "- Follow the workflow rules listed with the card, and gather the evidence each one asks for.",
   "- When the card is done, reply with a short report of what you changed and how you checked it against the acceptance criteria.",
   "- If you cannot finish, say exactly what is missing; do not claim the card is done.",
 ].join("\n");
 
 const verifierInstructions = [
   "You verify one finished card of a kanban board. Your tools are rooted at the folder holding the card's work; read its files and run its checks, but change nothing.",
-  "- Check every acceptance criterion and every piece of required evidence. When a criterion depends on tests or a build, run them with the code skill that runs them; when no saved skill covers a check, report it as not run, since you cannot save skills.",
+  "- Check every acceptance criterion, every piece of required evidence and the evidence each listed workflow rule asks for. When a criterion depends on tests or a build, run them with the code skill that runs them; when no saved skill covers a check, report it as not run, since you cannot save skills.",
   "- Call record_card_verdict exactly once with your verdict before your final message.",
 ].join("\n");
 
@@ -84,6 +99,16 @@ const cardText = (card: PlanStep) =>
     ...listed("Required evidence", card.requiredEvidence ?? []),
     ...listed("Expected files", card.boundaries ?? []),
   ].join("\n");
+
+/** The workflow rules a card refers to, with the evidence each asks for; none, nothing. */
+const rulesText = (rules: readonly WorkflowRule[]) =>
+  listed(
+    "Workflow rules for this card",
+    rules.map(
+      (rule) =>
+        `${rule.title}: ${rule.instruction}${rule.requiredEvidence.length === 0 ? "" : ` Evidence: ${rule.requiredEvidence.join("; ")}`}`,
+    ),
+  ).join("\n");
 
 const CardVerdictInput = Schema.Struct({
   passed: Schema.Boolean,
@@ -146,6 +171,22 @@ const make = Effect.gen(function* () {
   const crypto = yield* SecureRandom.SecureRandom;
   const workflows = yield* Workflows;
   const planNodes = yield* PlanNodes;
+  const ruleContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
+
+  /**
+   * The rules `card` refers to that guide `phase`. The project's rule file is read from its own
+   * folder, not the card's worktree, which lacks a file git does not track. Without them the card
+   * still runs.
+   */
+  const cardRules = (projectId: string, card: PlanStep, phase: RulePhase) =>
+    projects.get(projectId).pipe(
+      Effect.flatMap(projectWorkflowRules),
+      Effect.provideContext(ruleContext),
+      Effect.map(({ rules }) =>
+        rulesText(referencedRules({ refs: card.ruleRefs, projectRules: rules, phase })),
+      ),
+      fallbackLogged("Card workflow rules unread", () => ""),
+    );
 
   /**
    * The memory tools of the card's project, reading tool results of the Goal's conversation and its
@@ -236,7 +277,10 @@ const make = Effect.gen(function* () {
                 : []),
               ...listed("Since your last run", run.notes),
               cardText(run.card),
-            ].join("\n\n");
+              yield* cardRules(run.projectId, run.card, "execute"),
+            ]
+              .filter((part) => part !== "")
+              .join("\n\n");
             const origin = yield* planOrigin(run.sessionId);
             const outcome = yield* subagents.runAttempt(
               {
@@ -379,15 +423,19 @@ const make = Effect.gen(function* () {
   );
 
   const verify = (input: CardVerification) =>
-    runVerifier({
-      sessionId: input.sessionId,
-      projectId: input.projectId,
-      worktree: input.worktree,
-      runPrefix: boardRunId(input.goalInstanceId, input.card.id, "verify"),
-      agent: `card-${input.card.id}-verify`,
-      message: [cardText(input.card), `The card's agent reported:\n${input.report}`].join("\n\n"),
-      instructions: verifierInstructions,
-    });
+    Effect.flatMap(cardRules(input.projectId, input.card, "verify"), (rules) =>
+      runVerifier({
+        sessionId: input.sessionId,
+        projectId: input.projectId,
+        worktree: input.worktree,
+        runPrefix: boardRunId(input.goalInstanceId, input.card.id, "verify"),
+        agent: `card-${input.card.id}-verify`,
+        message: [cardText(input.card), rules, `The card's agent reported:\n${input.report}`]
+          .filter((part) => part !== "")
+          .join("\n\n"),
+        instructions: verifierInstructions,
+      }),
+    );
 
   const verifyGoal = (input: GoalVerification) =>
     runVerifier({

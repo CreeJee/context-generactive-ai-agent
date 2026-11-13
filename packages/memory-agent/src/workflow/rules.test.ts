@@ -1,6 +1,12 @@
 import { Array as EffectArray } from "effect";
 import { describe, expect, it } from "vite-plus/test";
-import { builtInWorkflowRules, RuleSource, workflowRulesFor, type WorkflowRule } from "./rules.ts";
+import {
+  builtInWorkflowRules,
+  referencedRules,
+  RuleSource,
+  workflowRulesFor,
+  type WorkflowRule,
+} from "./rules.ts";
 
 const projectRule = (rule: Partial<WorkflowRule>): WorkflowRule => ({
   id: "project.fixtures",
@@ -47,5 +53,16 @@ describe("workflowRulesFor", () => {
   it("has unique versioned ids", () => {
     const identities = builtInWorkflowRules.map((rule) => `${rule.id}@${rule.version}`);
     expect(EffectArray.dedupe(identities).length).toBe(identities.length);
+  });
+});
+
+describe("referencedRules", () => {
+  it("gives the referred rules of the phase, with or without a version", () => {
+    const ids = referencedRules({
+      refs: ["workflow.plan.actionable@1", "workflow.plan.testing", "project.fixtures@2", "gone@1"],
+      projectRules: [projectRule({ phases: ["plan", "execute"] })],
+      phase: "execute",
+    }).map((rule) => rule.id);
+    expect(ids).toEqual(["workflow.plan.testing", "project.fixtures"]);
   });
 });
