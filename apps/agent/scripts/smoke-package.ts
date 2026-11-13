@@ -297,6 +297,133 @@ const program = Effect.gen(function* () {
   );
   yield* stop(secondServer);
 
+  // ── the memory CLI over the packaged executable ─────────────────────
+  // The executable answers `context-agent memory …` itself (server/main.ts): one JSON line on
+  // stdout, progress only on stderr, refusals with exit status 2. A synthetic imports-home holds
+  // one Claude Code conversation; the import writes it into a fresh storage folder and indexes it
+  // (no model file is cached there, so the vector channel reports itself degraded while the
+  // lexical index answers find-memory) and find-memory reads the conversation back as a match.
+  const importsHome = join(base, "imports-home");
+  const transcriptDirectory = join(importsHome, ".claude", "projects", "smoke-project");
+  yield* fs.makeDirectory(transcriptDirectory, { recursive: true });
+  const conversation = [
+    {
+      type: "user",
+      uuid: "u-1",
+      timestamp: "2026-11-13T09:00:00.000Z",
+      cwd: project,
+      sessionId: "smoke-cc-1",
+      message: { role: "user", content: "스모크 회상 기준을 정하자: README가 최상위 문서다" },
+    },
+    {
+      type: "assistant",
+      uuid: "a-1",
+      timestamp: "2026-11-13T09:00:10.000Z",
+      cwd: project,
+      sessionId: "smoke-cc-1",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "회상 기준 초안을 notes.md에 적어두겠습니다" }],
+      },
+    },
+  ];
+  yield* fs.writeFileString(
+    join(transcriptDirectory, "smoke-cc-1.jsonl"),
+    `${conversation.map((line) => JSON.stringify(line)).join("\n")}\n`,
+  );
+
+  const memoryRun = Effect.fn("smoke.memoryRun")(function* (
+    args: readonly string[],
+    timeoutMs: number,
+  ) {
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        const child = yield* spawner.spawn(
+          ChildProcess.make(executable, ["memory", ...args], {
+            cwd: project,
+            env: { CONTEXT_AGENT_BUILD_ID: undefined, CONTEXT_AGENT_DEV_BACKEND: undefined },
+            extendEnv: true,
+            stdin: "ignore",
+            stdout: "pipe",
+            stderr: "pipe",
+          }),
+        );
+        const collected = yield* Effect.all([
+          child.stdout.pipe(
+            Stream.decodeText(),
+            Stream.runFold(
+              () => "",
+              (all, part) => all + part,
+            ),
+          ),
+          child.stderr.pipe(
+            Stream.decodeText(),
+            Stream.runFold(
+              () => "",
+              (all, part) => all + part,
+            ),
+          ),
+        ]);
+        const code = Number(yield* child.exitCode);
+        return { code, out: collected[0], err: collected[1] };
+      }),
+    ).pipe(Effect.timeout(timeoutMs));
+  });
+  const jsonLines = (text: string) => text.split("\n").filter((line) => line.trim().length > 0);
+
+  const importRun = yield* memoryRun(
+    ["import", "--imports-home", importsHome, "--storage", storage],
+    300_000,
+  );
+  yield* check("memory import exits 0", importRun.code === 0, `exit ${importRun.code}`);
+  yield* check(
+    "memory import prints one JSON line on stdout",
+    jsonLines(importRun.out).length === 1,
+    jsonLines(importRun.out).slice(0, 2).join(" ⏎ ").slice(0, 120),
+  );
+  // The command's contract is one JSON line; the shape below reads only the fields this check
+  // needs, and a different shape fails the check through its optional chains.
+  // SAFETY: JSON.parse of the line the CLI printed; the asserted shape is what commands print.
+  const importJson = yield* Effect.try({
+    try: () => JSON.parse(jsonLines(importRun.out)[0] ?? "") as { pass?: { written?: number } },
+    catch: (cause) => new Cause.UnknownError(cause),
+  });
+  yield* check(
+    "memory import reports what it wrote",
+    (importJson.pass?.written ?? 0) > 0,
+    `${importJson.pass?.written ?? "no pass field"} written`,
+  );
+  yield* check(
+    "memory import keeps progress on stderr",
+    importRun.err.includes("importing into") && !importRun.out.includes("importing into"),
+    importRun.err.slice(0, 80),
+  );
+
+  const searchRun = yield* memoryRun(
+    ["find-memory", "회상 기준", "--storage", storage, "--project", project],
+    60_000,
+  );
+  yield* check("memory find-memory exits 0", searchRun.code === 0, `exit ${searchRun.code}`);
+  yield* check(
+    "memory find-memory prints one JSON line on stdout",
+    jsonLines(searchRun.out).length === 1,
+    jsonLines(searchRun.out).slice(0, 2).join(" ⏎ ").slice(0, 120),
+  );
+  const searchJson = yield* Effect.try({
+    try: () =>
+      // SAFETY: JSON.parse of the line the CLI printed; the asserted shape is what find-memory
+      // prints, and a different shape fails the check through its optional chains.
+      JSON.parse(jsonLines(searchRun.out)[0] ?? "") as {
+        matches?: readonly { snippet?: string }[];
+      },
+    catch: (cause) => new Cause.UnknownError(cause),
+  });
+  yield* check(
+    "memory find-memory matches the imported conversation",
+    (searchJson.matches ?? []).some((match) => (match.snippet ?? "").includes("회상 기준")),
+    `${(searchJson.matches ?? []).length} matches`,
+  );
+
   if (failures.length > 0) {
     yield* Effect.logError(`${failures.length} check(s) failed`);
     return yield* new Cause.UnknownError(new Error(`${failures.length} smoke checks failed`));

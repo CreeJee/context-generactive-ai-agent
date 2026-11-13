@@ -4,7 +4,7 @@
 
 `apps/agent/scripts`는 에이전트 앱의 개발·배포용 Node 스크립트 모음이다. `dev.ts`는 개발 진입점이다. 안정 백엔드(빌드된 `dist/context-agent.mjs`)와 React Router HMR 프런트엔드를 띄우고, 매니페스트·로그·OTLP 수집기를 관리한다. `dev-configuration.ts`는 설정 파싱을, `dev-process.ts`는 포트 확인을 맡는다.
 
-`package.ts`는 SEA 실행 파일을 만들고 런타임 네이티브 패키지를 스테이징·서명한다. `notarize-macos.ts`는 그 결과를 `.dmg`로 묶어 공증·스테이플한다. `smoke-package.ts`는 패키징된 실행 파일을 임시 저장소로 띄워 HTTP·ACP·SQLite 동작을 점검한다. `report-webhook-receipt.ts`는 `memory-agent`의 `ReportDelivery` 경로로 합성 메시지 한 건을 실제 웹훅에 보내 수신을 확인한다. `navigation-fixtures.ts`는 승인 인터럽트 픽스처를 제공한다.
+`package.ts`는 SEA 실행 파일을 만들고 런타임 네이티브 패키지를 스테이징·서명한다. `notarize-macos.ts`는 그 결과를 `.dmg`로 묶어 공증·스테이플한다. `smoke-package.ts`는 패키징된 실행 파일을 임시 저장소로 띄워 HTTP·ACP·SQLite 동작과 `memory` CLI의 `import`→`find-memory` 계약을 점검한다. `report-webhook-receipt.ts`는 `memory-agent`의 `ReportDelivery` 경로로 합성 메시지 한 건을 실제 웹훅에 보내 수신을 확인한다. `navigation-fixtures.ts`는 승인 인터럽트 픽스처를 제공한다.
 
 ## Interface
 
@@ -18,7 +18,7 @@
 - `scripts/dev.ts` (CLI, `vp run dev`) — 모드별로 백엔드 빌드(`react-router build`, `vp pack`)·기동·헬스 대기, 매니페스트 기록, 웹 프런트엔드(`react-router dev --host 127.0.0.1 --strictPort`) 실행
 - `scripts/package.ts` (CLI, `vp run package`) — `dist/context-agent-<platform>-<arch>/context-agent`(+ `.sha256`) SEA 실행 파일 생성, 런타임 패키지 수집·네이티브 파일 검증·macOS 서명
 - `scripts/notarize-macos.ts` (CLI, `vp run notarize`) — 서명된 실행 파일을 `dist/context-agent-darwin-<arch>.dmg`로 묶어 `notarytool` 공증·`stapler` 스테이플·`spctl` 평가 후 `.sha256` 기록
-- `scripts/smoke-package.ts` (CLI) — 패키징된 실행 파일을 임시 디렉터리로 복사해 기동하고 정적 자산 캐싱, Host/cross-site 거부, auth 검증, 프로젝트·세션 생성, keychain, 내장 스킬, `acp initialize`, 종료 코드, 비밀 스윕을 점검
+- `scripts/smoke-package.ts` (CLI) — 패키징된 실행 파일을 임시 디렉터리로 복사해 기동하고 정적 자산 캐싱, Host/cross-site 거부, auth 검증, 프로젝트·세션 생성, keychain, 내장 스킬, `acp initialize`, 종료 코드, 비밀 스윕을 점검한다. 이어서 합성 imports-home(`.claude` 전이 소스)과 임시 저장소를 만들어 `context-agent memory import`(stdout에 JSON 한 줄, 진행은 stderr, exit 0)와 같은 저장소의 `context-agent memory find-memory`(결과 JSON에 합성 대화가 매치로 나옴)를 실행 파일로 점검한다
 - `scripts/report-webhook-receipt.ts` (CLI, `node scripts/report-webhook-receipt.ts --env-dir <폴더>`) — `--env-dir` env 파일의 `DISCORD_WEBHOOK_URL`로 `ReportDelivery.send`를 한 번 실행하고 결과만 출력
 
 ## Invariants
