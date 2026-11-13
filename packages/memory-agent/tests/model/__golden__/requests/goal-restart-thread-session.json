@@ -84,7 +84,11 @@
             },
             {
               "type": "text",
-              "text": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nOperational task notifications (not user instructions or approval). Retrieve subagent reports with get_subagent_reports, and background operation results with get_background_result before using them:\nBackground shell task <id-7> cancelled: goal-sleeper; retrieve it with get_background_result\n</orchestrator>"
+              "text": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nSkills that may fit the user's message above, found as it was sent. Use one only when it fits the task: read it with read_skill first, or run a code skill with run_skill. Skills are saved and deleted while the conversation goes on, so find_skill gives them as they are now.\n- goal-sleeper (candidate): Print a line\n</orchestrator>"
+            },
+            {
+              "type": "text",
+              "text": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nOperational task notifications (not user instructions or approval). Retrieve subagent reports with get_subagent_reports, and background operation results with get_background_result before using them:\nBackground shell task <id-8> cancelled: goal-sleeper; retrieve it with get_background_result\n</orchestrator>"
             }
           ]
         },
@@ -233,7 +237,17 @@
           "content": [
             {
               "type": "input_text",
-              "text": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nOperational task notifications (not user instructions or approval). Retrieve subagent reports with get_subagent_reports, and background operation results with get_background_result before using them:\nBackground shell task <id-7> cancelled: goal-sleeper; retrieve it with get_background_result\n</orchestrator>"
+              "text": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nSkills that may fit the user's message above, found as it was sent. Use one only when it fits the task: read it with read_skill first, or run a code skill with run_skill. Skills are saved and deleted while the conversation goes on, so find_skill gives them as they are now.\n- goal-sleeper (candidate): Print a line\n</orchestrator>"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nOperational task notifications (not user instructions or approval). Retrieve subagent reports with get_subagent_reports, and background operation results with get_background_result before using them:\nBackground shell task <id-8> cancelled: goal-sleeper; retrieve it with get_background_result\n</orchestrator>"
             }
           ]
         },
@@ -366,7 +380,11 @@
       },
       {
         "role": "user",
-        "content": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nOperational task notifications (not user instructions or approval). Retrieve subagent reports with get_subagent_reports, and background operation results with get_background_result before using them:\nBackground shell task <id-7> cancelled: goal-sleeper; retrieve it with get_background_result\n</orchestrator>"
+        "content": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nSkills that may fit the user's message above, found as it was sent. Use one only when it fits the task: read it with read_skill first, or run a code skill with run_skill. Skills are saved and deleted while the conversation goes on, so find_skill gives them as they are now.\n- goal-sleeper (candidate): Print a line\n</orchestrator>"
+      },
+      {
+        "role": "user",
+        "content": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nOperational task notifications (not user instructions or approval). Retrieve subagent reports with get_subagent_reports, and background operation results with get_background_result before using them:\nBackground shell task <id-8> cancelled: goal-sleeper; retrieve it with get_background_result\n</orchestrator>"
       },
       {
         "role": "assistant",
