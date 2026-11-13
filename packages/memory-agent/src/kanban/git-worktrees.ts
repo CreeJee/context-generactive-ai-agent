@@ -14,6 +14,7 @@ import {
   Semaphore,
   Stream,
 } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { StorageRoot } from "../config/storage-root.ts";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
@@ -85,6 +86,12 @@ const toolView = (projectRoot: string, worktree: GitWorktree): CardWorktree => (
 /** The folder, below the Goal's card worktrees, where the whole Goal branch is checked. */
 const goalCheckoutFolder = ".goal";
 
+/**
+ * The folder, below the worktrees base, where removed worktrees wait to be deleted. It is not a
+ * kanban id, so no Goal folder listing sees it.
+ */
+const removedFolder = ".removed";
+
 type Operation = CardWorktreeFailed["operation"];
 type Reason = CardWorktreeFailed["reason"];
 const reasons = CardWorktreeFailedReason.cases;
@@ -133,6 +140,8 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
   const path = yield* Path.Path;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const storage = yield* StorageRoot;
+  const crypto = yield* SecureRandom.SecureRandom;
+  const layerScope = yield* Effect.scope;
   const git = yield* findExecutable("git");
   const installers = yield* Effect.forEach(dependencyInstalls, (install) =>
     Effect.map(findExecutable(install.executable), (executable) => ({ ...install, executable })),
@@ -286,6 +295,44 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
       fail(operation, reasons.WorktreeDirty.make({})),
       Effect.map(isClean(operation, worktree), (clean) => !clean),
     );
+
+  const removed = path.join(worktreesBase, removedFolder);
+  /** Deletes a folder below {@link removed} in the background; one left behind goes at the next start. */
+  const deleteLater = (folder: string) =>
+    fs
+      .remove(folder, { recursive: true, force: true })
+      .pipe(
+        Effect.catch(logFailure("Removed worktree folder was not deleted")),
+        Effect.withSpan("CardWorktrees.deleteRemoved"),
+        Effect.forkIn(layerScope),
+      );
+  /**
+   * Removes a worktree without waiting for its files to be deleted. A worktree with its installed
+   * dependencies (`installDependencies`) holds about a hundred thousand files, and deleting them
+   * took tens of seconds that a board edit waited for. The folder moves below {@link removed} on the
+   * same disk, git forgets the worktree whose folder is gone, and the files are deleted later.
+   * Changes it holds are lost as with `git worktree remove --force`, so callers commit first.
+   */
+  const discard = Effect.fnUntraced(function* (
+    operation: Operation,
+    repository: string,
+    folder: string,
+  ) {
+    const parked = path.join(removed, yield* crypto.uuidV7());
+    yield* fs
+      .makeDirectory(removed, { recursive: true, mode: 0o700 })
+      .pipe(Effect.andThen(fs.rename(folder, parked)), Effect.mapError(onDisk(operation)));
+    yield* expect(operation, repository, ["worktree", "prune"]);
+    yield* deleteLater(parked);
+  });
+  // Folders a stopped app left waiting.
+  yield* fs.exists(removed).pipe(
+    Effect.flatMap((exists) => (exists ? fs.readDirectory(removed) : Effect.succeed([]))),
+    Effect.flatMap(
+      Effect.forEach((name) => deleteLater(path.join(removed, name)), { discard: true }),
+    ),
+    Effect.catch(logFailure("Removed worktree folders were not listed")),
+  );
 
   const checkIds = (operation: Operation, ids: ReadonlyArray<string>) =>
     Effect.forEach(ids, (id) =>
@@ -602,11 +649,9 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
                       ? `Cancelled card ${card.cardId} (snapshot)`
                       : `Changes card ${card.cardId} left uncommitted (snapshot)`,
                   );
-                  yield* expect("settle", worktree.repository, [
-                    "worktree",
-                    "remove",
-                    worktree.path,
-                  ]).pipe(Effect.uninterruptible);
+                  yield* discard("settle", worktree.repository, worktree.path).pipe(
+                    Effect.uninterruptible,
+                  );
                   return keepBranch || Option.isSome(snapshot);
                 }),
               ),
@@ -1010,22 +1055,10 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
                   goal.projectRoot,
                 );
                 const folder = path.join(base, goal.goalInstanceId, goalCheckoutFolder);
-                yield* Effect.when(
-                  expect("checkout", repository, ["worktree", "remove", "--force", folder]),
-                  Effect.map(registered("checkout", repository), (entries) =>
-                    entries.some((entry) => entry.path === folder),
-                  ),
-                );
-                yield* expect("checkout", repository, ["worktree", "prune"]);
-                yield* fs.remove(folder, { recursive: true, force: true }).pipe(
-                  Effect.mapError((cause) =>
-                    CardWorktreeFailed.make({
-                      operation: "checkout",
-                      reason: reasons.GitFailed.make({ exitCode: null }),
-                      cause,
-                    }),
-                  ),
-                );
+                const leftover = yield* fs.exists(folder).pipe(Effect.mapError(onDisk("checkout")));
+                yield* leftover
+                  ? discard("checkout", repository, folder)
+                  : expect("checkout", repository, ["worktree", "prune"]);
                 yield* fs
                   .makeDirectory(path.dirname(folder), { recursive: true, mode: 0o700 })
                   .pipe(
@@ -1056,12 +1089,7 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
               }),
             ),
             (checkout) =>
-              expect("checkout", checkout.repository, [
-                "worktree",
-                "remove",
-                "--force",
-                checkout.path,
-              ]).pipe(
+              discard("checkout", checkout.repository, checkout.path).pipe(
                 Effect.catchTag("CardWorktreeFailed", logFailure("Goal checkout was not removed")),
                 // One left behind is removed with the Goal's folder.
                 Effect.ensuring(Ref.update(checkouts, HashSet.remove(goalKey(goal)))),
@@ -1112,18 +1140,13 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
           const present = yield* fs
             .exists(checkout)
             .pipe(Effect.mapError(onDisk("remove_goal_folder")));
-          yield* Effect.when(
-            expect("remove_goal_folder", repository, ["worktree", "remove", "--force", checkout]),
-            Effect.succeed(listed && present),
-          );
-          yield* Effect.when(
-            expect("remove_goal_folder", repository, ["worktree", "prune"]),
-            Effect.succeed(listed && !present),
-          );
           // A checkout a crash left unregistered goes too.
-          yield* fs
-            .remove(checkout, { recursive: true, force: true })
-            .pipe(Effect.mapError(onDisk("remove_goal_folder")));
+          yield* present
+            ? discard("remove_goal_folder", repository, checkout)
+            : Effect.when(
+                expect("remove_goal_folder", repository, ["worktree", "prune"]),
+                Effect.succeed(listed),
+              );
           const entries = yield* fs.exists(folder).pipe(
             Effect.flatMap((exists) => (exists ? fs.readDirectory(folder) : Effect.succeed(null))),
             Effect.mapError(onDisk("remove_goal_folder")),

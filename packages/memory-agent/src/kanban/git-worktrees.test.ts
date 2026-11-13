@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Config, Deferred, Effect, Fiber, FileSystem, Layer, Option, Path } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -44,7 +45,12 @@ const fixture = Effect.gen(function* () {
   const project = path.join(home, "project");
   yield* fs.copy((yield* KanbanTemplate).project, project);
   const worktreesLayer = gitCardWorktreesLayer(path.join(home, "worktrees")).pipe(
-    Layer.provide(StorageRoot.layer(path.join(home, ".context-generactive-agent"))),
+    Layer.provide(
+      Layer.mergeAll(
+        StorageRoot.layer(path.join(home, ".context-generactive-agent")),
+        NodeCrypto.layer,
+      ),
+    ),
   );
   return { fs, path, home, project, worktreesLayer };
 });

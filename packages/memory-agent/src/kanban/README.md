@@ -50,6 +50,7 @@
 - 충돌은 자동으로 해결하지 않고 파일 단위로 보고합니다. `syncWithGoal`은 충돌한 merge를 카드 worktree에 남겨 카드(또는 사람)가 풀게 합니다. `commitWork`는 그 파일에 충돌 표시가 남아 있으면 커밋하지 않고 `ConflictUnresolved`로 실패하고, 풀린 merge는 merge commit으로 커밋합니다. `mergeTargetIntoGoal`은 충돌이 나면 아무것도 쓰지 않고 어떤 checkout도 건드리지 않습니다. `advanceTarget`은 uncommitted 변경이 있는 checkout을 덮어쓰지 않고 기다립니다. `pushGoalBranch`는 push를 반복하지 않습니다.
 - `prepareGoal`은 사용자의 checkout, index, 현재 브랜치를 바꾸지 않습니다. Goal 브랜치는 사용자의 현재 HEAD에서 시작합니다.
 - `WorktreeDisposition`에 따른 보존 규칙은 다음과 같습니다. `Done`이면 worktree와 카드 브랜치를 제거하되, 커밋하지 않은 변경이 남아 있으면 snapshot을 commit하고 브랜치를 남깁니다. `Cancelled`이면 먼저 카드 브랜치에 snapshot을 commit해 복구할 수 있게 한 뒤 worktree를 제거합니다. `Blocked`와 `HumanDecision`이면 worktree를 그대로 둡니다.
+- worktree를 제거할 때(settle, Goal checkout)는 폴더를 worktrees base 아래 `.removed`로 옮기고 `git worktree prune`만 기다립니다. 설치된 의존성까지 수만 개 파일을 지우는 일은 백그라운드에서 하고, 앱이 그 전에 멈추면 다음 시작 때 지웁니다. 보드 편집이 삭제를 기다리며 수십 초 걸리던 것을 막습니다.
 - worktree는 Goal이 살아 있는 동안 폴더로, Goal이 끝나면 snapshot commit 뒤 카드 브랜치로 남습니다. Goal이 끝났다는 것은 보드가 멈췄고 Plan이 닫혔거나 대화가 다른 Goal instance로 넘어갔다는 뜻입니다. 대화를 지워 멈춘 보드는 디스크를 그대로 둡니다(`docs/decisions.md` "Goal을 실행한 대화를 지우면 Goal 기록도 같이 지운다 (2026-10-25)"). janitor는 브랜치를 지우지 않습니다.
 - Goal 폴더가 이 owner의 것인지는 그 goalInstanceId가 이 DB의 `kanban_goals`에 있는지로 판정합니다. 다른 설치본과 지운 대화의 폴더는 건드리지 않습니다. Goal-level check가 쥔 `.goal` checkout은 그 scope가 닫힐 때까지 지우지 않습니다.
 - `sequential` 모드(git 없음, git 저장소 아님, commit 없음)에서는 Goal의 카드를 프로젝트 자체에서 한 번에 하나씩 실행합니다. 이때 commit, sync, merge는 no-op입니다.
