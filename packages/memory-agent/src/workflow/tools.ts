@@ -74,6 +74,29 @@ const closePlan = {
 
 type WorkflowTool = "startNewGoal" | "updateGoal" | "updatePlan" | "editPlan" | "closePlan";
 
+/**
+ * What a Plan save answers: the saved version and each step's id, title, status and dependencies.
+ * The steps' text is what the call itself sent, and the workflow instructions carry it in full;
+ * answering it again made each save tens of kilobytes that every later turn read again.
+ */
+const savedPlan = ({ phase, plan }: WorkflowState) => ({
+  phase,
+  plan:
+    plan === null
+      ? null
+      : {
+          version: plan.version,
+          goalVersion: plan.goalVersion,
+          status: plan.status,
+          steps: plan.steps.map(({ id, title, status, dependsOn }) => ({
+            id,
+            title,
+            status,
+            dependsOn,
+          })),
+        },
+});
+
 /** The workflow tools each phase offers, in the order the model sees them. */
 const phaseTools = {
   shaping: ["updateGoal", "updatePlan", "editPlan", "closePlan", "startNewGoal"],
@@ -135,7 +158,7 @@ const make = Effect.gen(function* () {
           workflows.updatePlan(sessionId, input, author(call)),
         ).pipe(
           published,
-          Effect.map((state) => ({ phase: state.phase, plan: state.plan })),
+          Effect.map(savedPlan),
           Effect.catchTags({
             PlanDependenciesRejected: (failure) =>
               Effect.succeed({
@@ -156,7 +179,7 @@ const make = Effect.gen(function* () {
           workflows.editPlan(sessionId, input, author(call)),
         ).pipe(
           published,
-          Effect.map((state) => ({ phase: state.phase, plan: state.plan })),
+          Effect.map(savedPlan),
           Effect.catchTags({
             BoardEditRefused: (failure) =>
               Effect.succeed({ error: "plan_edit_refused" as const, reason: failure.reason }),
@@ -179,7 +202,7 @@ const make = Effect.gen(function* () {
           workflows.closePlan(sessionId, input.reason, author(call)),
         ).pipe(
           published,
-          Effect.map((state) => ({ phase: state.phase, plan: state.plan })),
+          Effect.map(savedPlan),
           Effect.catchTag("BoardEditRefused", (failure) =>
             Effect.succeed({ error: "plan_close_refused" as const, reason: failure.reason }),
           ),
