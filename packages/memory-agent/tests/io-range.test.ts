@@ -31,8 +31,12 @@ import { listOutsideFilesEffect } from "../src/files/listing.ts";
 const resultStore = Effect.acquireRelease(
   Effect.sync(() => {
     const sqlite = new DatabaseSync(":memory:");
+    // The reader scopes a node to its session tree, so the fixture carries the sessions rows its
+    // queries join, with the read session at the tree's root; an unknown session stays empty.
     sqlite.exec(
-      "CREATE TABLE nodes (id TEXT PRIMARY KEY, kind TEXT, project_id TEXT, session_id TEXT, text TEXT)",
+      "CREATE TABLE sessions (id TEXT PRIMARY KEY, parent_session_id TEXT); " +
+        "CREATE TABLE nodes (id TEXT PRIMARY KEY, kind TEXT, project_id TEXT, session_id TEXT, text TEXT); " +
+        "INSERT INTO sessions VALUES ('s', NULL)",
     );
     return sqlite;
   }),
