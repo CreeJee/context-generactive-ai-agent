@@ -47,8 +47,8 @@ export const skillSuggestions = (services: {
           onNone: () => Effect.succeed<StoredMessage[]>([]),
           onSome: (text) =>
             services.search.find(project, sessionId, text, suggestedSkills, false).pipe(
-              Effect.flatMap(
-                EffectArray.match({
+              Effect.flatMap(({ skills }) =>
+                EffectArray.match(skills, {
                   onEmpty: () => Effect.succeed<StoredMessage[]>([]),
                   onNonEmpty: (found) =>
                     Effect.map(

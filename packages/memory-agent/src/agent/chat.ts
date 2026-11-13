@@ -2230,7 +2230,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ...gate,
           children.hook,
           // Before the notifications: the suggestions are for the user's message they follow.
-          ...(reportSource !== null ? [] : [suggestions.hookFor(project, sessionId)]),
+          ...(reportSource !== null || tools.length === 0
+            ? []
+            : [suggestions.hookFor(project, sessionId)]),
           notifications.hookFor(sessionId, runId),
           toldDispatches.hookFor(sessionId, runId),
           yield* recorder.hookFor(answers),

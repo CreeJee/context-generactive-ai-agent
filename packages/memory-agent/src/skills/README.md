@@ -20,7 +20,7 @@
 - `AgentSkills`의 검토 멤버 — `recordRuns`, `unreviewed`, `unreviewedFound`, `promotedCopies`, `syncFound(projectId, origin, folders)`, `runsOf`, `keep`(유지 이유 기록), `promote`(후보를 `promoted_skills`로 옮기고 이전 사본 해시를 돌려줌), `copied`
 - `committedSkillFolders(root)` — `git ls-tree HEAD -- .agents/skills/`로 커밋된 스킬 폴더 이름을 돌려준다. git이 답하지 못하면(git 없음, 저장소 아님, 커밋 없음) `None`이고, 그때는 모든 폴더를 센다
 - `ProjectSkills` — `catalog(project, sessionId?)`, `find(project, sessionId, name)`(`FoundSkill` = `stored` | `folder`), `read`, `storedFile`. layer는 `AgentSkills`도 함께 준다
-- `SkillSearch` — `find_skill`이 쓰는 검색 서비스(`skill-search.ts`). `find(project, sessionId, query, limit)`는 부르는 순간의 카탈로그에서 단어 일치와 임베딩 cosine을 reciprocal rank fusion으로 합해 상위 `limit`개를 돌려준다. `prepare(project, sessionId)`는 카탈로그에서 벡터가 없는 스킬을 background로 임베딩한다. layer는 `NodeCrypto`를 붙이고 `ProjectSkills`·`Embedder`·`SqlClient`를 요구한다
+- `SkillSearch` — `find_skill`이 쓰는 검색 서비스(`skill-search.ts`). `find(project, sessionId, query, limit)`는 부르는 순간의 카탈로그에서 단어 일치와 임베딩 cosine을 reciprocal rank fusion으로 합해 상위 `limit`개를 돌려준다. `prepare(project, sessionId)`와 `find`는 카탈로그에서 벡터가 없는 스킬을 background로 임베딩하고 기다리지 않는다. 결과의 `wordsOnly`는 의미 없이 단어로만 견준 스킬 수다. 순위 계산은 순수 함수 `rankSkills`다(단어는 BM25 idf, 의미는 cosine, reciprocal rank fusion). layer는 `NodeCrypto`를 붙이고 `ProjectSkills`·`Embedder`·`SqlClient`를 요구한다
 - `SkillsOptions` — 테스트용 `home`과 `builtin` 경로를 덮어쓰는 옵션
 - `SkillScope` — `Schema.Literals(["builtin","global","project","promoted","candidate"])`와 같은 이름의 타입. `contracts.ts`에 있고 `skills.ts`가 다시 내보낸다
 - `builtinSkillsDirectory` — Effect. `runtimeRoot`가 있으면 그것을, 없으면 `memory-agent/package.json` 위치를 써서 `skills/` 경로를 정한다

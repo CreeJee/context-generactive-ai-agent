@@ -1,4 +1,5 @@
-import { Effect, FileSystem, Path } from "effect";
+import { Effect, FileSystem, Path, Schedule } from "effect";
+import { SqlClient } from "effect/sql";
 import { expect } from "vite-plus/test";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
@@ -129,7 +130,7 @@ testAgent()("global and project skills", (it) => {
         expect(tools.instructions).not.toContain("review");
         const found = (query: string) => callTool(tools.tools, "find_skill", { query });
         const named = (name: string) => expect.objectContaining({ name });
-        expect(yield* found("project review")).toEqual({
+        expect(yield* found("project review")).toMatchObject({
           skills: expect.arrayContaining([
             { name: "review", scope: "project", description: "Project review." },
           ]),
@@ -138,8 +139,25 @@ testAgent()("global and project skills", (it) => {
         yield* fs.remove(path.join(global, "deploy"), { recursive: true });
         yield* writeSkill(global, "release", "description: Write the release notes.");
         const now = yield* found("deploy the app or write release notes");
-        expect(now).toEqual({ skills: expect.arrayContaining([named("release")]) });
-        expect(now).not.toEqual({ skills: expect.arrayContaining([named("deploy")]) });
+        expect(now).toMatchObject({ skills: expect.arrayContaining([named("release")]) });
+        expect(now).not.toMatchObject({ skills: expect.arrayContaining([named("deploy")]) });
+        // The searches made the vectors their skills missed in the background and keep them:
+        // deploy's, review's and release's. Until then a search says it compared words only; once
+        // they are made it finds by meaning a skill sharing no word with the query.
+        const vectors = Effect.map(
+          (yield* SqlClient.SqlClient)<{
+            readonly n: number;
+          }>`SELECT count(*) AS n FROM skill_vectors`,
+          ([row]) => row?.n,
+        );
+        yield* vectors.pipe(
+          Effect.repeat({ until: (n) => n === 3, schedule: Schedule.spaced("20 millis") }),
+          Effect.timeout("10 seconds"),
+        );
+        expect(yield* found("releasing")).toEqual({
+          skills: [named("release"), named("review")],
+        });
+        expect(yield* vectors).toBe(3);
         // How to treat a skill comes with the skill read, not with the list.
         expect(yield* callTool(tools.tools, "read_skill", { name: "review" })).toMatchObject({
           scope: "project",

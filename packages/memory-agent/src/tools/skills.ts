@@ -54,6 +54,10 @@ const findSkill = {
 /** How many skills a search gives at most. */
 const foundSkills = 8;
 
+/** Why a search may miss a skill described in other words. */
+const wordsOnlyNote = (count: number) =>
+  `${count} skills were compared by words only, since the embedding model is loading or has not embedded them yet: a skill described in other words may be missing, so search again later.`;
+
 /**
  * How the model finds and treats skills. They are not listed: a list made as a run starts goes
  * stale as skills are saved and deleted, and the same instructions every run keep the prompt cache.
@@ -108,9 +112,14 @@ const make = Effect.gen(function* () {
     sessionId: string,
     { query }: typeof FindSkillInput.Type,
   ) =>
-    Effect.map(search.find(project, sessionId, query, foundSkills), (found) => ({
-      skills: found.map(({ name, scope, description }) => ({ name, scope, description })),
-    }));
+    Effect.map(search.find(project, sessionId, query, foundSkills), (found) => {
+      const skills = found.skills.map(({ name, scope, description }) => ({
+        name,
+        scope,
+        description,
+      }));
+      return found.wordsOnly === 0 ? { skills } : { skills, note: wordsOnlyNote(found.wordsOnly) };
+    });
 
   return {
     /**

@@ -17,7 +17,7 @@ import { SqlClient, SqlSchema } from "effect/sql";
 import type { Fenced } from "../files/paths.ts";
 import { Embedder, EmbedderRuntime } from "../memory/embedding/embedder.ts";
 import type { Project } from "../projects/projects.ts";
-import { fallbackLogged, ignoreLogged } from "../runtime/logged-failures.ts";
+import { fallbackLogged, logFailure } from "../runtime/logged-failures.ts";
 import { ProjectSkills } from "./project-skills.ts";
 import type { Skill } from "./skills.ts";
 
@@ -42,22 +42,108 @@ const words = (text: string) =>
       .filter((word) => word.length > 1),
   );
 
-/** How many of the query's words the skill's name or description holds. */
-const wordMatches = (queryWords: readonly string[], skill: Skill) => {
-  const text = `${skill.name} ${skill.description}`.toLowerCase();
-  return EffectArray.countBy(queryWords, (word) => text.includes(word));
+/**
+ * Whether a query word is a skill's word: the same, or the skill's word with an ending, as a Korean
+ * particle (테스트를) or an English inflection (tests) adds one.
+ */
+const sameWord = (queryWord: string, skillWord: string) => queryWord.startsWith(skillWord);
+
+/**
+ * The skills that share words with the query, each scored by the BM25 inverse document frequency
+ * of the words it shares: a word most skills have, such as "the" or "run", counts for little.
+ */
+const byWords = (catalog: readonly Skill[], query: string) => {
+  const skillWords = catalog.map((skill) => words(`${skill.name} ${skill.description}`));
+  const holds = (index: number, word: string) =>
+    (skillWords[index] ?? []).some((skillWord) => sameWord(word, skillWord));
+  const weights = words(query).map((word) => {
+    const holding = EffectArray.countBy(skillWords, (_, index) => holds(index, word));
+    return {
+      word,
+      weight: Math.log((catalog.length - holding + 0.5) / (holding + 0.5) + 1),
+    };
+  });
+  return catalog.flatMap((skill, index) => {
+    const shared = weights.filter(({ word }) => holds(index, word));
+    return shared.length === 0
+      ? []
+      : [{ skill, score: shared.reduce((sum, { weight }) => sum + weight, 0) }];
+  });
 };
 
 /** Vectors are L2-normalized, so their dot product is their cosine. */
 const similarity = (left: Float32Array, right: Float32Array) =>
   left.reduce((sum, value, index) => sum + value * (right[index] ?? 0), 0);
 
+const byScore = Order.mapInput(
+  Order.flip(Order.Number),
+  ({ score }: { readonly score: number }) => score,
+);
+
+/**
+ * The skills of `catalog` that fit `query` best, at most `limit`: the ones sharing its words and,
+ * when there is a query vector, the ones closest in meaning, fused by reciprocal rank. A skill
+ * without a vector is ranked by its words alone.
+ */
+export const rankSkills = (input: {
+  readonly catalog: readonly Skill[];
+  readonly query: string;
+  readonly queryVector: Option.Option<Float32Array>;
+  readonly vectorOf: (skill: Skill) => Option.Option<Float32Array>;
+  readonly limit: number;
+}): readonly Skill[] => {
+  const { catalog, query, queryVector, vectorOf, limit } = input;
+  const byMeaning = Option.match(queryVector, {
+    onNone: () => [],
+    onSome: (vector) =>
+      catalog.flatMap((skill) =>
+        Option.toArray(
+          Option.map(vectorOf(skill), (skillVector) => ({
+            skill,
+            score: similarity(vector, skillVector),
+          })),
+        ),
+      ),
+  });
+  const fused = [byWords(catalog, query), byMeaning].reduce(
+    (scores, ranking) =>
+      EffectArray.sort(ranking, byScore).reduce(
+        (sum, { skill }, index) =>
+          HashMap.set(
+            sum,
+            skill.name,
+            Option.getOrElse(HashMap.get(sum, skill.name), () => 0) + 1 / (fusionK + index + 1),
+          ),
+        scores,
+      ),
+    HashMap.empty<string, number>(),
+  );
+  return EffectArray.sort(
+    catalog.flatMap((skill) =>
+      Option.toArray(Option.map(HashMap.get(fused, skill.name), (score) => ({ skill, score }))),
+    ),
+    byScore,
+  )
+    .slice(0, limit)
+    .map(({ skill }) => skill);
+};
+
 const bytesOf = (vector: Float32Array) =>
   new Uint8Array(vector.buffer, vector.byteOffset, vector.byteLength);
-/** Copied, so the floats start on a 4-byte boundary whatever buffer the row came in. */
-const vectorOf = (bytes: Uint8Array) => new Float32Array(bytes.slice().buffer);
+/**
+ * Copied out of the row's buffer, which may be a larger shared pool (a Node Buffer), so the floats
+ * are only the row's and start on a 4-byte boundary.
+ */
+const vectorOf = (bytes: Uint8Array) =>
+  new Float32Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
 
 const VectorRow = Schema.Struct({ textSha256: Schema.String, vector: Schema.Uint8Array });
+
+/** What a search found, and how many skills it compared by words only, their meaning not. */
+export interface FoundSkills {
+  readonly skills: readonly Skill[];
+  readonly wordsOnly: number;
+}
 
 const make = Effect.gen(function* () {
   const skills = yield* ProjectSkills;
@@ -94,7 +180,11 @@ const make = Effect.gen(function* () {
         ),
     );
 
-  /** Embeds and stores the vectors of the catalog's skills that have none yet. */
+  /**
+   * Embeds and stores the vectors of the catalog's skills that have none yet, in the background:
+   * nothing waits for it. Long descriptions take their time: this project's 122 skills took over
+   * three minutes on the CPU.
+   */
   const embedMissing = Effect.fn("SkillSearch.embedMissing")(function* (catalog: readonly Skill[]) {
     const texts = yield* hashed(catalog);
     const stored = yield* storedVectors(texts.map(({ hash }) => hash));
@@ -110,14 +200,18 @@ const make = Effect.gen(function* () {
         Effect.forEach(
           EffectArray.zip(missing, vectors),
           ([{ hash }, vector]) => sql`
-              INSERT OR REPLACE INTO skill_vectors (embedder, text_sha256, vector)
-              VALUES (${embedder.identity}, ${hash}, ${bytesOf(vector)})`,
+            INSERT OR REPLACE INTO skill_vectors (embedder, text_sha256, vector)
+            VALUES (${embedder.identity}, ${hash}, ${bytesOf(vector)})`,
           { discard: true },
         ),
         sql`DELETE FROM skill_vectors WHERE embedder <> ${embedder.identity}`,
       ),
     );
   }, oneAtATime.withPermits(1));
+
+  /** Without them, searches compare words only, so a failure is a warning. */
+  const inBackground = <E extends { readonly _tag: string }>(work: Effect.Effect<void, E>) =>
+    Effect.asVoid(Effect.forkIn(Effect.catch(work, logFailure("Skill vectors not made")), scope));
 
   /** Whether a query embeds without first waiting for the local model to load. */
   const modelLoaded = () =>
@@ -126,15 +220,10 @@ const make = Effect.gen(function* () {
       other: () => true,
     });
 
-  /** Embeds the missing vectors in the background; nothing waits for it. */
-  const inBackground = <E extends { readonly _tag: string }>(work: Effect.Effect<void, E>) =>
-    Effect.asVoid(Effect.forkIn(work.pipe(ignoreLogged("Skill vectors not made")), scope));
-
   /**
-   * The skills of `catalog` that fit `query` best, at most `limit`: the ones naming its words and
-   * the ones closest in meaning, by reciprocal rank fusion. A skill with no vector yet is ranked by
-   * its words alone, and every skill is when the query cannot be embedded, or, unless
-   * `waitForModel`, while the embedding model is not loaded yet.
+   * The skills of `catalog` that fit `query` best, by their stored vectors. Every skill is ranked by
+   * its words alone when the query cannot be embedded, or, unless `waitForModel`, while the
+   * embedding model is not loaded yet.
    */
   const rank = Effect.fn("SkillSearch.rank")(function* (
     catalog: readonly Skill[],
@@ -142,11 +231,6 @@ const make = Effect.gen(function* () {
     limit: number,
     waitForModel: boolean,
   ) {
-    const queryWords = words(query);
-    const byWords = catalog.flatMap((skill) => {
-      const score = wordMatches(queryWords, skill);
-      return score > 0 ? [{ skill, score }] : [];
-    });
     const texts = yield* hashed(catalog);
     const hashOf = HashMap.fromIterable(
       Iterable.map(texts, ({ text, hash }) => [text, hash] as const),
@@ -166,42 +250,14 @@ const make = Effect.gen(function* () {
         queryVector: Option.none<Float32Array>(),
       })),
     );
-    const byMeaning = Option.match(queryVector, {
-      onNone: () => [],
-      onSome: (vector) =>
-        catalog.flatMap((skill) =>
-          Option.toArray(
-            Option.map(
-              Option.flatMap(HashMap.get(hashOf, embeddedText(skill)), (hash) =>
-                HashMap.get(stored, hash),
-              ),
-              (skillVector) => ({ skill, score: similarity(vector, skillVector) }),
-            ),
-          ),
-        ),
-    });
-    const fused = [byWords, byMeaning].reduce(
-      (scores, ranking) =>
-        EffectArray.sort(
-          ranking,
-          Order.mapInput(Order.flip(Order.Number), ({ score }: { score: number }) => score),
-        ).reduce(
-          (sum, { skill }, index) =>
-            HashMap.set(
-              sum,
-              skill.name,
-              Option.getOrElse(HashMap.get(sum, skill.name), () => 0) + 1 / (fusionK + index + 1),
-            ),
-          scores,
-        ),
-      HashMap.empty<string, number>(),
-    );
-    return EffectArray.sort(
-      catalog.filter((skill) => HashMap.has(fused, skill.name)),
-      Order.mapInput(Order.flip(Order.Number), (skill: Skill) =>
-        Option.getOrElse(HashMap.get(fused, skill.name), () => 0),
-      ),
-    ).slice(0, limit);
+    const vectorOf = (skill: Skill) =>
+      Option.flatMap(HashMap.get(hashOf, embeddedText(skill)), (hash) => HashMap.get(stored, hash));
+    return {
+      skills: rankSkills({ catalog, query, queryVector, vectorOf, limit }),
+      wordsOnly: Option.isSome(queryVector)
+        ? EffectArray.countBy(catalog, (skill) => Option.isNone(vectorOf(skill)))
+        : catalog.length,
+    } satisfies FoundSkills;
   });
 
   return {
@@ -216,14 +272,16 @@ const make = Effect.gen(function* () {
     /**
      * The skills a run of `sessionId` can use now that fit `query` best. The catalog is read as it
      * is at the call, so a skill deleted meanwhile is never found and one saved meanwhile is.
-     * Without `waitForModel`, a model still loading leaves the meaning out instead of waiting.
+     * The vectors its skills miss are made in the background, and they are compared by words until
+     * then. Without `waitForModel`, as for a suggestion before a model call, a model still loading
+     * leaves the meaning out instead of being waited for.
      */
     find: Effect.fn("SkillSearch.find")(function* (
       project: Fenced<Project>,
       sessionId: string,
       query: string,
       limit: number,
-      waitForModel = true,
+      waitForModel: boolean = true,
     ) {
       const { skills: catalog } = yield* skills.catalog(project, sessionId);
       yield* inBackground(embedMissing(catalog));
