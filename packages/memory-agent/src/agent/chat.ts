@@ -191,7 +191,7 @@ import {
   GoalExecutionErrorReason,
   GoalExecutionPayload,
 } from "../workflow/goal-execution-contracts.ts";
-import { rulePhases, WorkflowRules } from "../workflow/rules.ts";
+import { rulePhases, workflowRulesFor } from "../workflow/rules.ts";
 import { projectWorkflowRules } from "../workflow/sources.ts";
 import {
   LifecycleOutcome,
@@ -675,7 +675,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     Effect.flatMap(kanbanBoard(sessionId), (board) =>
       board ? active.selectedFor("planner") : active.selected,
     );
-  const workflowRules = yield* WorkflowRules;
   const workTrace = yield* WorkTraceStore;
   // A delete a crash left unfinished stops the conversation's boards first, as asking for it does.
   // Their loops started with the owner, before this.
@@ -1755,23 +1754,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               {
                 resolvedRules: projectWorkflowRules(project).pipe(
                   Effect.provideContext(workflowRuleContext),
-                  Effect.flatMap((localRules) =>
-                    Effect.map(
-                      workflowRules.resolve({
-                        phases: rulePhases[workflow.phase],
-                        text: [
-                          turn?.text ?? "",
-                          workflow.goal?.statement ?? "",
-                          workflow.plan?.summary ?? "",
-                        ].join("\n"),
-                        rules: localRules.rules,
-                      }),
-                      (resolved) =>
-                        localRules.problems.length === 0
-                          ? resolved
-                          : { ...resolved, degraded: [...resolved.degraded, "source" as const] },
-                    ),
-                  ),
+                  Effect.map((projectRules) => ({
+                    rules: workflowRulesFor(projectRules.rules, rulePhases[workflow.phase]),
+                    degraded: projectRules.problems.length === 0 ? [] : ["source" as const],
+                  })),
                 ),
                 goalInstanceId: workflows.goalInstanceId(sessionId),
                 onKanbanBoard: kanbanBoard(sessionId),

@@ -125,7 +125,6 @@ import { RunLogSignals } from "./workflow/durable-stream.ts";
 import { goalExecutionLayer } from "./workflow/goal-execution.ts";
 import { providerRetryLayer } from "./workflow/provider-retry.ts";
 import { WorkflowTools } from "./workflow/tools.ts";
-import { WorkflowRules } from "./workflow/rules.ts";
 import { OpenAICompatibleSettings } from "./providers/openai-compatible.ts";
 import { ExecutionAdmission } from "./runtime/execution-admission.ts";
 
@@ -389,7 +388,6 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     ).pipe(Layer.provideMerge(options.reranker ?? Reranker.local)),
     PermissionClassifier.layer,
     SkillReviews.layer,
-    WorkflowRules.layer,
     QueueDelivery.layer,
     TurnSummaries.layer(options.summarizeAutomatically),
     ReportDiagnoser.layer,

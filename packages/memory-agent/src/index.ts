@@ -435,12 +435,11 @@ export { PlanOutcomesRejected, type UnknownStepOutcome } from "./workflow/step-o
 export {
   RuleSource,
   WorkflowRule,
-  WorkflowRules,
   builtInWorkflowRules,
   type ResolvedRules,
-  type RuleQuery,
   RulePhase,
   rulePhases,
+  workflowRulesFor,
 } from "./workflow/rules.ts";
 export {
   projectWorkflowRules,

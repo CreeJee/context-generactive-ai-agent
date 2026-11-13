@@ -17,7 +17,6 @@ import { ModelDownloads } from "./downloads.ts";
 import { Indexer } from "./indexer.ts";
 import { Reranker } from "../rerank/reranker.ts";
 import { memoryPrompts } from "../prompts.ts";
-import { WorkflowRules } from "../../workflow/rules.ts";
 
 /** Whether WebGPU was found to work here, or is being checked now (`contracts.ts`). */
 export type GpuState = EmbeddingOverview["gpu"];
@@ -32,7 +31,6 @@ const make = Effect.gen(function* () {
   const maintenance = yield* MemoryGraphMaintenance;
   const downloads = yield* ModelDownloads;
   const reranker = yield* Reranker;
-  const workflowRules = yield* WorkflowRules;
   const layerScope = yield* Effect.scope;
   const checking = yield* Ref.make(false);
 
@@ -79,17 +77,12 @@ const make = Effect.gen(function* () {
     layerScope,
   );
   // The model loads here, not in the first message's search: loading it (and on a first start,
-  // downloading it) took seconds there. The workflow rules every project has are embedded next,
-  // before the backfill, so a Goal's first turn does not wait for them. A changed chunk identity
+  // downloading it) took seconds there. A changed chunk identity
   // must rebuild existing conversations even when no new import or chat arrives. The service Scope
   // owns the drain; failed nodes remain pending for the next run.
   const loadAndBackfill = Effect.forkIn(
     embedder.embed([memoryPrompts.warmUp], "query").pipe(
       Effect.catch(logFailure("memory_embedder_warm_up_failed")),
-      // A project's own rules are embedded by its first turn.
-      Effect.andThen(
-        workflowRules.prepare().pipe(Effect.catch(logFailure("workflow_rule_vectors_failed"))),
-      ),
       Effect.andThen(indexer.indexAll()),
       Effect.catchTags({
         EmbeddingError: logFailure("memory_backfill_embedding_failed"),

@@ -1,19 +1,4 @@
-import { isTruthy } from "../truthy.ts";
-import {
-  Array as EffectArray,
-  HashMap,
-  HashSet,
-  Iterable,
-  MutableHashMap,
-  Option,
-  Context,
-  Effect,
-  Layer,
-  Result,
-  Schema,
-  SynchronizedRef,
-} from "effect";
-import { Embedder } from "../memory/embedding/embedder.ts";
+import { Array as EffectArray, Function as EffectFunction, Schema } from "effect";
 import type { WorkflowPhase } from "./workflow.ts";
 
 /**
@@ -46,24 +31,16 @@ export const WorkflowRule = Schema.Struct({
   title: Schema.NonEmptyString,
   phases: Schema.Array(RulePhase),
   priority: Schema.Literals(["required", "recommended"]),
-  terms: Schema.Array(Schema.String),
   instruction: Schema.NonEmptyString,
   requiredEvidence: Schema.Array(Schema.String),
   source: RuleSource,
 });
 export type WorkflowRule = typeof WorkflowRule.Type;
 
-export interface RuleQuery {
-  readonly phases: ReadonlyArray<RulePhase>;
-  readonly text: string;
-  /** The project's own rules. Built-in ids cannot be overridden. */
-  readonly rules?: readonly WorkflowRule[];
-  readonly limit?: number;
-}
-
 export interface ResolvedRules {
   readonly rules: readonly WorkflowRule[];
-  readonly degraded: readonly ("embedding" | "source")[];
+  /** `source`: the project's rule file was invalid or unreadable and was skipped. */
+  readonly degraded: readonly "source"[];
 }
 
 const builtInRuleInputs: readonly Omit<WorkflowRule, "source">[] = [
@@ -73,7 +50,6 @@ const builtInRuleInputs: readonly Omit<WorkflowRule, "source">[] = [
     title: "Define outcomes before implementation",
     phases: ["goal"],
     priority: "required",
-    terms: ["goal", "outcome", "constraint", "non-goal", "assumption", "question"],
     instruction:
       "Record the problem, observable outcomes, constraints, non-goals, assumptions and blocking questions. Do not turn implementation guesses into requirements.",
     requiredEvidence: ["A saved Goal artifact with no unanswered blocking question before acting"],
@@ -84,7 +60,6 @@ const builtInRuleInputs: readonly Omit<WorkflowRule, "source">[] = [
     title: "Planning is read-only",
     phases: ["plan"],
     priority: "required",
-    terms: ["plan", "research", "investigate", "read-only"],
     instruction:
       "Investigate without changing project files, saving or running code skills, delegating, or using write-capable external tools.",
     requiredEvidence: ["No project mutation was performed during Plan"],
@@ -95,7 +70,6 @@ const builtInRuleInputs: readonly Omit<WorkflowRule, "source">[] = [
     title: "Plans have executable steps",
     phases: ["plan"],
     priority: "required",
-    terms: ["step", "dependency", "acceptance", "risk", "plan"],
     instruction:
       "Give steps stable ids, explicit dependencies and observable acceptance criteria. Attach the ids of applicable rules rather than copying their full text.",
     requiredEvidence: ["A saved Plan artifact tied to the current Goal version"],
@@ -106,7 +80,6 @@ const builtInRuleInputs: readonly Omit<WorkflowRule, "source">[] = [
     title: "Defer questions until independent planning is exhausted",
     phases: ["plan"],
     priority: "required",
-    terms: ["question", "contradiction", "blocker", "independent", "investigation"],
     instruction:
       "Record unresolved decisions and their dependencies, complete independent read-only investigation and planning first, then ask only about decisions that actually block further progress. Non-blocking questions alone do not prevent a ready Plan; never guess an answer needed for safe execution.",
     requiredEvidence: [
@@ -119,7 +92,6 @@ const builtInRuleInputs: readonly Omit<WorkflowRule, "source">[] = [
     title: "Execute only an approved current Plan",
     phases: ["execute"],
     priority: "required",
-    terms: ["execute", "approved", "current plan"],
     instruction:
       "Execute only the approved Plan tied to the current Goal. Work one active step at a time and do not claim completion from intention.",
     requiredEvidence: ["The active step and its verification result"],
@@ -130,7 +102,6 @@ const builtInRuleInputs: readonly Omit<WorkflowRule, "source">[] = [
     title: "Completion requires evidence",
     phases: ["verify"],
     priority: "required",
-    terms: ["verify", "test", "evidence", "acceptance"],
     instruction:
       "Check every applicable acceptance criterion and rule. Report failures explicitly; do not silently repair or waive them.",
     requiredEvidence: ["Evidence or an explicit failure for every checked criterion"],
@@ -141,7 +112,6 @@ const builtInRuleInputs: readonly Omit<WorkflowRule, "source">[] = [
     title: "Plan reversible migrations",
     phases: ["plan", "execute", "verify"],
     priority: "recommended",
-    terms: ["database", "schema", "migration", "backfill", "rollout"],
     instruction:
       "For schema or data changes, specify compatibility order, rollback behavior, backfill strategy and validation.",
     requiredEvidence: ["Migration compatibility and rollback were considered"],
@@ -152,7 +122,6 @@ const builtInRuleInputs: readonly Omit<WorkflowRule, "source">[] = [
     title: "Plan verification with the change",
     phases: ["plan", "execute", "verify"],
     priority: "recommended",
-    terms: ["test", "typecheck", "lint", "build", "acceptance", "regression"],
     instruction:
       "Name the smallest checks that prove the step, then include broader regression checks appropriate to the affected area.",
     requiredEvidence: ["Commands or observations and their actual results"],
@@ -163,7 +132,6 @@ const builtInRuleInputs: readonly Omit<WorkflowRule, "source">[] = [
     title: "Research authoritative interfaces",
     phases: ["plan"],
     priority: "recommended",
-    terms: ["api", "library", "framework", "documentation", "docs", "version"],
     instruction:
       "When behavior depends on an external API or library version, research the authoritative documentation and record the relevant constraint in the Plan.",
     requiredEvidence: ["The authoritative source or installed implementation was checked"],
@@ -175,161 +143,30 @@ export const builtInWorkflowRules: readonly WorkflowRule[] = builtInRuleInputs.m
   source: RuleSource.cases.builtin.make({ name: rule.id }),
 }));
 
-const normalizedTerms = (text: string) =>
-  HashSet.fromIterable(
-    Iterable.filter(text.toLocaleLowerCase().split(/[^\p{L}\p{N}_./:-]+/u), Boolean),
-  );
-
-const lexicalScore = (query: HashSet.HashSet<string>, rule: WorkflowRule) =>
-  HashSet.size(
-    HashSet.intersection(
-      query,
-      normalizedTerms(`${rule.title} ${rule.terms.join(" ")} ${rule.instruction}`),
-    ),
-  );
-
-const cosine = (left: Float32Array, right: Float32Array) =>
-  left.reduce((score, value, index) => score + value * right[index]!, 0);
-
-/** The text a rule's vector is made from. */
-const embeddedText = (rule: WorkflowRule) =>
-  `${rule.title}\n${rule.terms.join(" ")}\n${rule.instruction}`;
-
-/** Most rule vectors kept; past it, only the rules of the latest request stay. */
-const keptRuleVectors = 512;
-
-const make = Effect.gen(function* () {
-  const embedder = yield* Embedder;
-  // Vectors by the text they were made from, for as long as the app runs: the embedder does not
-  // change while it runs. Every project's rule set holds the built-in rules, embedded once.
-  const known = yield* SynchronizedRef.make(HashMap.empty<string, Float32Array>());
-
-  /** The rules' vectors by rule id, embedding only the texts not seen before. */
-  const vectors = (rules: readonly WorkflowRule[]) =>
-    SynchronizedRef.modifyEffect(known, (current) => {
-      const texts = rules.map(embeddedText);
-      const missing = EffectArray.dedupe(texts.filter((text) => !HashMap.has(current, text)));
-      return Effect.map(
-        EffectArray.isReadonlyArrayNonEmpty(missing)
-          ? // A turn waits on them, so they go before the backfill's batches.
-            embedder.embed(missing, "document", "interactive")
-          : Effect.succeed<readonly Float32Array[]>([]),
-        (embedded) => {
-          const added = HashMap.setMany(
-            current,
-            missing.flatMap((text, index) => {
-              const vector = embedded[index];
-              return isTruthy(vector) ? [[text, vector] as const] : [];
-            }),
-          );
-          const wanted = HashSet.fromIterable(texts);
-          const kept =
-            HashMap.size(added) > keptRuleVectors
-              ? HashMap.filter(added, (_, text) => HashSet.has(wanted, text))
-              : added;
-          const byId = MutableHashMap.fromIterable(
-            rules.flatMap((rule, index) =>
-              Option.toArray(
-                Option.map(
-                  HashMap.get(kept, texts[index]!),
-                  (vector) => [rule.id, vector] as const,
-                ),
-              ),
-            ),
-          );
-          return [byId, kept] as const;
-        },
-      );
-    }).pipe(Effect.withSpan("WorkflowRules.ruleVectors"));
-
-  return {
-    /**
-     * Embeds the built-in rules that are ranked by meaning, and `rules` besides, so a turn does not
-     * wait for them. The app does this in the background once the model has loaded.
-     */
-    prepare: (rules: readonly WorkflowRule[] = []) =>
-      Effect.asVoid(
-        vectors([
-          ...builtInWorkflowRules.filter((rule) => rule.priority === "recommended"),
-          ...rules,
-        ]),
-      ).pipe(Effect.withSpan("WorkflowRules.prepare")),
-    resolve: ({ phases, text, rules = [], limit = 3 }: RuleQuery): Effect.Effect<ResolvedRules> => {
-      // A built-in rule keeps its id; a supplied rule with the same id is ignored.
-      const candidates = EffectArray.dedupeWith(
-        [...builtInWorkflowRules, ...rules],
-        (left, right) => left.id === right.id,
-      ).filter((rule) => rule.phases.some((phase) => phases.includes(phase)));
-      const required = candidates.filter((rule) => rule.priority === "required");
-      const optional = candidates.filter((rule) => rule.priority === "recommended");
-      if (optional.length === 0) return Effect.succeed({ rules: required, degraded: [] as const });
-
-      const queryTerms = normalizedTerms(text);
-      const lexical = optional
-        .map((rule) => ({ rule, score: lexicalScore(queryTerms, rule) }))
-        .sort((left, right) => right.score - left.score);
-
-      return Effect.gen(function* () {
-        const semantic = yield* Effect.result(
-          Effect.all([vectors(optional), embedder.embed([text], "query")]).pipe(
-            Effect.map(([byId, [queryVector]]) =>
-              isTruthy(queryVector)
-                ? optional
-                    .map((rule) => ({
-                      rule,
-                      score: isTruthy(Option.getOrUndefined(MutableHashMap.get(byId, rule.id)))
-                        ? cosine(
-                            queryVector,
-                            Option.getOrUndefined(MutableHashMap.get(byId, rule.id))!,
-                          )
-                        : -1,
-                    }))
-                    .sort((left, right) => right.score - left.score)
-                : [],
-            ),
-          ),
-        );
-        const ranks = MutableHashMap.empty<string, number>();
-        const addRanks = (ranked: readonly { readonly rule: WorkflowRule }[]) =>
-          ranked.forEach(({ rule }, index) =>
-            MutableHashMap.set(
-              ranks,
-              rule.id,
-              (Option.getOrUndefined(MutableHashMap.get(ranks, rule.id)) ?? 0) +
-                1 / (60 + index + 1),
-            ),
-          );
-        addRanks(lexical);
-        const degraded = Result.match(semantic, {
-          onFailure: () => ["embedding"] as const,
-          onSuccess: (ranked) => {
-            addRanks(ranked);
-            return [] as const;
-          },
-        });
-
-        const selected = optional
-          .filter(
-            (rule) => lexicalScore(queryTerms, rule) > 0 || MutableHashMap.has(ranks, rule.id),
-          )
-          .sort(
-            (left, right) =>
-              (Option.getOrUndefined(MutableHashMap.get(ranks, right.id)) ?? 0) -
-              (Option.getOrUndefined(MutableHashMap.get(ranks, left.id)) ?? 0),
-          )
-          .slice(0, limit);
-        return {
-          rules: [...required, ...selected],
-          degraded,
-        };
-      }).pipe(Effect.withSpan("WorkflowRules.resolve"));
-    },
-  };
-});
-
-/** Phase-filtered workflow rules with lexical + embedding ranking for optional rules. */
-export class WorkflowRules extends Context.Service<WorkflowRules, Effect.Success<typeof make>>()(
-  "memory-agent/workflow/rules/WorkflowRules",
-) {
-  static readonly layer = Layer.effect(WorkflowRules, make);
+/**
+ * The rules a conversation in `phases` reads: every built-in and project rule of those phases,
+ * required ones first. A project rule with a built-in id is ignored. The recommended rules are few
+ * and short, so all of them go to the model, which judges which apply.
+ */
+export const workflowRulesFor: {
+  (
+    phases: ReadonlyArray<RulePhase>,
+  ): (projectRules: readonly WorkflowRule[]) => readonly WorkflowRule[];
+  (
+    projectRules: readonly WorkflowRule[],
+    phases: ReadonlyArray<RulePhase>,
+  ): readonly WorkflowRule[];
+} = EffectFunction.dual(2, workflowRulesForBody);
+function workflowRulesForBody(
+  projectRules: readonly WorkflowRule[],
+  phases: ReadonlyArray<RulePhase>,
+): readonly WorkflowRule[] {
+  const applicable = EffectArray.dedupeWith(
+    [...builtInWorkflowRules, ...projectRules],
+    (left, right) => left.id === right.id,
+  ).filter((rule) => rule.phases.some((phase) => phases.includes(phase)));
+  return [
+    ...applicable.filter((rule) => rule.priority === "required"),
+    ...applicable.filter((rule) => rule.priority === "recommended"),
+  ];
 }
