@@ -63,32 +63,34 @@ const subagentSince = Effect.fnUntraced(function* (before: number) {
 });
 
 testAgent({ testProvider: {} })("kanban card agents read project skills", (it) => {
-  it.effect("a card agent without skills gets neither skill instructions nor read_skill", () =>
-    Effect.gen(function* () {
-      const env = yield* TestEnv;
-      const { project } = yield* freshProject;
-      yield* selectTestModel();
-      const session = (yield* (yield* Sessions).create(project.id)).id;
-      const before = env.provider?.invocations.length ?? 0;
-      yield* (yield* CardAgent).run({
-        sessionId: session,
-        projectId: project.id,
-        goalInstanceId: "goal-without",
-        card,
-        attemptNo: 1,
-        worktree: { toolRoot: project.root, deniedRoots: [] },
-        continuation: false,
-        notes: [],
-        generation: 1,
-        register: () => Effect.void,
-      });
-      const child = yield* subagentSince(before);
-      expect(child?.system.join("\n")).not.toContain("Available skills:");
-      expect(child?.toolNames).not.toContain("read_skill");
-    }),
+  it.effect(
+    "a card agent gets read_skill and the skill instructions even without project skills",
+    () =>
+      Effect.gen(function* () {
+        const env = yield* TestEnv;
+        const { project } = yield* freshProject;
+        yield* selectTestModel();
+        const session = (yield* (yield* Sessions).create(project.id)).id;
+        const before = env.provider?.invocations.length ?? 0;
+        yield* (yield* CardAgent).run({
+          sessionId: session,
+          projectId: project.id,
+          goalInstanceId: "goal-without",
+          card,
+          attemptNo: 1,
+          worktree: { toolRoot: project.root, deniedRoots: [] },
+          continuation: false,
+          notes: [],
+          generation: 1,
+          register: () => Effect.void,
+        });
+        const child = yield* subagentSince(before);
+        expect(child?.system.join("\n")).toContain("find them with find_skill");
+        expect(child?.toolNames).toContain("read_skill");
+      }),
   );
 
-  it.effect("a card agent with skills gets the catalog and read_skill", () =>
+  it.effect("a card agent with skills gets no listed catalog, but read_skill", () =>
     Effect.gen(function* () {
       const env = yield* TestEnv;
       const { project, skills } = yield* freshProject;
@@ -109,7 +111,9 @@ testAgent({ testProvider: {} })("kanban card agents read project skills", (it) =
         register: () => Effect.void,
       });
       const child = yield* subagentSince(before);
-      expect(child?.system.join("\n")).toContain("- review (project): Review the work.");
+      // Skills are not listed any more: the model finds them with find_skill (decisions.md),
+      // which the card's tool list does not include, so the catalog line stays out either way.
+      expect(child?.system.join("\n")).not.toContain("- review (project): Review the work.");
       expect(child?.toolNames).toContain("read_skill");
     }),
   );
@@ -136,16 +140,17 @@ testAgent({ testProvider: {} })("kanban card agents read project skills", (it) =
         return yield* subagentSince(before);
       });
       const without = yield* run("none");
-      expect(without?.toolNames).not.toContain("read_skill");
+      expect(without?.toolNames).toContain("read_skill");
       noWrite.forEach((tool) => expect(without?.toolNames).not.toContain(tool));
       const withSkill = yield* run("plain");
-      expect(withSkill?.system.join("\n")).toContain(
+      // Skills are not listed any more: the model finds them with find_skill (decisions.md).
+      expect(withSkill?.system.join("\n")).not.toContain(
         "- glossary (project): Explain the project's words.",
       );
       expect(withSkill?.toolNames).toContain("read_skill");
       noWrite.forEach((tool) => expect(withSkill?.toolNames).not.toContain(tool));
       const withShSkill = yield* run("sh");
-      expect(withShSkill?.system.join("\n")).toContain("- review (project): Review the work.");
+      expect(withShSkill?.system.join("\n")).not.toContain("- review (project): Review the work.");
       expect(withShSkill?.toolNames).toContain("read_skill");
       noWrite.forEach((tool) => expect(withShSkill?.toolNames).not.toContain(tool));
     }),

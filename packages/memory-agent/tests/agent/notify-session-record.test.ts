@@ -53,7 +53,7 @@ testAgent()(function (it) {
             projectId: project.id,
             sessionId: session.id,
             runId,
-            userNodeId: Effect.succeed(user.id),
+            replyTo: Effect.succeedSome(user.id),
           }),
         ],
       });
@@ -110,7 +110,7 @@ testAgent()(function (it) {
             projectId: project.id,
             sessionId: session.id,
             runId,
-            userNodeId: Effect.succeed(user.id),
+            replyTo: Effect.succeedSome(user.id),
           }),
         ],
       });
