@@ -6,6 +6,9 @@ import type { BoardView, CardStatus } from "../../api";
 export type BoardCard = BoardView["cards"][number];
 type PlanStep = BoardCard["card"];
 
+/** The card id Goal-level requests carry (memory-agent `goalDecisionCardId`). */
+export const goalDecisionCardId = "@goal";
+
 /** A card named by its conversation and card id: the `boardCard` query and the board's keys. */
 export interface BoardCardRef {
   readonly sessionId: string;

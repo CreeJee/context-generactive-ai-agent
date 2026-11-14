@@ -34,12 +34,19 @@ import {
   type DecisionCloseReason,
 } from "./human-decision.ts";
 import { KanbanOrchestrator } from "./orchestrator.ts";
-import { cardWorkspace, CardWorktrees, GoalRetarget, WorktreeDisposition } from "./worktree.ts";
+import {
+  cardBranchName,
+  cardWorkspace,
+  CardWorktrees,
+  GoalRetarget,
+  WorktreeDisposition,
+} from "./worktree.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { GoalSchedules } from "./goal-schedules.ts";
 import { ProjectScheduler } from "./scheduler.ts";
 import { BoardHealth } from "./board-health.ts";
 import type {
+  CardFolderView,
   KanbanBoardView,
   KanbanCardView,
   KanbanGoalOption,
@@ -47,6 +54,7 @@ import type {
 } from "./contracts.ts";
 
 export type {
+  CardFolderView,
   KanbanBoardView,
   KanbanCardView,
   KanbanGoalOption,
@@ -734,6 +742,29 @@ const make = Effect.gen(function* () {
         goalPaused: state.goal?.status === "paused",
         unjudgedOutcomes: yield* orchestrator.unjudgedOutcomes(goalInstanceId),
       });
+    }),
+
+    /**
+     * Where the card's work is on disk now. None when the session's Goal does not run as a board,
+     * or the card has no folder: it has not started, or it finished and the folder was removed.
+     */
+    cardFolder: Effect.fn("KanbanBoardActions.cardFolder")(function* (
+      sessionId: string,
+      cardId: string,
+    ) {
+      const goal = yield* kanbanOf(sessionId);
+      if (Option.isNone(goal)) return Option.none<CardFolderView>();
+      const { projectRoot, goalInstanceId, mode } = goal.value;
+      const branch = mode === "worktree" ? cardBranchName(goalInstanceId, cardId) : null;
+      return yield* cardWorkspace(worktrees, mode)
+        .present({ projectRoot, goalInstanceId, cardId })
+        .pipe(
+          Effect.map((worktree) =>
+            Option.some<CardFolderView>({ folder: worktree.toolRoot, branch }),
+          ),
+          // Whatever kept the folder from being found, there is none to point the person at.
+          Effect.catchTag("CardWorktreeFailed", () => Effect.succeedNone),
+        );
     }),
 
     /**

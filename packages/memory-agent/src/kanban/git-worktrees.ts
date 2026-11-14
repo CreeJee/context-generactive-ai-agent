@@ -34,6 +34,9 @@ import {
   TargetAdvance,
   TargetSync,
   WorktreeSettlement,
+  cardBranchFolder,
+  cardBranchName,
+  goalBranchName,
   type CardRef,
   type CardWorktree,
   type GoalFolder,
@@ -104,10 +107,6 @@ interface GitOutput {
 
 const lines = (text: string) => text.split("\n").filter((line) => line.length > 0);
 
-const goalBranchName = (goal: string) => `ctx/goal/${goal}`;
-/** The folder of the Goal's card branches; as a ref pattern it matches every one of them. */
-const cardBranchFolder = (goal: string) => `ctx/card/${goal}`;
-const cardBranchName = (goal: string, card: string) => `${cardBranchFolder(goal)}/${card}`;
 const cardTrailer = (goal: string, card: string) => `Ctx-Card: ${goal}/${card}`;
 
 /**

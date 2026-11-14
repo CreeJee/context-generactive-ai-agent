@@ -634,6 +634,9 @@ export const api = {
     ),
   kanban: (session: string): Promise<KanbanView> =>
     appCall((client) => client.sessions.kanban({ params: { session } })),
+  /** Where a card's work is on disk; null when the card has no folder now. */
+  cardFolder: (session: string, card: string) =>
+    appCall((client) => client.sessions.cardFolder({ params: { session, card } })),
   /** Runs the executing Plan as a kanban board. */
   startKanban: (session: string, holder: string) =>
     appCall((client) =>

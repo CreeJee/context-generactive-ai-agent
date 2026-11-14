@@ -18,6 +18,12 @@ import {
   CollapsibleTrigger,
 } from "../../../components/ui/collapsible";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../../../components/ui/dropdown-menu";
+import {
   Sheet,
   SheetContent,
   SheetDescription,
@@ -27,22 +33,28 @@ import {
 import { Toggle } from "../../../components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "../../../components/ui/toggle-group";
 import type { ProjectBoard as ProjectBoardRow } from "memory-agent";
+import type { HumanDecisionRequest } from "../../api";
 import { useGoalOrderMutation } from "../../queries/mutations/project";
 import { KanbanAction, useKanbanMutation } from "../../queries/mutations/session";
 import { useDecisionInboxQuery, useProjectBoardsQuery } from "../../queries/project";
 import { sessionQueries } from "../../queries/session";
 import { LoadFailed } from "../../shared/load-failed";
 import { LoopHealthStatus } from "../../shared/loop-health";
+import { DecisionPrompt } from "../decision-prompt";
 import { planStatusLabels } from "../workflow-panel";
-import { boardColumns, type BoardCardRef } from "./board-moves";
+import { boardColumns, goalDecisionCardId, type BoardCardRef } from "./board-moves";
 import {
   BoardSurface,
   editErrorText,
   KanbanRunningBadge,
+  PlannerStalledBadge,
+  ReplanWaitBadge,
   type SurfaceBoard,
 } from "./board-surface";
+import { GoalMergeStatus, mergeFailed } from "./goal-merge";
 import { BoardShortcuts } from "./kanban-board";
-import { Array as Arr } from "effect";
+import { Array as Arr, Predicate } from "effect";
+import { waitsForUser } from "./hold-reason";
 
 const cardsOf = (row: ProjectBoardRow) =>
   boardColumns.reduce((sum, status) => sum + row.counts[status], 0);
@@ -50,6 +62,24 @@ const untitled = msg`제목 없는 대화`;
 const titleOf = (row: ProjectBoardRow) => row.sessionTitle ?? i18n._(untitled);
 /** Only an executing Plan's cards are the scheduler's business, so only those are on the board. */
 const onBoard = (row: ProjectBoardRow) => row.plan.status === "executing";
+
+/**
+ * Whether the conversation's board waits for the user: a loop that is not healthy, a stalled
+ * planner, a paused Goal, a merge that failed, cards the planner left unreplanned, or a Goal-level
+ * decision.
+ */
+const needsUser = (surface: SurfaceBoard | null, goalDecisions: number) => {
+  const loop = surface?.loop ?? null;
+  return (
+    goalDecisions > 0 ||
+    (loop !== null &&
+      (!Predicate.isTagged(loop.loop, "Healthy") ||
+        loop.plannerStalled ||
+        loop.goalPaused ||
+        mergeFailed(loop.schedule?.merge ?? null) ||
+        loop.cards.some((card) => waitsForUser(card.reason))))
+  );
+};
 
 /**
  * The project's kanban board: every executing Plan on one board of the same seven columns, in the
@@ -94,6 +124,8 @@ export function ProjectBoard({
   const [shown, setShown] = useState<readonly string[]>([]);
   const [adding, setAdding] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  // Null until the user folds or unfolds the panel; until then it follows what waits for them.
+  const [panelOpen, setPanelOpen] = useState<boolean | null>(null);
   const [orderError, setOrderError] = useState<string | null>(null);
   const surfaces = rows.flatMap((row, index): SurfaceBoard[] => {
     const view = views[index]?.data;
@@ -114,6 +146,12 @@ export function ProjectBoard({
   });
   const surfaceOf = (sessionId: string) =>
     surfaces.find((surface) => surface.sessionId === sessionId) ?? null;
+  /** Goal-level requests name no card, so no card's peek shows them; the conversation's line does. */
+  const goalDecisionsOf = (sessionId: string) =>
+    inbox.filter((item) => item.sessionId === sessionId && item.cardId === goalDecisionCardId);
+  const attention = Arr.countBy(rows, (row) =>
+    needsUser(surfaceOf(row.sessionId), goalDecisionsOf(row.sessionId).length),
+  );
   const running = Arr.countBy(rows, (row) => row.kanbanActive);
   const total = rows.reduce((sum, row) => sum + cardsOf(row), 0);
   const done = rows.reduce((sum, row) => sum + row.counts.done, 0);
@@ -130,8 +168,15 @@ export function ProjectBoard({
     <Sheet
       open
       onOpenChange={(next, details) => {
-        // Esc while a card is picked up puts the card back; the board stays open.
-        if (!next && dragging && details.reason === "escape-key") return details.cancel();
+        if (!next && details.reason === "escape-key") {
+          // Esc puts a picked-up card back, or closes the open card panel; the board stays open.
+          if (dragging) return details.cancel();
+          if (peek !== null || adding !== null) {
+            setAdding(null);
+            onPeek(null);
+            return details.cancel();
+          }
+        }
         if (!next) onClose();
       }}
     >
@@ -194,7 +239,7 @@ export function ProjectBoard({
               ))}
             </p>
           )}
-          <Collapsible>
+          <Collapsible open={panelOpen ?? attention > 0} onOpenChange={setPanelOpen}>
             <div className="mt-1 flex flex-wrap items-center gap-1">
               {rows.length > 1 && (
                 <div className="flex flex-wrap items-center gap-1">
@@ -232,6 +277,39 @@ export function ProjectBoard({
                   justify-between row leaves these alone across an empty strip. Without filters
                   the ghost button's padding is pulled back so its chevron lines up with the title. */}
               <span className="flex items-center gap-1">
+                {rows.length === 1 && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={surfaces.length === 0}
+                    onClick={() => setAdding(rows[0]?.sessionId ?? null)}
+                  >
+                    <PlusIcon data-icon="inline-start" />
+                    <Trans comment="Button that opens the form for a new card">카드 추가</Trans>
+                  </Button>
+                )}
+                {rows.length > 1 && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={<Button type="button" size="sm" variant="outline" />}
+                    >
+                      <PlusIcon data-icon="inline-start" />
+                      <Trans comment="Button that opens the form for a new card">카드 추가</Trans>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      {rows.map((row) => (
+                        <DropdownMenuItem
+                          key={row.sessionId}
+                          disabled={surfaceOf(row.sessionId) === null}
+                          onClick={() => setAdding(row.sessionId)}
+                        >
+                          {titleOf(row)}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
                 {rows.length > 0 && (
                   <CollapsibleTrigger
                     render={
@@ -248,6 +326,13 @@ export function ProjectBoard({
                       className="transition-transform group-data-[panel-open]:rotate-90"
                     />
                     <Trans>대화 순서와 상태</Trans>
+                    {attention > 0 && (
+                      <Badge variant="outline">
+                        <Trans comment="Badge on the status panel's button: conversations that wait for the user">
+                          확인할 대화 {attention}
+                        </Trans>
+                      </Badge>
+                    )}
                   </CollapsibleTrigger>
                 )}
               </span>
@@ -266,6 +351,7 @@ export function ProjectBoard({
                     holder={holder}
                     row={row}
                     surface={surfaceOf(row.sessionId)}
+                    goalDecisions={goalDecisionsOf(row.sessionId)}
                     decisions={
                       Arr.countBy(inbox, (item) => item.sessionId === row.sessionId) +
                       row.awaitingApproval.length
@@ -281,7 +367,6 @@ export function ProjectBoard({
                         ? null
                         : () => move(row.sessionId, rows[index + 2]?.sessionId ?? null)
                     }
-                    onAdd={() => setAdding(row.sessionId)}
                     onOpenSession={() => onOpenSession(row.sessionId)}
                   />
                 ))}
@@ -347,11 +432,11 @@ function ConversationRow({
   holder,
   row,
   surface,
+  goalDecisions,
   decisions,
   moving,
   onMoveUp,
   onMoveDown,
-  onAdd,
   onOpenSession,
 }: {
   readonly projectId: string;
@@ -359,6 +444,8 @@ function ConversationRow({
   readonly row: ProjectBoardRow;
   /** The conversation's board as the surface shows it; null until it has loaded. */
   readonly surface: SurfaceBoard | null;
+  /** Goal-level decisions waiting for the user; answered on this line. */
+  readonly goalDecisions: readonly HumanDecisionRequest[];
   /** Decisions and card approvals waiting for the user. */
   readonly decisions: number;
   /** A move is on its way to the server. */
@@ -367,7 +454,6 @@ function ConversationRow({
   readonly onMoveUp: (() => void) | null;
   /** Null at the bottom of the order. */
   readonly onMoveDown: (() => void) | null;
-  readonly onAdd: () => void;
   readonly onOpenSession: () => void;
 }) {
   const { t } = useLingui();
@@ -414,14 +500,8 @@ function ConversationRow({
       ) : (
         <Badge variant="outline">{t(planStatusLabels[row.plan.status])}</Badge>
       )}
-      {loop !== null && loop.plannerStalled && (
-        <Badge
-          variant="outline"
-          title={t`Plan 작성자가 연속으로 카드를 고쳤지만 새로 충족된 결과가 없어 자동 Plan 작성을 멈췄습니다. 이미 맡은 카드는 계속 실행됩니다. 대화에서 방향을 알려 주면 다시 Plan을 짭니다.`}
-        >
-          <Trans comment="Badge: the automatic Plan writer has stopped">자동 Plan 작성 멈춤</Trans>
-        </Badge>
-      )}
+      {loop !== null && loop.plannerStalled && <PlannerStalledBadge />}
+      {loop !== null && <ReplanWaitBadge loop={loop} />}
       {loop !== null && loop.loop._tag !== "Healthy" && (
         <LoopHealthStatus
           label={t({
@@ -433,6 +513,7 @@ function ConversationRow({
           onRestart={() => act(KanbanAction.RestartLoop())}
         />
       )}
+      {loop?.schedule?.merge != null && <GoalMergeStatus merge={loop.schedule.merge} />}
       <span className="text-muted-foreground">
         <Trans comment="Finished cards out of all cards in the conversation's Plan">
           완료 {ph({ doneCount: row.counts.done })}/{ph({ cardCount: cardsOf(row) })}
@@ -467,23 +548,24 @@ function ConversationRow({
             </Trans>
           </Button>
         )}
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={surface === null}
-          onClick={onAdd}
-        >
-          <PlusIcon data-icon="inline-start" />
-          <Trans comment="Button that opens the form for a new card in this conversation">
-            카드 추가
-          </Trans>
-        </Button>
         <Button type="button" size="sm" variant="outline" onClick={onOpenSession}>
           <MessageSquareTextIcon data-icon="inline-start" />
           <Trans comment="Button that goes to the conversation">대화 열기</Trans>
         </Button>
       </span>
+      {goalDecisions.length > 0 && (
+        <div className="flex basis-full flex-col gap-2">
+          {goalDecisions.map((request) => (
+            <DecisionPrompt
+              key={request.requestId}
+              projectId={projectId}
+              holder={holder}
+              request={request}
+              disabled={false}
+            />
+          ))}
+        </div>
+      )}
       {actionError !== null && (
         <p className="basis-full text-destructive" role="alert">
           {actionError}

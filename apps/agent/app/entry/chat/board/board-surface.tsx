@@ -1,7 +1,8 @@
 import { t } from "@lingui/core/macro";
 import { Trans } from "@lingui/react/macro";
 import { useEffect, useState } from "react";
-import { Effect, Fiber } from "effect";
+import { Array as Arr, Effect, Fiber } from "effect";
+import { cn } from "cn";
 import { Alert, AlertDescription } from "../../../components/ui/alert";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -40,7 +41,7 @@ import {
 } from "./board-moves";
 import type { CardSignals } from "./card-face";
 import { CardPeek, Peek, type TransferTarget } from "./card-peek";
-import { holdReasonText } from "./hold-reason";
+import { holdReasonText, waitsForUser } from "./hold-reason";
 import { KanbanBoard } from "./kanban-board";
 
 export type ActiveKanban = Extract<KanbanView, { readonly active: true }>;
@@ -62,6 +63,35 @@ export function KanbanRunningBadge({ paused }: { readonly paused: boolean }) {
     </Badge>
   );
 }
+
+/** The board stopped waking its planner; the badge's title says what still runs. */
+export function PlannerStalledBadge() {
+  return (
+    <Badge
+      variant="outline"
+      title={t`Plan 작성자가 연속으로 카드를 고쳤지만 새로 충족된 결과가 없어 자동 Plan 작성을 멈췄습니다. 이미 맡은 카드는 계속 실행됩니다. 대화에서 방향을 알려 주면 다시 Plan을 짭니다.`}
+    >
+      <Trans comment="Badge: the automatic Plan writer has stopped">자동 Plan 작성 멈춤</Trans>
+    </Badge>
+  );
+}
+
+/** The cards whose replan the planner left undone: they wait for the user. */
+export function ReplanWaitBadge({ loop }: { readonly loop: ActiveKanban }) {
+  const waiting = Arr.countBy(loop.cards, (card) => waitsForUser(card.reason));
+  if (waiting === 0) return null;
+  return (
+    <Badge
+      variant="outline"
+      title={t`계속 실패해 다시 짜 달라고 요청한 카드를 Plan 작성자가 고치지 않았습니다. 카드를 고치거나 다시 대기열에 넣어 주십시오.`}
+    >
+      <Trans comment="Badge: blocked cards the planner did not replan, waiting for the user">
+        확인 필요 카드 {waiting}
+      </Trans>
+    </Badge>
+  );
+}
+
 export type BoardPlan = NonNullable<BoardView["plan"]>;
 
 /** One Plan on the surface: a conversation's board with its loop and its waiting decisions. */
@@ -219,6 +249,7 @@ const refOf = (item: BoardItem): BoardCardRef => ({
  * notice for a refused request, and the prompts for changing an executing card and for moving a
  * card to another conversation. The session's board sheet shows one Plan on it; the project board
  * shows every Plan of the project. The parent owns where it sits and which card is peeked.
+ * The panel sits beside the columns, so the board stays usable while a card is open.
  */
 export function BoardSurface({
   projectId,
@@ -382,41 +413,101 @@ export function BoardSurface({
 
   return (
     <>
-      <div className={className}>
-        <KanbanBoard
-          cards={cards}
-          signalsOf={signalsOf}
-          contextOf={contextOf}
-          disabled={disabled}
-          busy={request.isPending}
-          onOpen={(item) => onPeek(refOf(item))}
-          onReorder={(item, at) =>
-            request.mutate(
-              {
-                sessionId: item.sessionId,
-                action: KanbanAction.Intent({
-                  intent: BoardIntent.Reorder({ cardId: item.card.id, at: at.card.id }),
-                }),
-              },
-              { onError: refused },
-            )
-          }
-          onSend={(item, sent, lands) => {
-            setLanding({ key: item.key, lands });
-            request.mutate(
-              {
-                sessionId: item.sessionId,
-                action: KanbanAction.Intent({
-                  intent: BoardIntent[sent]({ cardId: item.card.id }),
-                }),
-              },
-              { onError: refused },
-            );
-          }}
-          onAskChange={setAskChange}
-          onRefused={setNotice}
-          onDraggingChange={onDraggingChange}
-        />
+      <div className={cn("flex min-h-0", className)}>
+        <div className={cn("min-w-0 flex-1", peekKey !== null && "hidden sm:block")}>
+          <KanbanBoard
+            cards={cards}
+            signalsOf={signalsOf}
+            contextOf={contextOf}
+            disabled={disabled}
+            busy={request.isPending}
+            // A card opened from the board shows its details; only "수정 요청 남기기" opens the editor.
+            onOpen={(item) => {
+              onAddingChange(null);
+              setEditingKey(null);
+              onPeek(refOf(item));
+            }}
+            selectedKey={adding !== null || peek === null ? null : boardCardKey(peek)}
+            onReorder={(item, at) =>
+              request.mutate(
+                {
+                  sessionId: item.sessionId,
+                  action: KanbanAction.Intent({
+                    intent: BoardIntent.Reorder({ cardId: item.card.id, at: at.card.id }),
+                  }),
+                },
+                { onError: refused },
+              )
+            }
+            onSend={(item, sent, lands) => {
+              setLanding({ key: item.key, lands });
+              request.mutate(
+                {
+                  sessionId: item.sessionId,
+                  action: KanbanAction.Intent({
+                    intent: BoardIntent[sent]({ cardId: item.card.id }),
+                  }),
+                },
+                { onError: refused },
+              );
+            }}
+            onAskChange={setAskChange}
+            onRefused={setNotice}
+            onDraggingChange={onDraggingChange}
+          />
+        </div>
+        {peekState !== null && peekKey !== null && peekSession !== null && (
+          <CardPeek
+            key={peekKey}
+            peek={peekState}
+            entry={peeked}
+            loopCard={peek === null ? null : loopCard(peek)}
+            decisions={peek === null ? [] : decisionsOf(peek)}
+            titleOf={titleIn(peekSession)}
+            outcomeOf={outcomeIn(peekSession)}
+            group={peekBoard?.label ?? null}
+            changePending={peek !== null && changePending(peek)}
+            projectId={projectId}
+            sessionId={peekSession}
+            holder={holder}
+            disabled={disabled}
+            closed={peekBoard === null || closedIn(peekBoard)}
+            planVersion={peekBoard?.plan.version ?? 0}
+            cardCount={peekBoard?.view.cards.length ?? 0}
+            planCards={
+              peekBoard?.view.cards.map(({ card }) => ({ id: card.id, title: card.title })) ?? []
+            }
+            editPending={edit.isPending || action.isPending}
+            intentPending={action.isPending || request.isPending}
+            kanbanActive={peekBoard !== null && peekBoard.loop !== null}
+            transferTargets={targets}
+            onTransfer={(cardId, toSessionId) => {
+              const item = itemOf({ sessionId: peekSession, cardId });
+              const to = boardOf(toSessionId);
+              if (item !== null && to !== null) setTransfer({ item, to });
+            }}
+            onEdit={(editing) =>
+              setEditingKey(editing && peek !== null ? boardCardKey(peek) : null)
+            }
+            onIntent={(sent, cardId) =>
+              action.mutate(
+                {
+                  sessionId: peekSession,
+                  action: KanbanAction.Intent({ intent: BoardIntent[sent]({ cardId }) }),
+                },
+                { onError: (error) => setNotice(intentErrorText(sent)(error)) },
+              )
+            }
+            onClose={() => {
+              onAddingChange(null);
+              setEditingKey(null);
+              onPeek(null);
+            }}
+            onSubmit={(change) =>
+              save(peekSession, change).catch((error: Error) => editErrorText(error))
+            }
+          />
+        )}
       </div>
       {notice !== null && (
         <Alert
@@ -425,52 +516,6 @@ export function BoardSurface({
         >
           <AlertDescription>{notice}</AlertDescription>
         </Alert>
-      )}
-      {peekState !== null && peekKey !== null && peekSession !== null && (
-        <CardPeek
-          key={peekKey}
-          peek={peekState}
-          entry={peeked}
-          loopCard={peek === null ? null : loopCard(peek)}
-          decisions={peek === null ? [] : decisionsOf(peek)}
-          titleOf={titleIn(peekSession)}
-          outcomeOf={outcomeIn(peekSession)}
-          group={peekBoard?.label ?? null}
-          changePending={peek !== null && changePending(peek)}
-          projectId={projectId}
-          holder={holder}
-          disabled={disabled}
-          closed={peekBoard === null || closedIn(peekBoard)}
-          planVersion={peekBoard?.plan.version ?? 0}
-          cardCount={peekBoard?.view.cards.length ?? 0}
-          editPending={edit.isPending || action.isPending}
-          intentPending={action.isPending || request.isPending}
-          kanbanActive={peekBoard !== null && peekBoard.loop !== null}
-          transferTargets={targets}
-          onTransfer={(cardId, toSessionId) => {
-            const item = itemOf({ sessionId: peekSession, cardId });
-            const to = boardOf(toSessionId);
-            if (item !== null && to !== null) setTransfer({ item, to });
-          }}
-          onEdit={(editing) => setEditingKey(editing && peek !== null ? boardCardKey(peek) : null)}
-          onIntent={(sent, cardId) =>
-            action.mutate(
-              {
-                sessionId: peekSession,
-                action: KanbanAction.Intent({ intent: BoardIntent[sent]({ cardId }) }),
-              },
-              { onError: (error) => setNotice(intentErrorText(sent)(error)) },
-            )
-          }
-          onClose={() => {
-            onAddingChange(null);
-            setEditingKey(null);
-            onPeek(null);
-          }}
-          onSubmit={(change) =>
-            save(peekSession, change).catch((error: Error) => editErrorText(error))
-          }
-        />
       )}
       <Dialog
         open={askChange !== null}

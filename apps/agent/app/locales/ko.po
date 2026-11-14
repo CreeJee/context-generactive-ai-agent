@@ -686,7 +686,7 @@ msgstr "CPU에서 실행 중"
 msgid "description이 없어 쓰지 않습니다."
 msgstr "description이 없어 쓰지 않습니다."
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "detached HEAD에서 시작해 브랜치가 없으므로 자동 merge하지 않습니다"
 msgstr "detached HEAD에서 시작해 브랜치가 없으므로 자동 merge하지 않습니다"
 
@@ -740,7 +740,7 @@ msgstr "git 저장소인 열린 프로젝트가 없습니다."
 msgid "Goal v{fromGoalVersion} → v{toGoalVersion} 변경이 이 카드에 어떤 영향을 주는지 오케스트레이터가 판단하지 못했습니다."
 msgstr "Goal v{fromGoalVersion} → v{toGoalVersion} 변경이 이 카드에 어떤 영향을 주는지 오케스트레이터가 판단하지 못했습니다."
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "Goal 검증 실패: {verdict}"
 msgstr "Goal 검증 실패: {verdict}"
 
@@ -753,7 +753,7 @@ msgstr "Goal 결과"
 msgid "Goal 기록을 읽지 못해 실행하지 않았습니다. 잠시 뒤 다시 보내 주십시오."
 msgstr "Goal 기록을 읽지 못해 실행하지 않았습니다. 잠시 뒤 다시 보내 주십시오."
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "Goal 변경으로 merge를 멈췄습니다"
 msgstr "Goal 변경으로 merge를 멈췄습니다"
 
@@ -765,7 +765,7 @@ msgstr "Goal 변경으로 오래됨"
 msgid "Goal 변경의 영향 판단"
 msgstr "Goal 변경의 영향 판단"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "Goal 브랜치 push 실패"
 msgstr "Goal 브랜치 push 실패"
 
@@ -809,7 +809,7 @@ msgstr "Goal 실행이 끝나기 전에 멈춰서 아래 도구가 무엇을 바
 msgid "Goal 없음"
 msgstr "Goal 없음"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "Goal 전체를 검증하는 중"
 msgstr "Goal 전체를 검증하는 중"
 
@@ -901,7 +901,7 @@ msgstr "MCP 표준의 도구 표시를 따릅니다. 서버가 표시하지 않�
 msgid "MCP·외부 에이전트"
 msgstr "MCP·외부 에이전트"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "merge됨 ({commit})"
 msgstr "merge됨 ({commit})"
 
@@ -982,8 +982,7 @@ msgstr "Plan 작성자가 Plan을 다시 준비하면 바로 이어서 실행합
 msgid "Plan 작성자가 실행 중에 더한 카드라 승인을 기다립니다. 승인하기 전에는 실행하지 않습니다."
 msgstr "Plan 작성자가 실행 중에 더한 카드라 승인을 기다립니다. 승인하기 전에는 실행하지 않습니다."
 
-#: app/entry/chat/board-panel.tsx
-#: app/entry/chat/board/project-board.tsx
+#: app/entry/chat/board/board-surface.tsx
 msgid "Plan 작성자가 연속으로 카드를 고쳤지만 새로 충족된 결과가 없어 자동 Plan 작성을 멈췄습니다. 이미 맡은 카드는 계속 실행됩니다. 대화에서 방향을 알려 주면 다시 Plan을 짭니다."
 msgstr "Plan 작성자가 연속으로 카드를 고쳤지만 새로 충족된 결과가 없어 자동 Plan 작성을 멈췄습니다. 이미 맡은 카드는 계속 실행됩니다. 대화에서 방향을 알려 주면 다시 Plan을 짭니다."
 
@@ -1009,19 +1008,28 @@ msgstr "PNG, JPEG, GIF, WebP 이미지만 올릴 수 있습니다."
 msgid "PR 만들기"
 msgstr "PR 만들기"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "PR 생성 실패"
 msgstr "PR 생성 실패"
 
-#: app/entry/chat/board-panel.tsx
+#. Link that opens the Goal's pull request in a new tab
+#: app/entry/chat/board/goal-merge.tsx
+msgid "PR 열기"
+msgstr "PR 열기"
+
+#: app/entry/chat/board/goal-merge.tsx
 msgid "PR을 만드는 중"
 msgstr "PR을 만드는 중"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "PR을 만들던 중 멈췄습니다. 원격 저장소에서 직접 확인해 주십시오"
 msgstr "PR을 만들던 중 멈췄습니다. 원격 저장소에서 직접 확인해 주십시오"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
+msgid "PR을 만듦"
+msgstr "PR을 만듦"
+
+#: app/entry/chat/board/goal-merge.tsx
 msgid "PR을 만듦: {url}"
 msgstr "PR을 만듦: {url}"
 
@@ -1197,9 +1205,14 @@ msgstr "거부 선택됨"
 msgid "거부됨"
 msgstr "거부됨"
 
+#. Button in the card panel that rejects a card waiting for approval
 #: app/entry/chat/board/card-peek.tsx
-msgid "거절하려면 편집에서 카드를 취소해 주십시오."
-msgstr "거절하려면 편집에서 카드를 취소해 주십시오."
+msgid "거절"
+msgstr "거절"
+
+#: app/entry/chat/board/card-peek.tsx
+msgid "거절한 카드는 취소되고 실행되지 않습니다."
+msgstr "거절한 카드는 취소되고 실행되지 않습니다."
 
 #. Local model being downloaded
 #: app/entry/shared/model-downloads.tsx
@@ -1358,7 +1371,7 @@ msgstr "계속 가져오기"
 msgid "계속 실패해 Plan 작성자에게 카드를 다시 짜 달라고 요청했습니다: {failure}"
 msgstr "계속 실패해 Plan 작성자에게 카드를 다시 짜 달라고 요청했습니다: {failure}"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/board-surface.tsx
 msgid "계속 실패해 다시 짜 달라고 요청한 카드를 Plan 작성자가 고치지 않았습니다. 카드를 고치거나 다시 대기열에 넣어 주십시오."
 msgstr "계속 실패해 다시 짜 달라고 요청한 카드를 Plan 작성자가 고치지 않았습니다. 카드를 고치거나 다시 대기열에 넣어 주십시오."
 
@@ -1450,6 +1463,10 @@ msgstr "계정을 찾을 수 없습니다. 목록을 새로 고친 뒤 다시 �
 #: app/entry/index.tsx
 msgid "계정을 추가하고 계정마다 이름을 바꾸거나 로그아웃합니다. 쓸 계정은 사이드바 아래 계정 전환에서 고릅니다."
 msgstr "계정을 추가하고 계정마다 이름을 바꾸거나 로그아웃합니다. 쓸 계정은 사이드바 아래 계정 전환에서 고릅니다."
+
+#: app/entry/chat/board/card-peek.tsx
+msgid "고른 카드가 끝난 뒤에 이 카드를 시작합니다."
+msgstr "고른 카드가 끝난 뒤에 이 카드를 시작합니다."
 
 #. Heading of the values the typed slash command can take
 #: app/entry/chat/slash-palette.tsx
@@ -1567,6 +1584,7 @@ msgstr "그린 그림: {path}"
 
 #. Button: close the stop dialog without stopping the Goal
 #. Closes the dialog without cancelling the card
+#. Closes the dialog without rejecting the card
 #. Dialog button: keep the Plan open
 #: app/entry/chat/board-panel.tsx
 #: app/entry/chat/board/card-peek.tsx
@@ -2166,15 +2184,15 @@ msgstr "대상 브랜치 변경 반영 중"
 msgid "대상 브랜치: {targetBranch}"
 msgstr "대상 브랜치: {targetBranch}"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "대상 브랜치가 계속 바뀌어 다시 시도할 예정"
 msgstr "대상 브랜치가 계속 바뀌어 다시 시도할 예정"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "대상 브랜치가 없어졌습니다"
 msgstr "대상 브랜치가 없어졌습니다"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "대상 브랜치와 충돌한 파일 {count}개를 에이전트가 해결하는 중"
 msgstr "대상 브랜치와 충돌한 파일 {count}개를 에이전트가 해결하는 중"
 
@@ -3090,6 +3108,11 @@ msgstr "브라우저에서 로그인"
 msgid "브라우저에서 로그인 중"
 msgstr "브라우저에서 로그인 중"
 
+#. Card field: the git branch the card's work is on
+#: app/entry/chat/board/card-peek.tsx
+msgid "브랜치"
+msgstr "브랜치"
+
 #: app/entry/settings/shared.tsx
 msgid "비밀정보 확인에 실패해 명령줄을 숨겼습니다."
 msgstr "비밀정보 확인에 실패해 명령줄을 숨겼습니다."
@@ -3112,7 +3135,7 @@ msgstr "빈 파일입니다."
 msgid "사람 판단"
 msgstr "사람 판단"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "사람의 판단을 기다리는 중"
 msgstr "사람의 판단을 기다리는 중"
 
@@ -3809,6 +3832,11 @@ msgstr "실행 {chatRunId}"
 msgid "실행 결과를 받지 못함"
 msgstr "실행 결과를 받지 못함"
 
+#. Card field: how often the card failed, was replanned and met conflicts
+#: app/entry/chat/board/card-peek.tsx
+msgid "실행 기록"
+msgstr "실행 기록"
+
 #: app/entry/chat/board/hold-reason.ts
 msgid "실행 기회를 모두 써서 멈췄습니다. 다시 대기열에 넣을 수 있습니다"
 msgstr "실행 기회를 모두 써서 멈췄습니다. 다시 대기열에 넣을 수 있습니다"
@@ -4195,6 +4223,11 @@ msgstr "연결하지 못했습니다. 다시 시도해 주십시오."
 msgid "연동·루프·결함"
 msgstr "연동·루프·결함"
 
+#. failures: failures in a row; replans: Plan rewrites; conflicts: conflict rounds
+#: app/entry/chat/board/card-peek.tsx
+msgid "연속 실패 {failures} · Plan 재작성 {replans} · 충돌 해결 {conflicts}"
+msgstr "연속 실패 {failures} · Plan 재작성 {replans} · 충돌 해결 {conflicts}"
+
 #: app/entry/chat/workflow-panel.tsx
 msgid "열린 질문 {count}"
 msgstr "열린 질문 {count}"
@@ -4546,7 +4579,7 @@ msgstr "의존"
 msgid "의존 관계가 올바르지 않습니다. 없는 카드나 순환 의존을 확인해 주십시오."
 msgstr "의존 관계가 올바르지 않습니다. 없는 카드나 순환 의존을 확인해 주십시오."
 
-#. Card editor field: ids of the cards this card waits for
+#. Card editor field: the cards this card waits for
 #: app/entry/chat/board/card-peek.tsx
 msgid "의존 카드"
 msgstr "의존 카드"
@@ -4583,6 +4616,10 @@ msgstr "이 Goal을 중단할까요?"
 #: app/entry/chat/board/board-surface.tsx
 msgid "이 Goal의 카드 브랜치(취소한 카드 것 포함)가 남아 있어 대상 브랜치를 바꿀 수 없습니다."
 msgstr "이 Goal의 카드 브랜치(취소한 카드 것 포함)가 남아 있어 대상 브랜치를 바꿀 수 없습니다."
+
+#: app/entry/chat/board/card-peek.tsx
+msgid "이 Plan에 다른 카드가 없습니다."
+msgstr "이 Plan에 다른 카드가 없습니다."
 
 #: app/entry/chat/board-panel.tsx
 msgid "이 Plan을 닫을까요?"
@@ -4691,6 +4728,10 @@ msgstr "이 작업의 기록을 삭제할까요?"
 #: app/entry/chat/message.tsx
 msgid "이 작업의 대화 기록을 지웁니다. 프로젝트 기억으로 채택된 내용과 그 출처 기록은 남습니다."
 msgstr "이 작업의 대화 기록을 지웁니다. 프로젝트 기억으로 채택된 내용과 그 출처 기록은 남습니다."
+
+#: app/entry/chat/board/card-peek.tsx
+msgid "이 카드를 거절할까요?"
+msgstr "이 카드를 거절할까요?"
 
 #: app/entry/chat/board/board-surface.tsx
 msgid "이 카드를 기다리는 카드가 있어서 옮길 수 없습니다. 그 카드의 의존을 먼저 풀어 주십시오."
@@ -5033,10 +5074,8 @@ msgstr "자동 merge 멈춤"
 
 #. Badge: the automatic Plan writer has stopped
 #. Badge: the automatic Plan writer has stopped
-#. Badge: the automatic Plan writer has stopped
-#. Badge: the automatic Plan writer has stopped
 #: app/entry/chat/board-panel.tsx
-#: app/entry/chat/board/project-board.tsx
+#: app/entry/chat/board/board-surface.tsx
 msgid "자동 Plan 작성 멈춤"
 msgstr "자동 Plan 작성 멈춤"
 
@@ -5151,9 +5190,14 @@ msgstr "작업 중단을 기다리고 있습니다. 완료 후 다시 확인해 
 msgid "작업 트리"
 msgstr "작업 트리"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "작업 트리에 커밋하지 않은 변경이 있어 기다리는 중 ({worktree})"
 msgstr "작업 트리에 커밋하지 않은 변경이 있어 기다리는 중 ({worktree})"
+
+#. Card field: the folder the card's work is in
+#: app/entry/chat/board/card-peek.tsx
+msgid "작업 폴더"
+msgstr "작업 폴더"
 
 #: app/entry/chat/chat-panel.tsx
 msgid "작업을 보관하지 못했습니다."
@@ -5539,7 +5583,7 @@ msgstr "지침과 도구 정의를 포함한 마지막 요청 기준입니다. /
 msgid "직접 merge"
 msgstr "직접 merge"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "직접 merge하기로 함, Goal 브랜치를 남겨 둠"
 msgstr "직접 merge하기로 함, Goal 브랜치를 남겨 둠"
 
@@ -5712,6 +5756,11 @@ msgstr "최종 제보 문안: 전송·복사·저장 전에 민감정보를 확�
 msgid "추가"
 msgstr "추가"
 
+#. Folded part of the card editor: boundaries, risk, required evidence, human decision
+#: app/entry/chat/board/card-peek.tsx
+msgid "추가 조건"
+msgstr "추가 조건"
+
 #: app/entry/navigation/account-profiles.tsx
 msgid "추가한 계정이 없습니다."
 msgstr "추가한 계정이 없습니다."
@@ -5768,7 +5817,7 @@ msgstr "출처 고르기"
 msgid "출처 추적"
 msgstr "출처 추적"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "충돌로 자동 merge를 멈췄습니다"
 msgstr "충돌로 자동 merge를 멈췄습니다"
 
@@ -5836,9 +5885,10 @@ msgstr "카드 {done}/{cardCount}"
 msgid "카드 {done}/{total} 완료"
 msgstr "카드 {done}/{total} 완료"
 
+#. Button that confirms rejecting a card waiting for approval
 #: app/entry/chat/board/card-peek.tsx
-msgid "카드 id를 쉼표로 구분합니다."
-msgstr "카드 id를 쉼표로 구분합니다."
+msgid "카드 거절"
+msgstr "카드 거절"
 
 #. Decision answer: redo the card's work
 #: app/entry/chat/decision-prompt.tsx
@@ -5880,7 +5930,8 @@ msgstr "카드 작업 폴더를 준비하지 못했습니다"
 msgid "카드 작업 폴더에 정리되지 않은 변경이 있습니다"
 msgstr "카드 작업 폴더에 정리되지 않은 변경이 있습니다"
 
-#. Button that opens the form for a new card in this conversation
+#. Button that opens the form for a new card
+#. Button that opens the form for a new card
 #. Title of the form that adds a new card
 #: app/entry/chat/board-panel.tsx
 #: app/entry/chat/board/card-peek.tsx
@@ -5894,11 +5945,21 @@ msgstr "카드 추가"
 msgid "카드 취소"
 msgstr "카드 취소"
 
+#. Name of the panel beside the board that shows one card
+#: app/entry/chat/board/card-peek.tsx
+msgid "카드 패널"
+msgstr "카드 패널"
+
+#. Button that closes the card panel beside the board
+#: app/entry/chat/board/card-peek.tsx
+msgid "카드 패널 닫기"
+msgstr "카드 패널 닫기"
+
 #: app/entry/settings/pages/kanban.tsx
 msgid "카드 하나를 맡아 그 카드의 worktree에서 작업하는 카드 에이전트의 모델입니다."
 msgstr "카드 하나를 맡아 그 카드의 worktree에서 작업하는 카드 에이전트의 모델입니다."
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "카드가 모두 끝난 뒤 merge합니다"
 msgstr "카드가 모두 끝난 뒤 merge합니다"
 
@@ -6510,7 +6571,7 @@ msgid "확인 필요 카드 {replanWaits}"
 msgstr "확인 필요 카드 {replanWaits}"
 
 #. Badge: blocked cards the planner did not replan, waiting for the user
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/board-surface.tsx
 msgid "확인 필요 카드 {waiting}"
 msgstr "확인 필요 카드 {waiting}"
 
@@ -6526,6 +6587,11 @@ msgstr "확인됨"
 #: app/entry/settings/pages/embedding.tsx
 msgid "확인하는 중입니다. 처음 확인할 때는 GPU용 모델(약 570MB)을 내려받습니다."
 msgstr "확인하는 중입니다. 처음 확인할 때는 GPU용 모델(약 570MB)을 내려받습니다."
+
+#. Badge on the status panel's button: conversations that wait for the user
+#: app/entry/chat/board/project-board.tsx
+msgid "확인할 대화 {attention}"
+msgstr "확인할 대화 {attention}"
 
 #: app/entry/chat/uncertain-runs.tsx
 msgid "확인할 목록이 바뀌었습니다. 새 목록을 확인해 주십시오."

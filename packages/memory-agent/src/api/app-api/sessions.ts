@@ -4,6 +4,7 @@ import { CancelResult, CompactResult, SessionRunState } from "../../agent/run-st
 import { RelayedApprovalView } from "../../approvals/relayed-state.ts";
 import { StoredMessage } from "../../chat-store/schema.ts";
 import {
+  CardFolderView,
   DecisionAnswer,
   HumanDecisionRequest,
   KanbanBoardView,
@@ -402,6 +403,12 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
     HttpApiEndpoint.get("kanban", "/api/sessions/:session/kanban", {
       params: session,
       success: KanbanView,
+      error: [UnknownSession, SessionStorageFailed],
+    }),
+    /** Where a card's work is on disk; null when the card has no folder now. */
+    HttpApiEndpoint.get("cardFolder", "/api/sessions/:session/kanban/cards/:card/folder", {
+      params: { ...session, card: Schema.String },
+      success: Schema.NullOr(CardFolderView),
       error: [UnknownSession, SessionStorageFailed],
     }),
     /**

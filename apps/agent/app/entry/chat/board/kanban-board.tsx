@@ -138,6 +138,7 @@ export function KanbanBoard({
   disabled,
   busy,
   onOpen,
+  selectedKey,
   onReorder,
   onSend,
   onAskChange,
@@ -154,6 +155,8 @@ export function KanbanBoard({
   /** A request is being sent; cards wait for its answer before they can be dragged again. */
   readonly busy: boolean;
   readonly onOpen: (item: BoardItem) => void;
+  /** The card open in the panel beside the board; it is marked among the cards. */
+  readonly selectedKey: string | null;
   /** The card takes the place of `at`, a card of its own Plan in its column. */
   readonly onReorder: (item: BoardItem, at: BoardItem) => void;
   /** Asks the server to hold, release or requeue the card; `lands` is where it is expected. */
@@ -345,6 +348,7 @@ export function KanbanBoard({
                     signals={signalsOf(item)}
                     disabled={disabled || contextOf(item).closed}
                     busy={busy}
+                    selected={item.key === selectedKey}
                     onOpen={onOpen}
                   />
                 ))}
@@ -537,12 +541,14 @@ function SortableCard({
   signals,
   disabled,
   busy,
+  selected,
   onOpen,
 }: {
   readonly item: BoardItem;
   readonly signals: CardSignals;
   readonly disabled: boolean;
   readonly busy: boolean;
+  readonly selected: boolean;
   readonly onOpen: (item: BoardItem) => void;
 }) {
   const { t } = useLingui();
@@ -564,6 +570,7 @@ function SortableCard({
       {...listeners}
       className={cn(
         "group/board-card relative flex transform-(--board-card-offset) touch-manipulation items-start gap-1 rounded-md border bg-card p-3 transition-colors hover:border-foreground/20 hover:bg-accent/40",
+        selected && "border-primary ring-1 ring-primary",
         isDragging && "opacity-40",
         isTruthy(transition) && "transition-transform duration-200 ease-out",
       )}
@@ -571,6 +578,7 @@ function SortableCard({
       <button
         type="button"
         data-board-card={item.key}
+        aria-current={selected ? "true" : undefined}
         className="min-w-0 flex-1 cursor-pointer rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onClick={() => onOpen(item)}
       >

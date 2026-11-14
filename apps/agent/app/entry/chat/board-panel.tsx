@@ -1,5 +1,3 @@
-import type { MessageDescriptor } from "@lingui/core";
-import { msg } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
 import { isTruthy } from "../../truthy.ts";
 import { useState } from "react";
@@ -35,7 +33,6 @@ import {
   BoardEdit,
   type BoardView,
   type CardStatus,
-  type GoalMergeState,
   type HumanDecisionRequest,
   type KanbanScheduleView,
 } from "../api";
@@ -57,11 +54,14 @@ import {
   startErrorText,
   type ActiveKanban,
   KanbanRunningBadge,
+  PlannerStalledBadge,
+  ReplanWaitBadge,
   type BoardPlan,
 } from "./board/board-surface";
-import { cardStatusLabels } from "./board/board-moves";
+import { cardStatusLabels, goalDecisionCardId } from "./board/board-moves";
 import { authorLabel, StatusIcon } from "./board/card-face";
-import { verdictText, waitsForUser } from "./board/hold-reason";
+import { GoalMergeStatus, mergeStateLabel } from "./board/goal-merge";
+import { waitsForUser } from "./board/hold-reason";
 import { BoardShortcuts } from "./board/kanban-board";
 
 export { authorLabel } from "./board/card-face";
@@ -176,23 +176,6 @@ export function BoardTally({
         </span>
       )}
     </span>
-  );
-}
-
-/** The cards whose replan the planner left undone: they wait for the user. */
-function ReplanWaitBadge({ loop }: { readonly loop: ActiveKanban }) {
-  const { t } = useLingui();
-  const waiting = Arr.countBy(loop.cards, (card) => waitsForUser(card.reason));
-  if (waiting === 0) return null;
-  return (
-    <Badge
-      variant="outline"
-      title={t`계속 실패해 다시 짜 달라고 요청한 카드를 Plan 작성자가 고치지 않았습니다. 카드를 고치거나 다시 대기열에 넣어 주십시오.`}
-    >
-      <Trans comment="Badge: blocked cards the planner did not replan, waiting for the user">
-        확인 필요 카드 {waiting}
-      </Trans>
-    </Badge>
   );
 }
 
@@ -312,16 +295,7 @@ export function WorkflowBoard({
       {(loop !== null || switchable || view.pendingChanges.length > 0) && (
         <div className="flex flex-wrap items-center gap-1.5 px-1.5">
           {loop !== null && <KanbanRunningBadge paused={loop.goalPaused} />}
-          {loop !== null && loop.plannerStalled && (
-            <Badge
-              variant="outline"
-              title={t`Plan 작성자가 연속으로 카드를 고쳤지만 새로 충족된 결과가 없어 자동 Plan 작성을 멈췄습니다. 이미 맡은 카드는 계속 실행됩니다. 대화에서 방향을 알려 주면 다시 Plan을 짭니다.`}
-            >
-              <Trans comment="Badge: the automatic Plan writer has stopped">
-                자동 Plan 작성 멈춤
-              </Trans>
-            </Badge>
-          )}
+          {loop !== null && loop.plannerStalled && <PlannerStalledBadge />}
           {loop !== null && <ReplanWaitBadge loop={loop} />}
           {view.pendingChanges.length > 0 && (
             <Badge variant="outline">
@@ -473,8 +447,15 @@ function BoardSheet({
     <Sheet
       open
       onOpenChange={(next, details) => {
-        // Esc while a card is picked up puts the card back; the board stays open.
-        if (!next && dragging && details.reason === "escape-key") return details.cancel();
+        if (!next && details.reason === "escape-key") {
+          // Esc puts a picked-up card back, or closes the open card panel; the board stays open.
+          if (dragging) return details.cancel();
+          if (adding || (peekCardId !== null && !goalAsked)) {
+            setAdding(false);
+            onPeek(null);
+            return details.cancel();
+          }
+        }
         if (!next) onClose();
       }}
     >
@@ -486,16 +467,7 @@ function BoardSheet({
           <SheetDescription>
             <span className="flex flex-wrap items-center gap-2">
               {loop !== null && <KanbanRunningBadge paused={loop.goalPaused} />}
-              {loop !== null && loop.plannerStalled && (
-                <Badge
-                  variant="outline"
-                  title={t`Plan 작성자가 연속으로 카드를 고쳤지만 새로 충족된 결과가 없어 자동 Plan 작성을 멈췄습니다. 이미 맡은 카드는 계속 실행됩니다. 대화에서 방향을 알려 주면 다시 Plan을 짭니다.`}
-                >
-                  <Trans comment="Badge: the automatic Plan writer has stopped">
-                    자동 Plan 작성 멈춤
-                  </Trans>
-                </Badge>
-              )}
+              {loop !== null && loop.plannerStalled && <PlannerStalledBadge />}
               {loop !== null && <ReplanWaitBadge loop={loop} />}
               {loop !== null && loop.loop._tag !== "Healthy" && (
                 <LoopHealthStatus
@@ -508,6 +480,7 @@ function BoardSheet({
                   onRestart={() => act(KanbanAction.RestartLoop())}
                 />
               )}
+              {loop?.schedule?.merge != null && <GoalMergeStatus merge={loop.schedule.merge} />}
               <span>
                 <Trans comment="Board sheet tally: cards done / all cards">
                   완료 {doneCount}/{cardCount}
@@ -690,52 +663,6 @@ function BoardSheet({
   );
 }
 
-/** The card id Goal-level requests carry (memory-agent `goalDecisionCardId`). */
-const goalDecisionCardId = "@goal";
-
-/** Why the scheduler stopped merging a Goal on its own. */
-const stoppedMergeTexts = {
-  no_target: msg`detached HEAD에서 시작해 브랜치가 없으므로 자동 merge하지 않습니다`,
-  target_missing: msg`대상 브랜치가 없어졌습니다`,
-  conflict_stopped: msg`충돌로 자동 merge를 멈췄습니다`,
-  goal_replaced: msg`Goal 변경으로 merge를 멈췄습니다`,
-} satisfies Record<
-  Extract<GoalMergeState, { readonly _tag: "Stopped" }>["reason"],
-  MessageDescriptor
->;
-
-/** Where a Goal's merge into its target stands, in words. */
-export function mergeStateLabel(state: GoalMergeState | null): MessageDescriptor {
-  if (state === null) return msg`카드가 모두 끝난 뒤 merge합니다`;
-  return Match.valueTags(state, {
-    ResolvingConflict: ({ files }) => {
-      const count = files.length;
-      return msg`대상 브랜치와 충돌한 파일 ${count}개를 에이전트가 해결하는 중`;
-    },
-    Verifying: () => msg`Goal 전체를 검증하는 중`,
-    VerifyFailed: ({ verdict: failure }) => {
-      const verdict = verdictText(failure);
-      return msg`Goal 검증 실패: ${verdict}`;
-    },
-    WaitingWorktree: ({ worktree }) =>
-      msg`작업 트리에 커밋하지 않은 변경이 있어 기다리는 중 (${worktree})`,
-    TargetMoving: () => msg`대상 브랜치가 계속 바뀌어 다시 시도할 예정`,
-    AwaitingDecision: () => msg`사람의 판단을 기다리는 중`,
-    Merged: ({ commit: full }) => {
-      const commit = full.slice(0, 8);
-      return msg`merge됨 (${commit})`;
-    },
-    ManualMerge: () => msg`직접 merge하기로 함, Goal 브랜치를 남겨 둠`,
-    PullRequestPending: () => msg`PR을 만드는 중`,
-    PullRequestCreated: ({ url }) => msg`PR을 만듦: ${url}`,
-    PullRequestUncertain: () =>
-      msg`PR을 만들던 중 멈췄습니다. 원격 저장소에서 직접 확인해 주십시오`,
-    PullRequestFailed: ({ stage }) =>
-      stage === "push" ? msg`Goal 브랜치 push 실패` : msg`PR 생성 실패`,
-    Stopped: ({ reason }) => stoppedMergeTexts[reason],
-  });
-}
-
 /** How the project scheduler runs this Goal: the Goals it waits for and its merge. */
 function GoalSchedulePanel({
   schedule,
@@ -771,8 +698,10 @@ function GoalSchedulePanel({
     >
       <div className="flex flex-wrap items-center gap-3">
         <span>
-          <Trans>대상 브랜치: {targetBranch}</Trans> · {t(mergeStateLabel(schedule.merge))}
+          <Trans>대상 브랜치: {targetBranch}</Trans>
+          {schedule.merge === null && <> · {t(mergeStateLabel(schedule.merge))}</>}
         </span>
+        {schedule.merge !== null && <GoalMergeStatus merge={schedule.merge} />}
         {schedule.upstreamPending && (
           <Badge variant="outline">
             <Trans>대상 브랜치 변경 반영 중</Trans>
