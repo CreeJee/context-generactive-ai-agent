@@ -171,6 +171,18 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
             SchemaError: kanbanRefusal.SchemaError,
           }),
         ),
+      cardFolder: ({ params: { session, card } }) =>
+        sessions.get(session).pipe(
+          Effect.andThen(actions.cardFolder(session, card)),
+          Effect.map(Option.getOrNull),
+          Effect.catchTags({
+            SessionNotFound: kanbanRefusal.SessionNotFound,
+            KanbanStorageFailed: kanbanRefusal.KanbanStorageFailed,
+            WorkflowStorageError: kanbanRefusal.WorkflowStorageError,
+            SqlError: kanbanRefusal.SqlError,
+            SchemaError: kanbanRefusal.SchemaError,
+          }),
+        ),
       kanbanAction: ({ params: { session }, headers, payload }) =>
         checkHolder(session, headers["x-session-holder"]).pipe(
           Effect.andThen(sessions.get(session)),
