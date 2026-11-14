@@ -447,8 +447,15 @@ function BoardSheet({
     <Sheet
       open
       onOpenChange={(next, details) => {
-        // Esc while a card is picked up puts the card back; the board stays open.
-        if (!next && dragging && details.reason === "escape-key") return details.cancel();
+        if (!next && details.reason === "escape-key") {
+          // Esc puts a picked-up card back, or closes the open card panel; the board stays open.
+          if (dragging) return details.cancel();
+          if (adding || (peekCardId !== null && !goalAsked)) {
+            setAdding(false);
+            onPeek(null);
+            return details.cancel();
+          }
+        }
         if (!next) onClose();
       }}
     >

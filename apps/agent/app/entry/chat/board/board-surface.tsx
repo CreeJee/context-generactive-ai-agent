@@ -2,6 +2,7 @@ import { t } from "@lingui/core/macro";
 import { Trans } from "@lingui/react/macro";
 import { useEffect, useState } from "react";
 import { Array as Arr, Effect, Fiber } from "effect";
+import { cn } from "cn";
 import { Alert, AlertDescription } from "../../../components/ui/alert";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -248,6 +249,7 @@ const refOf = (item: BoardItem): BoardCardRef => ({
  * notice for a refused request, and the prompts for changing an executing card and for moving a
  * card to another conversation. The session's board sheet shows one Plan on it; the project board
  * shows every Plan of the project. The parent owns where it sits and which card is peeked.
+ * The panel sits beside the columns, so the board stays usable while a card is open.
  */
 export function BoardSurface({
   projectId,
@@ -411,41 +413,100 @@ export function BoardSurface({
 
   return (
     <>
-      <div className={className}>
-        <KanbanBoard
-          cards={cards}
-          signalsOf={signalsOf}
-          contextOf={contextOf}
-          disabled={disabled}
-          busy={request.isPending}
-          onOpen={(item) => onPeek(refOf(item))}
-          onReorder={(item, at) =>
-            request.mutate(
-              {
-                sessionId: item.sessionId,
-                action: KanbanAction.Intent({
-                  intent: BoardIntent.Reorder({ cardId: item.card.id, at: at.card.id }),
-                }),
-              },
-              { onError: refused },
-            )
-          }
-          onSend={(item, sent, lands) => {
-            setLanding({ key: item.key, lands });
-            request.mutate(
-              {
-                sessionId: item.sessionId,
-                action: KanbanAction.Intent({
-                  intent: BoardIntent[sent]({ cardId: item.card.id }),
-                }),
-              },
-              { onError: refused },
-            );
-          }}
-          onAskChange={setAskChange}
-          onRefused={setNotice}
-          onDraggingChange={onDraggingChange}
-        />
+      <div className={cn("flex min-h-0", className)}>
+        <div className={cn("min-w-0 flex-1", peekKey !== null && "hidden sm:block")}>
+          <KanbanBoard
+            cards={cards}
+            signalsOf={signalsOf}
+            contextOf={contextOf}
+            disabled={disabled}
+            busy={request.isPending}
+            // A card opened from the board shows its details; only "수정 요청 남기기" opens the editor.
+            onOpen={(item) => {
+              onAddingChange(null);
+              setEditingKey(null);
+              onPeek(refOf(item));
+            }}
+            selectedKey={adding !== null || peek === null ? null : boardCardKey(peek)}
+            onReorder={(item, at) =>
+              request.mutate(
+                {
+                  sessionId: item.sessionId,
+                  action: KanbanAction.Intent({
+                    intent: BoardIntent.Reorder({ cardId: item.card.id, at: at.card.id }),
+                  }),
+                },
+                { onError: refused },
+              )
+            }
+            onSend={(item, sent, lands) => {
+              setLanding({ key: item.key, lands });
+              request.mutate(
+                {
+                  sessionId: item.sessionId,
+                  action: KanbanAction.Intent({
+                    intent: BoardIntent[sent]({ cardId: item.card.id }),
+                  }),
+                },
+                { onError: refused },
+              );
+            }}
+            onAskChange={setAskChange}
+            onRefused={setNotice}
+            onDraggingChange={onDraggingChange}
+          />
+        </div>
+        {peekState !== null && peekKey !== null && peekSession !== null && (
+          <CardPeek
+            key={peekKey}
+            peek={peekState}
+            entry={peeked}
+            loopCard={peek === null ? null : loopCard(peek)}
+            decisions={peek === null ? [] : decisionsOf(peek)}
+            titleOf={titleIn(peekSession)}
+            outcomeOf={outcomeIn(peekSession)}
+            group={peekBoard?.label ?? null}
+            changePending={peek !== null && changePending(peek)}
+            projectId={projectId}
+            holder={holder}
+            disabled={disabled}
+            closed={peekBoard === null || closedIn(peekBoard)}
+            planVersion={peekBoard?.plan.version ?? 0}
+            cardCount={peekBoard?.view.cards.length ?? 0}
+            planCards={
+              peekBoard?.view.cards.map(({ card }) => ({ id: card.id, title: card.title })) ?? []
+            }
+            editPending={edit.isPending || action.isPending}
+            intentPending={action.isPending || request.isPending}
+            kanbanActive={peekBoard !== null && peekBoard.loop !== null}
+            transferTargets={targets}
+            onTransfer={(cardId, toSessionId) => {
+              const item = itemOf({ sessionId: peekSession, cardId });
+              const to = boardOf(toSessionId);
+              if (item !== null && to !== null) setTransfer({ item, to });
+            }}
+            onEdit={(editing) =>
+              setEditingKey(editing && peek !== null ? boardCardKey(peek) : null)
+            }
+            onIntent={(sent, cardId) =>
+              action.mutate(
+                {
+                  sessionId: peekSession,
+                  action: KanbanAction.Intent({ intent: BoardIntent[sent]({ cardId }) }),
+                },
+                { onError: (error) => setNotice(intentErrorText(sent)(error)) },
+              )
+            }
+            onClose={() => {
+              onAddingChange(null);
+              setEditingKey(null);
+              onPeek(null);
+            }}
+            onSubmit={(change) =>
+              save(peekSession, change).catch((error: Error) => editErrorText(error))
+            }
+          />
+        )}
       </div>
       {notice !== null && (
         <Alert
@@ -454,55 +515,6 @@ export function BoardSurface({
         >
           <AlertDescription>{notice}</AlertDescription>
         </Alert>
-      )}
-      {peekState !== null && peekKey !== null && peekSession !== null && (
-        <CardPeek
-          key={peekKey}
-          peek={peekState}
-          entry={peeked}
-          loopCard={peek === null ? null : loopCard(peek)}
-          decisions={peek === null ? [] : decisionsOf(peek)}
-          titleOf={titleIn(peekSession)}
-          outcomeOf={outcomeIn(peekSession)}
-          group={peekBoard?.label ?? null}
-          changePending={peek !== null && changePending(peek)}
-          projectId={projectId}
-          holder={holder}
-          disabled={disabled}
-          closed={peekBoard === null || closedIn(peekBoard)}
-          planVersion={peekBoard?.plan.version ?? 0}
-          cardCount={peekBoard?.view.cards.length ?? 0}
-          planCards={
-            peekBoard?.view.cards.map(({ card }) => ({ id: card.id, title: card.title })) ?? []
-          }
-          editPending={edit.isPending || action.isPending}
-          intentPending={action.isPending || request.isPending}
-          kanbanActive={peekBoard !== null && peekBoard.loop !== null}
-          transferTargets={targets}
-          onTransfer={(cardId, toSessionId) => {
-            const item = itemOf({ sessionId: peekSession, cardId });
-            const to = boardOf(toSessionId);
-            if (item !== null && to !== null) setTransfer({ item, to });
-          }}
-          onEdit={(editing) => setEditingKey(editing && peek !== null ? boardCardKey(peek) : null)}
-          onIntent={(sent, cardId) =>
-            action.mutate(
-              {
-                sessionId: peekSession,
-                action: KanbanAction.Intent({ intent: BoardIntent[sent]({ cardId }) }),
-              },
-              { onError: (error) => setNotice(intentErrorText(sent)(error)) },
-            )
-          }
-          onClose={() => {
-            onAddingChange(null);
-            setEditingKey(null);
-            onPeek(null);
-          }}
-          onSubmit={(change) =>
-            save(peekSession, change).catch((error: Error) => editErrorText(error))
-          }
-        />
       )}
       <Dialog
         open={askChange !== null}

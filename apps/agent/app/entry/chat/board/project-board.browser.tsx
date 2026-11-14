@@ -228,6 +228,11 @@ it.live("project board shows the executing Plans in order, moves a Goal and move
     yield* sdkCall(() =>
       expect.element(screen.getByRole("heading", { name: "로그 포맷" })).toBeVisible(),
     );
+    yield* sdkCall(() =>
+      expect.element(screen.getByRole("complementary", { name: "카드 패널" })).toBeVisible(),
+    );
+    // The panel is not a dialog of its own: only the board's sheet is one.
+    expect(document.querySelectorAll('[data-slot="sheet-content"]').length).toBe(1);
     yield* sdkCall(() => screen.getByRole("combobox", { name: "옮길 대화" }).click());
     yield* sdkCall(() => screen.getByRole("option", { name: "결제 모듈" }).click());
     yield* sdkCall(() => screen.getByRole("button", { name: "옮기기" }).click());

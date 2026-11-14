@@ -5946,6 +5946,16 @@ msgstr "카드 추가"
 msgid "카드 취소"
 msgstr "카드 취소"
 
+#. Name of the panel beside the board that shows one card
+#: app/entry/chat/board/card-peek.tsx
+msgid "카드 패널"
+msgstr "카드 패널"
+
+#. Button that closes the card panel beside the board
+#: app/entry/chat/board/card-peek.tsx
+msgid "카드 패널 닫기"
+msgstr "카드 패널 닫기"
+
 #: app/entry/settings/pages/kanban.tsx
 msgid "카드 하나를 맡아 그 카드의 worktree에서 작업하는 카드 에이전트의 모델입니다."
 msgstr "카드 하나를 맡아 그 카드의 worktree에서 작업하는 카드 에이전트의 모델입니다."

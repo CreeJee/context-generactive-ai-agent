@@ -1,6 +1,6 @@
 import { isTruthy } from "../../../truthy.ts";
 import { useState, type ReactNode } from "react";
-import { ChevronRightIcon } from "lucide-react";
+import { ChevronRightIcon, XIcon } from "lucide-react";
 import { msg, ph } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
 import { Array as Arr, Data, Result, type Types } from "effect";
@@ -33,14 +33,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../../components/ui/select";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from "../../../components/ui/sheet";
 import { Textarea } from "../../../components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "../../../components/ui/toggle-group";
 import {
@@ -123,8 +115,8 @@ const listOrNull = (text: string) => {
 };
 
 /**
- * The right-hand peek panel over the board: a card's details, its decision prompts and its
- * editor, or the form for a new card. Esc closes it and leaves the board open.
+ * The panel beside the board: a card's details, its decision prompts and its editor, or the form
+ * for a new card. The board stays visible and usable next to it; the parent closes it on Esc.
  */
 export function CardPeek({
   peek,
@@ -215,30 +207,30 @@ export function CardPeek({
       Card: ({ editing }) => {
         if (entry === null)
           return (
-            <SheetHeader>
-              <SheetTitle>
+            <header className="flex flex-col gap-1 border-b p-4 pr-10">
+              <h3 className="font-heading text-sm font-medium">
                 <Trans>카드를 찾을 수 없습니다</Trans>
-              </SheetTitle>
-              <SheetDescription>
+              </h3>
+              <div className="text-xs/relaxed text-muted-foreground">
                 <Trans>취소됐거나 다른 카드로 바뀌었습니다.</Trans>
-              </SheetDescription>
-            </SheetHeader>
+              </div>
+            </header>
           );
         const { card, lastChange } = entry;
         const editable = !disabled && !closed && card.status !== "done";
         return (
           <>
-            <SheetHeader>
-              <SheetDescription>
+            <header className="flex flex-col gap-1 border-b p-4 pr-10">
+              <div className="text-xs/relaxed text-muted-foreground">
                 <span className="flex items-center gap-1.5">
                   <StatusIcon status={card.status} />
                   {t(cardStatusLabels[card.status])}
                   <span className="font-mono">· {card.id}</span>
                   {group !== null && <span>· {group}</span>}
                 </span>
-              </SheetDescription>
-              <SheetTitle>{card.title}</SheetTitle>
-            </SheetHeader>
+              </div>
+              <h3 className="font-heading text-sm font-medium">{card.title}</h3>
+            </header>
             <div className="flex-1 space-y-4 overflow-y-auto px-4">
               {decisions.map((request) => (
                 <DecisionPrompt
@@ -445,7 +437,7 @@ export function CardPeek({
               )}
             </div>
             {!editing && (
-              <SheetFooter className="flex-row justify-end">
+              <footer className="mt-auto flex flex-row justify-end gap-2 p-4">
                 {kanbanActive &&
                   (card.hold !== undefined ||
                     card.status === "backlog" ||
@@ -488,21 +480,36 @@ export function CardPeek({
                     </Trans>
                   )}
                 </Button>
-              </SheetFooter>
+              </footer>
             )}
           </>
         );
       },
     });
   return (
-    <Sheet
-      open
-      onOpenChange={(open) => {
-        if (!open) onClose();
-      }}
+    <aside
+      aria-label={t({
+        message: "카드 패널",
+        comment: "Name of the panel beside the board that shows one card",
+      })}
+      className="relative flex min-h-0 w-full shrink-0 flex-col gap-4 border-l bg-background text-xs/relaxed sm:w-96"
     >
-      <SheetContent className="w-full sm:max-w-md">{content()}</SheetContent>
-    </Sheet>
+      <span className="absolute top-2 right-2">
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          aria-label={t({
+            message: "카드 패널 닫기",
+            comment: "Button that closes the card panel beside the board",
+          })}
+          onClick={onClose}
+        >
+          <XIcon />
+        </Button>
+      </span>
+      {content()}
+    </aside>
   );
 }
 
@@ -733,14 +740,14 @@ function CardEditor({
       }}
     >
       {card === null && (
-        <SheetHeader>
-          <SheetTitle>
+        <header className="flex flex-col gap-1 border-b p-4 pr-10">
+          <h3 className="font-heading text-sm font-medium">
             <Trans comment="Title of the form that adds a new card">카드 추가</Trans>
-          </SheetTitle>
-          <SheetDescription>
+          </h3>
+          <div className="text-xs/relaxed text-muted-foreground">
             <Trans>저장하면 보드에 바로 반영되고 작성자가 사용자로 남습니다.</Trans>
-          </SheetDescription>
-        </SheetHeader>
+          </div>
+        </header>
       )}
       <div className={card === null ? "flex-1 overflow-y-auto p-4" : "space-y-3"}>
         {executing && (
