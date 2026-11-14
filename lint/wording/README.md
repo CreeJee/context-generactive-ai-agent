@@ -36,7 +36,7 @@
 ## Side Effects
 
 - 네트워크: 처음 쓸 때 Kiwi 모델(v0.24.1, 약 88 MB)을 GitHub release에서 내려받는다.
-- 파일: 모델을 sha256과 압축 안 경로를 확인한 뒤 `node_modules/.cache/wording/kiwi-<version>`에 푼다. 임시 디렉터리에 풀고 이름을 바꿔 옮긴다.
+- 파일: 모델을 sha256과 압축 안 경로를 확인한 뒤 사용자 캐시 폴더(`$XDG_CACHE_HOME`, 없으면 `~/.cache`)의 `context-generactive-agent/wording/kiwi-<version>`에 푼다. 임시 디렉터리에 풀고 이름을 바꿔 옮긴다. 모든 checkout과 카드 worktree가 이 한 벌을 읽는다.
 - 프로세스: 압축 확인과 풀기에 `tar`를 실행한다.
 - 스레드: lint 규칙은 lint를 돌리는 프로세스 안에 worker thread 하나를 띄운다(`unref`라 lint가 끝나면 함께 끝난다). 답을 기다리는 동안 lint 스레드는 멈춘다.
 

@@ -1,8 +1,9 @@
 import { createRequire } from "node:module";
+import { homedir } from "node:os";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
-import { Array as Arr, Context, Effect, Layer, Path, FileSystem, Schema } from "effect";
+import { Array as Arr, Config, Context, Effect, Layer, Path, FileSystem, Schema } from "effect";
 import { Digest } from "effect/crypto";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -70,7 +71,9 @@ export const morphemesLive = Morphemes.layer.pipe(
 );
 
 /**
- * The model directory, downloaded into `node_modules/.cache/wording` on first use. The archive
+ * The model directory, downloaded into `context-generactive-agent/wording` under the user's cache folder (`$XDG_CACHE_HOME`,
+ * else `~/.cache`) on first use. Every checkout and card worktree reads that one copy, and a
+ * sandboxed check may write there, so a worktree without network still finds the model. The archive
  * is checked against its digest and its entry names before anything is extracted, and it is
  * extracted next to the final place and then renamed, so an interrupted run never leaves half a
  * model in use.
@@ -78,8 +81,12 @@ export const morphemesLive = Morphemes.layer.pipe(
 const ensureModel = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  // From this file rather than the working directory: the lint rule may run from anywhere.
-  const cacheRoot = path.resolve(import.meta.dirname, "../../../node_modules/.cache/wording");
+  const home = yield* Effect.sync(() => homedir());
+  const cacheHome = yield* Config.String("XDG_CACHE_HOME").pipe(
+    Config.withDefault(path.join(home, ".cache")),
+    Effect.mapError((error) => new MorphemeModelUnavailable({ message: error.message })),
+  );
+  const cacheRoot = path.join(cacheHome, "context-generactive-agent", "wording");
   const root = path.join(cacheRoot, `kiwi-${kiwiModel.version}`);
   const modelDirectory = path.join(root, kiwiModel.directory);
   if (yield* fs.exists(path.join(modelDirectory, "cong.mdl"))) return modelDirectory;
