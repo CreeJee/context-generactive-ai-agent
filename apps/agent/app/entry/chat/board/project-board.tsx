@@ -51,6 +51,7 @@ import {
   ReplanWaitBadge,
   type SurfaceBoard,
 } from "./board-surface";
+import { GoalMergeStatus, mergeFailed } from "./goal-merge";
 import { BoardShortcuts } from "./kanban-board";
 import { Array as Arr, Predicate } from "effect";
 import { waitsForUser } from "./hold-reason";
@@ -64,7 +65,8 @@ const onBoard = (row: ProjectBoardRow) => row.plan.status === "executing";
 
 /**
  * Whether the conversation's board waits for the user: a loop that is not healthy, a stalled
- * planner, a paused Goal, cards the planner left unreplanned, or a Goal-level decision.
+ * planner, a paused Goal, a merge that failed, cards the planner left unreplanned, or a Goal-level
+ * decision.
  */
 const needsUser = (surface: SurfaceBoard | null, goalDecisions: number) => {
   const loop = surface?.loop ?? null;
@@ -74,6 +76,7 @@ const needsUser = (surface: SurfaceBoard | null, goalDecisions: number) => {
       (!Predicate.isTagged(loop.loop, "Healthy") ||
         loop.plannerStalled ||
         loop.goalPaused ||
+        mergeFailed(loop.schedule?.merge ?? null) ||
         loop.cards.some((card) => waitsForUser(card.reason))))
   );
 };
@@ -503,6 +506,7 @@ function ConversationRow({
           onRestart={() => act(KanbanAction.RestartLoop())}
         />
       )}
+      {loop?.schedule?.merge != null && <GoalMergeStatus merge={loop.schedule.merge} />}
       <span className="text-muted-foreground">
         <Trans comment="Finished cards out of all cards in the conversation's Plan">
           완료 {ph({ doneCount: row.counts.done })}/{ph({ cardCount: cardsOf(row) })}

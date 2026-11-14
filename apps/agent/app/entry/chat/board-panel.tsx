@@ -60,7 +60,7 @@ import {
 } from "./board/board-surface";
 import { cardStatusLabels, goalDecisionCardId } from "./board/board-moves";
 import { authorLabel, StatusIcon } from "./board/card-face";
-import { mergeStateLabel } from "./board/goal-merge";
+import { GoalMergeStatus, mergeStateLabel } from "./board/goal-merge";
 import { waitsForUser } from "./board/hold-reason";
 import { BoardShortcuts } from "./board/kanban-board";
 
@@ -473,6 +473,7 @@ function BoardSheet({
                   onRestart={() => act(KanbanAction.RestartLoop())}
                 />
               )}
+              {loop?.schedule?.merge != null && <GoalMergeStatus merge={loop.schedule.merge} />}
               <span>
                 <Trans comment="Board sheet tally: cards done / all cards">
                   완료 {doneCount}/{cardCount}
@@ -690,8 +691,10 @@ function GoalSchedulePanel({
     >
       <div className="flex flex-wrap items-center gap-3">
         <span>
-          <Trans>대상 브랜치: {targetBranch}</Trans> · {t(mergeStateLabel(schedule.merge))}
+          <Trans>대상 브랜치: {targetBranch}</Trans>
+          {schedule.merge === null && <> · {t(mergeStateLabel(schedule.merge))}</>}
         </span>
+        {schedule.merge !== null && <GoalMergeStatus merge={schedule.merge} />}
         {schedule.upstreamPending && (
           <Badge variant="outline">
             <Trans>대상 브랜치 변경 반영 중</Trans>
