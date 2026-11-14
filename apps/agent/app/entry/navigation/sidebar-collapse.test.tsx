@@ -88,6 +88,7 @@ const sessionOf = (projectId: string, id: string, title: string): Session => ({
   importedFrom: null,
   worktreePath: null,
   branch: null,
+  model: null,
 });
 
 /**

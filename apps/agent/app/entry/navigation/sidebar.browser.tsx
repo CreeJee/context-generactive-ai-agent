@@ -441,6 +441,7 @@ describe("sidebar disclosures", () => {
     importedFrom: null,
     worktreePath: null,
     branch: null,
+    model: null,
   });
 
   const group = (
