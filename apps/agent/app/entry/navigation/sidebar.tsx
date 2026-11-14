@@ -426,6 +426,9 @@ const shownIn = (filter: PlaceFilter) => (session: Session) =>
 const atWork = (session: Session, working: ProjectWorking) =>
   working.answering.has(session.id) || working.boardRunning.has(session.id);
 
+/** How many conversations a project's group lists before "show more". */
+const firstRows = 8;
+
 /** One listed project and what the list shows of it: its conversations and archived ones. */
 interface ProjectGroup {
   readonly projectId: string;
@@ -440,6 +443,7 @@ interface ProjectGroup {
 function ProjectSessionGroup({
   group,
   selected,
+  openSessionId,
   working,
   label,
   row,
@@ -450,6 +454,8 @@ function ProjectSessionGroup({
   group: ProjectGroup;
   /** The project of the open conversation; its group starts open when no fold was stored. */
   readonly selected: boolean;
+  /** The open conversation, when it belongs to this project; its row never hides. */
+  readonly openSessionId: string | null;
   /** The buttons on the header row: start a conversation, the project's menu. */
   readonly actions: React.ReactNode;
   /** The project's conversations at work now, which lead the group and fill the badge. */
@@ -478,6 +484,15 @@ function ProjectSessionGroup({
   // `filter` builds `shown` either way; counting through it again reads clearer than another pass.
   const leading = shown.filter((session) => atWork(session, working));
   const rest = shown.filter((session) => !atWork(session, working));
+  // One list: conversations at work first, then the rest, newest first as the server sent them.
+  const ordered = [...leading, ...rest];
+  const [expanded, setExpanded] = useState(false);
+  const head = ordered.slice(0, firstRows);
+  const tail = ordered.slice(firstRows);
+  // The open conversation and those at work never hide behind "show more".
+  const kept = tail.filter((session) => atWork(session, working) || session.id === openSessionId);
+  const hidden = tail.length - kept.length;
+  const rows = expanded ? ordered : [...head, ...kept];
   const everywhere = PlaceFilter.$is("all")(filter);
   const everyPlaceLabel = t({
     message: "모든 작업 위치",
@@ -608,38 +623,31 @@ function ProjectSessionGroup({
                   <Trans>이 작업 위치의 대화가 없습니다.</Trans>
                 </p>
               )}
-              <SessionGroup
-                title={t({
-                  message: "진행 중",
-                  comment: "Conversation list section: conversations answering or running a board",
-                })}
-                count={leading.length}
-                defaultOpen
-              >
-                {leading.length === 0 ? (
-                  <p className="px-2 py-1 text-xs text-muted-foreground">
-                    <Trans>진행 중인 대화가 없습니다.</Trans>
-                  </p>
-                ) : (
-                  <SidebarMenu>{leading.map(row)}</SidebarMenu>
-                )}
-              </SessionGroup>
-              <SessionGroup
-                title={t({
-                  message: "대화",
-                  comment: "Conversation list section: the conversations not at work",
-                })}
-                count={rest.length}
-                defaultOpen
-              >
-                {rest.length === 0 ? (
-                  <p className="px-2 py-1 text-xs text-muted-foreground">
-                    <Trans>다른 대화가 없습니다.</Trans>
-                  </p>
-                ) : (
-                  <SidebarMenu>{rest.map(row)}</SidebarMenu>
-                )}
-              </SessionGroup>
+              <SidebarMenu>{rows.map(row)}</SidebarMenu>
+              {!expanded && hidden > 0 && (
+                <Button
+                  variant="ghost-muted"
+                  size="sm"
+                  className="mx-2 justify-start"
+                  onClick={() => setExpanded(true)}
+                >
+                  <Trans comment="Button that lists the rest of a project's conversations; {hidden} is how many more">
+                    {hidden}개 더 보기
+                  </Trans>
+                </Button>
+              )}
+              {expanded && tail.length > 0 && (
+                <Button
+                  variant="ghost-muted"
+                  size="sm"
+                  className="mx-2 justify-start"
+                  onClick={() => setExpanded(false)}
+                >
+                  <Trans comment="Button that folds a project's conversation list back to its first rows">
+                    접기
+                  </Trans>
+                </Button>
+              )}
               {group.archived.length > 0 && (
                 <SessionGroup
                   title={t({
@@ -755,16 +763,17 @@ export function ArchivedProjects({
   );
 }
 
-/** One section of the conversation list: a heading that folds it, with how many it holds. */
+/**
+ * A project's archived conversations: a heading that folds them away, closed at first, with how
+ * many it holds. It sticks below the project's pinned header (`top-8`).
+ */
 function SessionGroup({
   title,
   count,
-  defaultOpen = false,
   children,
 }: {
   title: string;
   count: number;
-  defaultOpen?: boolean;
   children: React.ReactNode;
 }) {
   const { t } = useLingui();
@@ -774,7 +783,7 @@ function SessionGroup({
   // two rows stay readable while both are stuck.
   return (
     <SidebarGroup>
-      <Collapsible defaultOpen={defaultOpen}>
+      <Collapsible>
         <CollapsibleTrigger className="group sticky top-8 z-10 flex h-8 w-full items-center gap-1 rounded-md bg-sidebar px-2 text-2xs font-medium tracking-wide text-muted-foreground uppercase outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring">
           <ChevronRightIcon className="size-3.5 shrink-0 transition-transform group-data-panel-open:rotate-90" />
           <span className="min-w-0 flex-1 truncate text-left">{title}</span>
@@ -974,6 +983,7 @@ export function SessionSection({
             key={group.projectId}
             group={group}
             selected={group.projectId === projectId}
+            openSessionId={group.projectId === projectId ? sessionId : null}
             working={workingOf(group.projectId)}
             label={label}
             row={row}

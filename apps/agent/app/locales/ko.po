@@ -277,6 +277,11 @@ msgstr "{formatted} 토큰 · {percent}%"
 msgid "{goal} 먼저"
 msgstr "{goal} 먼저"
 
+#. Button that lists the rest of a project's conversations; {hidden} is how many more
+#: app/entry/navigation/sidebar.tsx
+msgid "{hidden}개 더 보기"
+msgstr "{hidden}개 더 보기"
+
 #: app/entry/chat/markdown.tsx
 msgid "{host}의 이미지 불러오기"
 msgstr "{host}의 이미지 불러오기"
@@ -1836,10 +1841,6 @@ msgstr "다른 Goal의 카드 {otherCardId}가 같은 파일({files})을 이미 
 msgid "다른 Goal이 merge된 뒤 다시 검증하니 통과하지 못했습니다: {verdict}"
 msgstr "다른 Goal이 merge된 뒤 다시 검증하니 통과하지 못했습니다: {verdict}"
 
-#: app/entry/navigation/sidebar.tsx
-msgid "다른 대화가 없습니다."
-msgstr "다른 대화가 없습니다."
-
 #: app/entry/chat/board/card-peek.tsx
 msgid "다른 대화로 옮기기"
 msgstr "다른 대화로 옮기기"
@@ -2197,9 +2198,7 @@ msgid "대상 브랜치와 충돌한 파일 {count}개를 에이전트가 해결
 msgstr "대상 브랜치와 충돌한 파일 {count}개를 에이전트가 해결하는 중"
 
 #. Accessible name of the scrolling message list
-#. Conversation list section: the conversations not at work
 #: app/entry/chat/chat-history.tsx
-#: app/entry/navigation/sidebar.tsx
 msgid "대화"
 msgstr "대화"
 
@@ -5282,6 +5281,11 @@ msgstr "전체 권한으로 바꿀까요?"
 msgid "전체 내용: 첨부 context-agent-evidence.json (세션 #{session}, run {runs}/{runCount}개)"
 msgstr "전체 내용: 첨부 context-agent-evidence.json (세션 #{session}, run {runs}/{runCount}개)"
 
+#. Button that folds a project's conversation list back to its first rows
+#: app/entry/navigation/sidebar.tsx
+msgid "접기"
+msgstr "접기"
+
 #. Status badge of a background loop that runs fine
 #: app/entry/shared/loop-health.tsx
 msgid "정상"
@@ -5575,14 +5579,12 @@ msgstr "진단 정보"
 msgid "진단 중입니다. 기다리는 동안에도 제보문을 복사·저장·전송할 수 있습니다."
 msgstr "진단 중입니다. 기다리는 동안에도 제보문을 복사·저장·전송할 수 있습니다."
 
-#. Conversation list section: conversations answering or running a board
 #. Goal outcome status: its cards are being worked on
 #. Goal status: being worked on
 #. Kanban card status and column: an agent is working on it
 #: app/entry/chat/board/board-moves.ts
 #: app/entry/chat/outcome-checklist.tsx
 #: app/entry/chat/workflow-panel.tsx
-#: app/entry/navigation/sidebar.tsx
 msgid "진행 중"
 msgstr "진행 중"
 
@@ -5590,10 +5592,6 @@ msgstr "진행 중"
 #: app/entry/navigation/sidebar.tsx
 msgid "진행 중 {count}개"
 msgstr "진행 중 {count}개"
-
-#: app/entry/navigation/sidebar.tsx
-msgid "진행 중인 대화가 없습니다."
-msgstr "진행 중인 대화가 없습니다."
 
 #: app/entry/chat/message.tsx
 msgid "진행 중인 작업에 알림"
