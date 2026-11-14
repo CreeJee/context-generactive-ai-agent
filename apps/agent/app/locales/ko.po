@@ -2751,7 +2751,9 @@ msgstr "문안을 직접 편집 중입니다. 위 증상·진단을 바꾸거나
 msgid "문제 설명"
 msgstr "문제 설명"
 
+#. Field label: the problem report page
 #. Heading of the problem report page
+#: app/entry/settings/pages/general.tsx
 #: app/routes/report.tsx
 msgid "문제 제보"
 msgstr "문제 제보"
@@ -4060,6 +4062,10 @@ msgstr "앱에서 결함이 생기면 요약을 이 웹훅으로 자동 전송 (
 msgid "앱을 다시 시작한 뒤에는 {mode} 모드로 돌아갑니다. 그 모드로 만든 벡터가 없으면 처음부터 다시 만듭니다. 그동안에도 글자 검색과 형태소 검색은 됩니다."
 msgstr "앱을 다시 시작한 뒤에는 {mode} 모드로 돌아갑니다. 그 모드로 만든 벡터가 없으면 처음부터 다시 만듭니다. 그동안에도 글자 검색과 형태소 검색은 됩니다."
 
+#: app/entry/settings/pages/general.tsx
+msgid "앱의 모양과 문제 제보입니다."
+msgstr "앱의 모양과 문제 제보입니다."
+
 #: app/entry/session/run-state.tsx
 msgid "앱이 상태를 고쳤습니다"
 msgstr "앱이 상태를 고쳤습니다"
@@ -4631,6 +4637,11 @@ msgstr "이 문안은 {deliveredAt}에 이미 보냈습니다."
 msgid "이 문안의 이전 전송({attemptedAt})은 확인되지 않았습니다. 채널을 확인한 뒤 필요하면 다시 보내 주십시오."
 msgstr "이 문안의 이전 전송({attemptedAt})은 확인되지 않았습니다. 채널을 확인한 뒤 필요하면 다시 보내 주십시오."
 
+#. Description of the theme field
+#: app/entry/shared/theme.tsx
+msgid "이 브라우저에 저장됩니다."
+msgstr "이 브라우저에 저장됩니다."
+
 #: app/entry/report/report-delivery.tsx
 msgid "이 서버에 개발자 웹훅이 설정되지 않았습니다"
 msgstr "이 서버에 개발자 웹훅이 설정되지 않았습니다"
@@ -4917,6 +4928,11 @@ msgstr "인자"
 #: app/entry/chat/refusals.ts
 msgid "인증 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주십시오."
 msgstr "인증 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주십시오."
+
+#. Settings page name: theme and problem reporting
+#: app/entry/settings/shared.tsx
+msgid "일반"
+msgstr "일반"
 
 #. Hover text of the Chat mode button: plain chat
 #: app/entry/chat/chat-composer.tsx
@@ -5305,6 +5321,11 @@ msgstr "제보 대화에서는 이미지를 만들 수 없습니다."
 msgid "제보 문안"
 msgstr "제보 문안"
 
+#. Link that opens the problem report page
+#: app/entry/settings/pages/general.tsx
+msgid "제보 화면 열기"
+msgstr "제보 화면 열기"
+
 #. Button that copies the report and evidence to the clipboard
 #: app/routes/report.tsx
 msgid "제보문 복사"
@@ -5434,6 +5455,11 @@ msgstr "증거 수집"
 #: app/entry/report/report-draft.tsx
 msgid "증상: {symptom}"
 msgstr "증상: {symptom}"
+
+#. Description of the problem report link field
+#: app/entry/settings/pages/general.tsx
+msgid "증상과 진단 정보를 모아 개발자에게 보냅니다. 열려 있는 대화에 대한 제보 화면으로 이동합니다."
+msgstr "증상과 진단 정보를 모아 개발자에게 보냅니다. 열려 있는 대화에 대한 제보 화면으로 이동합니다."
 
 #: app/entry/chat/board/card-peek.tsx
 msgid "지금 Goal에는 없는 결과입니다."
@@ -6450,9 +6476,10 @@ msgstr "호환 공급자 요청에 실패했습니다."
 msgid "호환 공급자를 설정해 주십시오"
 msgstr "호환 공급자를 설정해 주십시오"
 
+#. Field label: the app's color theme
 #: app/entry/shared/theme.tsx
-msgid "화면 테마: {label}"
-msgstr "화면 테마: {label}"
+msgid "화면 테마"
+msgstr "화면 테마"
 
 #. Goal outcome status: waiting for a verifier to check it
 #: app/entry/chat/outcome-checklist.tsx

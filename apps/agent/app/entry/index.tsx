@@ -80,7 +80,7 @@ import { ChatHeader } from "./chat/chat-header";
 import { SessionModelPicker } from "./chat/model-picker";
 import { SessionView, type SlashSupport } from "./chat/chat-panel";
 import { AppEventsProvider, SessionEventsProvider } from "./events/providers";
-import { ThemeSelect } from "./shared/theme";
+import { ThemeSync } from "./shared/theme";
 import { pageHolder } from "./session/session-lease";
 import { sourceOf } from "./settings/model-selection-field";
 import { openSettingsOverlay } from "./settings/open-settings";
@@ -737,6 +737,7 @@ export function App() {
 
   return (
     <AppEventsProvider>
+      <ThemeSync />
       <SessionEventsProvider projectId={projectId} sessionId={sessionId}>
         <SidebarProvider className="h-dvh" style={{ "--sidebar-width": "18rem" }}>
           <Sidebar>
@@ -744,7 +745,6 @@ export function App() {
               <div className="flex items-center gap-1 pl-1">
                 <span className="min-w-0 flex-1 truncate text-sm font-semibold">Context Agent</span>
                 <ReportLink projectId={projectId} sessionId={sessionId} />
-                <ThemeSelect />
                 <Button
                   variant="ghost"
                   size="icon-sm"
