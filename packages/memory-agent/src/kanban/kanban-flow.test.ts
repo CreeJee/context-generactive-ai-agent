@@ -803,6 +803,44 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "names a running card's folder and branch, and none for a card without a folder",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const write = yield* writer;
+        const verifying = yield* Deferred.make<void>();
+        const releaseVerify = yield* Deferred.make<void>();
+        const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
+          agent: (agent) => Effect.as(write(agent, "a.txt", `${agent.card.title}\n`), finished),
+          verify: () =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(verifying, undefined);
+              yield* Deferred.await(releaseVerify);
+              return passed;
+            }),
+        });
+        yield* run(
+          Effect.gen(function* () {
+            const board = yield* executingPlan(fixture, [card("a")]);
+            const actions = yield* KanbanBoardActions;
+            yield* (yield* KanbanOrchestrator).start(board.sessionId);
+            yield* Deferred.await(verifying);
+
+            const folder = yield* actions.cardFolder(board.sessionId, "a");
+            expect(Option.getOrThrow(folder).branch).toBe(`ctx/card/${board.goalInstanceId}/a`);
+            expect(Option.getOrThrow(folder).folder).toContain(board.goalInstanceId);
+            // A card the board never started has no folder.
+            expect(Option.isNone(yield* actions.cardFolder(board.sessionId, "missing"))).toBe(true);
+
+            yield* Deferred.succeed(releaseVerify, undefined);
+            yield* waitForCards(board.sessionId, allDone);
+          }),
+        );
+      }),
+    gitTimeout,
+  );
+
+  it.effect(
     "keeps a card's notes when the owner died after opening its attempt and before starting it",
     () =>
       Effect.gen(function* () {
