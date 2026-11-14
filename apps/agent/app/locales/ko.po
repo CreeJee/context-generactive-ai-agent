@@ -397,16 +397,6 @@ msgstr "{providerName} 계정 목록"
 msgid "{providerName} 계정 추가"
 msgstr "{providerName} 계정 추가"
 
-#. Tooltip of the sidebar account panel; model reads as provider / model name
-#: app/entry/navigation/account-model-panel.tsx
-msgid "{providerName} 계정과 모델 설정: {status}, {model}"
-msgstr "{providerName} 계정과 모델 설정: {status}, {model}"
-
-#. {providerName} is the model provider's name, such as ChatGPT
-#: app/entry/index.tsx
-msgid "{providerName} 계정을 연결하면 모델을 고를 수 있습니다."
-msgstr "{providerName} 계정을 연결하면 모델을 고를 수 있습니다."
-
 #: app/entry/settings/pages/agents.tsx
 msgid "{reason} 두 번 연달아 실패해서 멈췄습니다. 다시 연결을 눌러 주십시오."
 msgstr "{reason} 두 번 연달아 실패해서 멈췄습니다. 다시 연결을 눌러 주십시오."
@@ -1394,11 +1384,6 @@ msgstr "계정 관리"
 msgid "계정 목록을 불러오지 못했습니다."
 msgstr "계정 목록을 불러오지 못했습니다."
 
-#. Button that opens account management to connect an account
-#: app/entry/index.tsx
-msgid "계정 연결"
-msgstr "계정 연결"
-
 #: app/entry/index.tsx
 msgid "계정 연결 상태를 불러오지 못했습니다"
 msgstr "계정 연결 상태를 불러오지 못했습니다"
@@ -2378,19 +2363,12 @@ msgstr "로그아웃"
 msgid "로그인"
 msgstr "로그인"
 
-#. Account connection status: waiting for the browser login to finish
-#: app/entry/navigation/account-model-panel.tsx
-msgid "로그인 대기"
-msgstr "로그인 대기"
-
 #. Button that cancels an MCP server's OAuth login in progress
 #: app/entry/settings/pages/mcp.tsx
 msgid "로그인 취소"
 msgstr "로그인 취소"
 
-#. Account connection status: signed out
 #. Badge on an MCP server that needs an OAuth login
-#: app/entry/navigation/account-model-panel.tsx
 #: app/entry/settings/pages/mcp.tsx
 msgid "로그인 필요"
 msgstr "로그인 필요"
@@ -2564,7 +2542,6 @@ msgstr "명령을 실행하지 못했습니다."
 #. Label before the selected provider and AI model
 #. Select in the model picker: which model the conversation runs on
 #. Sidebar field label: the chat model
-#. Sidebar section of model settings
 #: app/entry/chat/model-picker.tsx
 #: app/entry/navigation/sidebar.tsx
 #: app/entry/report/report-bundle.tsx
@@ -2601,11 +2578,6 @@ msgstr "모델 목록 불러오기"
 #: app/entry/settings/model-selection-field.tsx
 msgid "모델 목록을 읽지 못했습니다. 그 제공자에 로그인했는지 확인해 주십시오."
 msgstr "모델 목록을 읽지 못했습니다. 그 제공자에 로그인했는지 확인해 주십시오."
-
-#. Sidebar account summary when no model is chosen
-#: app/entry/navigation/account-model-panel.tsx
-msgid "모델 미선택"
-msgstr "모델 미선택"
 
 #: app/entry/chat/slash-commands.ts
 msgid "모델 바꾸기"
@@ -3297,6 +3269,11 @@ msgstr "새 대화를 만들지 못했습니다. 잠시 뒤 다시 시도해 주
 msgid "새 대화를 시작해 주십시오"
 msgstr "새 대화를 시작해 주십시오"
 
+#. Section in the account sheet: the model new conversations start with
+#: app/entry/navigation/sidebar.tsx
+msgid "새 대화의 기본 모델"
+msgstr "새 대화의 기본 모델"
+
 #. Status badge on a subagent task card
 #: app/entry/chat/message.tsx
 msgid "새 실행으로 다시 시도 중"
@@ -3522,11 +3499,6 @@ msgstr "설정 바뀜, 다시 신뢰 필요"
 #: app/entry/chat/slash-commands.ts
 msgid "설정 열기"
 msgstr "설정 열기"
-
-#. Account connection status: no compatible endpoint is set up yet
-#: app/entry/navigation/account-model-panel.tsx
-msgid "설정 필요"
-msgstr "설정 필요"
 
 #: app/entry/settings/shared.tsx
 msgid "설정 형식이 맞지 않아 이 파일을 쓰지 않습니다."
@@ -4183,11 +4155,6 @@ msgstr "연결"
 msgid "연결 실패 {failures}회"
 msgstr "연결 실패 {failures}회"
 
-#. Account connection status: the connection failed
-#: app/entry/navigation/account-model-panel.tsx
-msgid "연결 오류"
-msgstr "연결 오류"
-
 #: app/entry/navigation/compatible-accounts.tsx
 msgid "연결 저장"
 msgstr "연결 저장"
@@ -4207,9 +4174,7 @@ msgstr "연결된 결과물이 없습니다."
 msgid "연결된 계정이 없습니다"
 msgstr "연결된 계정이 없습니다"
 
-#. Account connection status
 #. Badge on an agent that is connected
-#: app/entry/navigation/account-model-panel.tsx
 #: app/entry/settings/pages/agents.tsx
 msgid "연결됨"
 msgstr "연결됨"
@@ -6498,11 +6463,6 @@ msgstr "확인 대기"
 #: app/entry/chat/work-trace-panel.tsx
 msgid "확인 전"
 msgstr "확인 전"
-
-#. Account connection status: still being checked
-#: app/entry/navigation/account-model-panel.tsx
-msgid "확인 중"
-msgstr "확인 중"
 
 #: app/entry/settings/pages/embedding.tsx
 msgid "확인 중 문제가 생겼습니다."

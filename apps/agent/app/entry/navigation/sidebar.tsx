@@ -116,69 +116,76 @@ export function ModelSection({
     current !== undefined && selection !== null ? effortChoices(selection, current) : [];
   const modelTerm = t({ message: "모델", comment: "Sidebar field label: the chat model" });
   const effortTerm = t({ message: "추론", comment: "Sidebar field label: reasoning effort" });
+  const title = t({
+    message: "새 대화의 기본 모델",
+    comment: "Section in the account sheet: the model new conversations start with",
+  });
   return (
-    <Section title={t({ message: "모델", comment: "Sidebar section of model settings" })}>
-      <DataListItem term={modelTerm}>
-        <Select
-          value={selection?.model ?? null}
-          items={models.map((model) => ({ value: model.id, label: model.displayName }))}
-          disabled={busy}
-          onValueChange={(value) => value && onSelect(value)}
-        >
-          <SelectTrigger className="w-full" size="sm" aria-label={modelTerm}>
-            <SelectValue
-              placeholder={t({
-                message: "모델 선택",
-                comment: "Placeholder of the model picker when none is chosen",
-              })}
-            />
-          </SelectTrigger>
-          <SelectContent>
-            {models.map((model) => (
-              <SelectItem key={model.id} value={model.id}>
-                {model.displayName}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </DataListItem>
-      {current && selection && efforts.length > 0 && (
-        <DataListItem term={effortTerm}>
+    <>
+      <h3 className="px-4 pt-3 text-xs font-medium">{title}</h3>
+      <Section title={title}>
+        <DataListItem term={modelTerm}>
           <Select
-            value={selection.reasoningEffort}
-            items={efforts.map(({ id, label }) => ({ value: id, label }))}
+            value={selection?.model ?? null}
+            items={models.map((model) => ({ value: model.id, label: model.displayName }))}
             disabled={busy}
-            onValueChange={(value) => value && onSelect(current.id, value)}
+            onValueChange={(value) => value && onSelect(value)}
           >
-            <SelectTrigger
-              className="w-full"
-              size="sm"
-              aria-label={t({
-                message: "추론 강도",
-                comment: "Picker of the model's reasoning effort",
-              })}
-            >
-              <SelectValue />
+            <SelectTrigger className="w-full" size="sm" aria-label={modelTerm}>
+              <SelectValue
+                placeholder={t({
+                  message: "모델 선택",
+                  comment: "Placeholder of the model picker when none is chosen",
+                })}
+              />
             </SelectTrigger>
             <SelectContent>
-              {efforts.map(({ id, label }) => (
-                <SelectItem key={id} value={id}>
-                  {label}
+              {models.map((model) => (
+                <SelectItem key={model.id} value={model.id}>
+                  {model.displayName}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
         </DataListItem>
-      )}
-      {!(selection !== null) && (
-        <DataListItem term={effortTerm}>
-          <p className="pt-1.5 text-xs text-muted-foreground">
-            <Trans>모델을 선택해 주십시오.</Trans>
-          </p>
-        </DataListItem>
-      )}
-      {error && <p className="col-span-2 text-2xs text-destructive">{error}</p>}
-    </Section>
+        {current && selection && efforts.length > 0 && (
+          <DataListItem term={effortTerm}>
+            <Select
+              value={selection.reasoningEffort}
+              items={efforts.map(({ id, label }) => ({ value: id, label }))}
+              disabled={busy}
+              onValueChange={(value) => value && onSelect(current.id, value)}
+            >
+              <SelectTrigger
+                className="w-full"
+                size="sm"
+                aria-label={t({
+                  message: "추론 강도",
+                  comment: "Picker of the model's reasoning effort",
+                })}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {efforts.map(({ id, label }) => (
+                  <SelectItem key={id} value={id}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </DataListItem>
+        )}
+        {!(selection !== null) && (
+          <DataListItem term={effortTerm}>
+            <p className="pt-1.5 text-xs text-muted-foreground">
+              <Trans>모델을 선택해 주십시오.</Trans>
+            </p>
+          </DataListItem>
+        )}
+        {error && <p className="col-span-2 text-2xs text-destructive">{error}</p>}
+      </Section>
+    </>
   );
 }
 

@@ -6,6 +6,7 @@ import { isTruthy } from "../truthy.ts";
 import {
   useAccountsQuery,
   useAuthQuery,
+  useCatalogQuery,
   useCompatibleAccountsQuery,
   useHiddenProjectsQuery,
   useModelsQuery,
@@ -25,6 +26,7 @@ import {
   SessionLifecycleChange,
   useSessionLifecycleMutation,
 } from "./queries/mutations/project";
+import { useSessionModelMutation } from "./queries/mutations/session";
 import {
   useAgentsQuery,
   useAllProjectSessions,
@@ -75,11 +77,14 @@ import {
   type ProviderId,
 } from "./api";
 import { ChatHeader } from "./chat/chat-header";
+import { SessionModelPicker } from "./chat/model-picker";
 import { SessionView, type SlashSupport } from "./chat/chat-panel";
 import { AppEventsProvider, SessionEventsProvider } from "./events/providers";
 import { ThemeSelect } from "./shared/theme";
 import { pageHolder } from "./session/session-lease";
+import { sourceOf } from "./settings/model-selection-field";
 import { openSettingsOverlay } from "./settings/open-settings";
+import { PermissionModeSelect } from "./settings/permission-mode-select";
 import {
   ArchivedProjects,
   ModelSection,
@@ -91,7 +96,6 @@ import { DecisionInbox } from "./navigation/decision-inbox";
 import { ProjectMenu } from "./navigation/project-menu";
 import { boardCardKey, parseBoardCardKey } from "./chat/board/board-moves";
 import { ProjectBoard } from "./chat/board/project-board";
-import { AccountModelPanel } from "./navigation/account-model-panel";
 import { AccountManager } from "./navigation/account-profiles";
 import { CompatibleAccounts } from "./navigation/compatible-accounts";
 import { AccountSwitcher } from "./navigation/account-switcher";
@@ -211,6 +215,18 @@ export function App() {
       .flatMap((group) => [...group.sessions, ...group.archived])
       .find((session) => session.id === sessionId) ?? null;
   const hydrated = useHydrated();
+  const openProject = projects.find((item) => item.id === projectId);
+  /** The model the open conversation runs on: its own, or else the app's selected one. */
+  const sessionSelection = openSession?.model ?? selection;
+  const sessionCatalog = useCatalogQuery(
+    sessionSelection === null ? null : sourceOf(sessionSelection),
+  );
+  const sessionModels = sessionCatalog.data?.models ?? [];
+  const sessionModelMutation = useSessionModelMutation(
+    projectId ?? "",
+    sessionId ?? "",
+    pageHolder(),
+  );
   /**
    * Conversations at work now, per project: the groups lead with them and badge their count.
    * Every listed project is read, not only the selected one, so a group answers from its own read.
@@ -254,7 +270,6 @@ export function App() {
   }, [projects, projectsQuery.data, setLocation]);
 
   const signedIn = signedInAuth(auth[provider]);
-  const providerName = t(providerLabels[provider]);
   const selectedSignedIn = selection !== null && signedInAuth(auth[selection.provider]);
   useEffect(() => {
     const selected =
@@ -495,14 +510,13 @@ export function App() {
       ),
     );
 
-  // `/effort` changes the model the sidebar shows, as the sidebar's effort selector does.
-  const shownSelection = selection?.provider === provider ? selection : null;
-  const shownModel = models.find((model) => model.id === shownSelection?.model);
+  // `/model` and `/effort` change the open conversation's model, as its footer picker does.
+  const sessionModel = sessionModels.find((model) => model.id === sessionSelection?.model);
   const slashEfforts =
-    shownSelection === null || shownModel === undefined
+    sessionSelection === null || sessionModel === undefined
       ? []
-      : effortChoices(shownSelection, shownModel).map((choice) =>
-          choice.id === shownSelection.reasoningEffort
+      : effortChoices(sessionSelection, sessionModel).map((choice) =>
+          choice.id === sessionSelection.reasoningEffort
             ? {
                 ...choice,
                 label: t({
@@ -516,7 +530,7 @@ export function App() {
   const slash: SlashSupport = {
     context: {
       agents: slashAgents,
-      models: models.map((model) => ({ id: model.id, label: model.displayName })),
+      models: sessionModels.map((model) => ({ id: model.id, label: model.displayName })),
       efforts: slashEfforts,
       skills: slashSkills,
     },
@@ -541,11 +555,27 @@ export function App() {
               Effect.when(Effect.succeed(isTruthy(projectId))),
               Effect.asVoid,
             ),
-          model: ({ model }) => uiPromise(() => selectModel(model)),
-          effort: ({ effort }) =>
-            shownSelection === null
+          model: ({ model }) => {
+            const chosen = sessionModels.find((candidate) => candidate.id === model);
+            return sessionSelection === null || chosen === undefined
               ? Effect.void
-              : uiPromise(() => selectModel(shownSelection.model, effort)),
+              : uiPromise(() =>
+                  sessionModelMutation.mutateAsync({
+                    ...sourceOf(sessionSelection),
+                    model: chosen.id,
+                    reasoningEffort: chosen.defaultReasoningEffort,
+                  }),
+                ).pipe(Effect.asVoid);
+          },
+          effort: ({ effort }) =>
+            sessionSelection === null
+              ? Effect.void
+              : uiPromise(() =>
+                  sessionModelMutation.mutateAsync({
+                    ...sessionSelection,
+                    reasoningEffort: effort,
+                  }),
+                ).pipe(Effect.asVoid),
         }),
       ),
   };
@@ -585,14 +615,32 @@ export function App() {
               key={id}
               sessionId={id}
               slash={slash}
-              sendingEnabled={selectedSignedIn}
+              sendingEnabled={
+                sessionSelection !== null && signedInAuth(auth[sessionSelection.provider])
+              }
               imagesSupported={
-                selection !== null &&
-                sessions.find((session) => session.id === id)?.agent == null &&
-                ((modelQueries[selection.provider].data?.models ?? [])
-                  .find((model) => model.id === selection.model)
-                  ?.capabilities.inputModalities.includes("image") ??
-                  false)
+                openSession?.agent == null &&
+                (sessionModel?.capabilities.inputModalities.includes("image") ?? false)
+              }
+              composerControls={
+                <>
+                  {openSession !== null && openSession.agent === null && (
+                    <SessionModelPicker
+                      projectId={openProjectId}
+                      sessionId={id}
+                      holder={pageHolder()}
+                      model={sessionSelection}
+                      disabled={false}
+                    />
+                  )}
+                  {openProject !== undefined && (
+                    <PermissionModeSelect
+                      project={openProject}
+                      size="sm"
+                      onError={setArchiveError}
+                    />
+                  )}
+                </>
               }
             />
           </div>
@@ -713,42 +761,6 @@ export function App() {
               </div>
             </SidebarHeader>
             <SidebarSeparator />
-            <div className="min-h-0 shrink overflow-y-auto overscroll-contain">
-              <AccountModelPanel
-                provider={provider}
-                auth={auth[provider]}
-                selection={selection}
-                modelName={
-                  selection !== null
-                    ? modelQueries[selection.provider].data?.models.find(
-                        (model) => model.id === selection.model,
-                      )?.displayName
-                    : undefined
-                }
-              >
-                {signedIn ? (
-                  <ModelSection
-                    models={models}
-                    selection={selection?.provider === provider ? selection : null}
-                    busy={modelMutation.isPending}
-                    error={modelError}
-                    onSelect={(model, effort) => void selectModel(model, effort)}
-                  />
-                ) : (
-                  <div className="flex flex-col gap-2 px-4 py-3 text-xs text-muted-foreground">
-                    <Trans comment="{providerName} is the model provider's name, such as ChatGPT">
-                      {providerName} 계정을 연결하면 모델을 고를 수 있습니다.
-                    </Trans>
-                    <Button variant="outline" size="sm" onClick={() => setAccountsOpen(true)}>
-                      <Trans comment="Button that opens account management to connect an account">
-                        계정 연결
-                      </Trans>
-                    </Button>
-                  </div>
-                )}
-              </AccountModelPanel>
-            </div>
-            <SidebarSeparator />
             <SidebarGroup>
               <SidebarMenu>
                 <DecisionInbox
@@ -846,6 +858,15 @@ export function App() {
                   </Trans>
                 </SheetDescription>
               </SheetHeader>
+              {signedIn && (
+                <ModelSection
+                  models={models}
+                  selection={selection?.provider === provider ? selection : null}
+                  busy={modelMutation.isPending}
+                  error={modelError}
+                  onSelect={(model, effort) => void selectModel(model, effort)}
+                />
+              )}
               <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
                 <AccountManager
                   auth={{ openai: auth.openai, anthropic: auth.anthropic }}

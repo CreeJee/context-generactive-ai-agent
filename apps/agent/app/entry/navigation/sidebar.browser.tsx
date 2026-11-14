@@ -11,7 +11,6 @@ import { describe, expect, beforeEach } from "vite-plus/test";
 import "../../app.css";
 import { AccountLoginState, ProviderAuthState } from "../api";
 import type { Session } from "../api";
-import { AccountModelPanel } from "./account-model-panel";
 import { AccountManagerList, QuotaStatus } from "./account-profiles";
 import { AccountEntry, AccountSwitcherMenu } from "./account-switcher";
 import { CompatibleAccountsList } from "./compatible-accounts";
@@ -110,34 +109,26 @@ describe("sidebar disclosures", () => {
       const screen = yield* sdkCall(() =>
         render(
           <div className="w-72">
-            <AccountModelPanel
-              provider="openai"
-              auth={ProviderAuthState["signed-in"]({ provider: "openai" })}
+            <ModelSection
+              models={[
+                {
+                  provider: "openai",
+                  id: "model-1",
+                  displayName: "Model 1",
+                  isDefault: true,
+                  defaultReasoningEffort: "medium",
+                  supportedReasoningEfforts: ["medium"],
+                  capabilities: { inputModalities: ["text"], toolCalling: true, reasoning: true },
+                },
+              ]}
               selection={{ provider: "openai", model: "model-1", reasoningEffort: "medium" }}
-              modelName="Model 1"
-            >
-              <ModelSection
-                models={[
-                  {
-                    provider: "openai",
-                    id: "model-1",
-                    displayName: "Model 1",
-                    isDefault: true,
-                    defaultReasoningEffort: "medium",
-                    supportedReasoningEfforts: ["medium"],
-                    capabilities: { inputModalities: ["text"], toolCalling: true, reasoning: true },
-                  },
-                ]}
-                selection={{ provider: "openai", model: "model-1", reasoningEffort: "medium" }}
-                onSelect={() => {}}
-              />
-            </AccountModelPanel>
+              onSelect={() => {}}
+            />
           </div>,
           withI18n,
         ),
       );
 
-      yield* sdkCall(() => screen.getByRole("button", { name: /Model 1/ }).click());
       alignedTerms(screen.container, ["모델", "추론"]);
     }),
   );
