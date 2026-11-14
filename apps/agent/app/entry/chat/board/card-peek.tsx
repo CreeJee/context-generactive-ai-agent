@@ -1,5 +1,6 @@
 import { isTruthy } from "../../../truthy.ts";
 import { useState, type ReactNode } from "react";
+import { ChevronRightIcon } from "lucide-react";
 import { msg, ph } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
 import { Array as Arr, Data, Result, type Types } from "effect";
@@ -17,6 +18,11 @@ import {
 } from "../../../components/ui/alert-dialog";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "../../../components/ui/collapsible";
 import { DataList, DataListItem } from "../../../components/ui/data-list";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "../../../components/ui/field";
 import { Input } from "../../../components/ui/input";
@@ -678,6 +684,12 @@ function CardEditor({
       .filter((id) => !others.some((other) => other.id === id))
       .map((id) => ({ id, title: id })),
   ];
+  // Opened when the card already carries one of the four, so a set value is never hidden.
+  const hasContract =
+    form.boundaries.trim().length > 0 ||
+    form.risk !== "none" ||
+    form.requiredEvidence.trim().length > 0 ||
+    form.humanDecision.trim().length > 0;
 
   const submit = (change: BoardEdit) => void onSubmit(change).then((message) => setError(message));
   const save = () =>
@@ -803,61 +815,80 @@ function CardEditor({
               <Trans>한 줄에 하나씩 적습니다.</Trans>
             </FieldDescription>
           </Field>
-          <Field>
-            <FieldLabel htmlFor="card-boundaries">
-              <Trans comment="Card field: what the card's work must not touch">경계</Trans>
-            </FieldLabel>
-            <Textarea
-              id="card-boundaries"
-              value={form.boundaries}
-              onChange={(event) => set("boundaries")(event.target.value)}
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="card-risk">
-              <Trans comment="Card field: how risky the card's work is">위험</Trans>
-            </FieldLabel>
-            <Select
-              value={form.risk}
-              items={riskItems.map(({ value, label }) => ({ value, label: t(label) }))}
-              onValueChange={(value) => {
-                const item = riskItems.find((option) => option.value === value);
-                if (isTruthy(item)) setForm({ ...form, risk: item.value });
-              }}
-            >
-              <SelectTrigger id="card-risk" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {riskItems.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {t(option.label)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="card-evidence">
-              <Trans comment="Card field: proof the card's work must leave">필요한 근거</Trans>
-            </FieldLabel>
-            <Textarea
-              id="card-evidence"
-              value={form.requiredEvidence}
-              onChange={(event) => set("requiredEvidence")(event.target.value)}
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="card-decision">
-              <Trans comment="Card field: what a person must decide for the card">사람 판단</Trans>
-            </FieldLabel>
-            <Input
-              id="card-decision"
-              value={form.humanDecision}
-              onChange={(event) => set("humanDecision")(event.target.value)}
-            />
-          </Field>
         </FieldGroup>
+        <Collapsible defaultOpen={hasContract} className="mt-3">
+          <CollapsibleTrigger
+            render={<Button type="button" size="sm" variant="ghost" className="group -ml-2" />}
+          >
+            <ChevronRightIcon
+              data-icon="inline-start"
+              className="transition-transform group-data-[panel-open]:rotate-90"
+            />
+            <Trans comment="Folded part of the card editor: boundaries, risk, required evidence, human decision">
+              추가 조건
+            </Trans>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="mt-2">
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="card-boundaries">
+                  <Trans comment="Card field: what the card's work must not touch">경계</Trans>
+                </FieldLabel>
+                <Textarea
+                  id="card-boundaries"
+                  value={form.boundaries}
+                  onChange={(event) => set("boundaries")(event.target.value)}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="card-risk">
+                  <Trans comment="Card field: how risky the card's work is">위험</Trans>
+                </FieldLabel>
+                <Select
+                  value={form.risk}
+                  items={riskItems.map(({ value, label }) => ({ value, label: t(label) }))}
+                  onValueChange={(value) => {
+                    const item = riskItems.find((option) => option.value === value);
+                    if (isTruthy(item)) setForm({ ...form, risk: item.value });
+                  }}
+                >
+                  <SelectTrigger id="card-risk" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {riskItems.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {t(option.label)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="card-evidence">
+                  <Trans comment="Card field: proof the card's work must leave">필요한 근거</Trans>
+                </FieldLabel>
+                <Textarea
+                  id="card-evidence"
+                  value={form.requiredEvidence}
+                  onChange={(event) => set("requiredEvidence")(event.target.value)}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="card-decision">
+                  <Trans comment="Card field: what a person must decide for the card">
+                    사람 판단
+                  </Trans>
+                </FieldLabel>
+                <Input
+                  id="card-decision"
+                  value={form.humanDecision}
+                  onChange={(event) => set("humanDecision")(event.target.value)}
+                />
+              </Field>
+            </FieldGroup>
+          </CollapsibleContent>
+        </Collapsible>
         {error !== null && (
           <p className="mt-3 text-destructive" role="alert">
             {error}

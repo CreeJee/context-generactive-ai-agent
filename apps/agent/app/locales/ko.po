@@ -5758,6 +5758,11 @@ msgstr "최종 제보 문안: 전송·복사·저장 전에 민감정보를 확�
 msgid "추가"
 msgstr "추가"
 
+#. Folded part of the card editor: boundaries, risk, required evidence, human decision
+#: app/entry/chat/board/card-peek.tsx
+msgid "추가 조건"
+msgstr "추가 조건"
+
 #: app/entry/navigation/account-profiles.tsx
 msgid "추가한 계정이 없습니다."
 msgstr "추가한 계정이 없습니다."
