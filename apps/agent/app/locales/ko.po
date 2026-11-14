@@ -675,7 +675,7 @@ msgstr "CPU에서 실행 중"
 msgid "description이 없어 쓰지 않습니다."
 msgstr "description이 없어 쓰지 않습니다."
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "detached HEAD에서 시작해 브랜치가 없으므로 자동 merge하지 않습니다"
 msgstr "detached HEAD에서 시작해 브랜치가 없으므로 자동 merge하지 않습니다"
 
@@ -729,7 +729,7 @@ msgstr "git 저장소인 열린 프로젝트가 없습니다."
 msgid "Goal v{fromGoalVersion} → v{toGoalVersion} 변경이 이 카드에 어떤 영향을 주는지 오케스트레이터가 판단하지 못했습니다."
 msgstr "Goal v{fromGoalVersion} → v{toGoalVersion} 변경이 이 카드에 어떤 영향을 주는지 오케스트레이터가 판단하지 못했습니다."
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "Goal 검증 실패: {verdict}"
 msgstr "Goal 검증 실패: {verdict}"
 
@@ -742,7 +742,7 @@ msgstr "Goal 결과"
 msgid "Goal 기록을 읽지 못해 실행하지 않았습니다. 잠시 뒤 다시 보내 주십시오."
 msgstr "Goal 기록을 읽지 못해 실행하지 않았습니다. 잠시 뒤 다시 보내 주십시오."
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "Goal 변경으로 merge를 멈췄습니다"
 msgstr "Goal 변경으로 merge를 멈췄습니다"
 
@@ -754,7 +754,7 @@ msgstr "Goal 변경으로 오래됨"
 msgid "Goal 변경의 영향 판단"
 msgstr "Goal 변경의 영향 판단"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "Goal 브랜치 push 실패"
 msgstr "Goal 브랜치 push 실패"
 
@@ -798,7 +798,7 @@ msgstr "Goal 실행이 끝나기 전에 멈춰서 아래 도구가 무엇을 바
 msgid "Goal 없음"
 msgstr "Goal 없음"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "Goal 전체를 검증하는 중"
 msgstr "Goal 전체를 검증하는 중"
 
@@ -885,7 +885,7 @@ msgstr "MCP 표준의 도구 표시를 따릅니다. 서버가 표시하지 않�
 msgid "MCP·외부 에이전트"
 msgstr "MCP·외부 에이전트"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "merge됨 ({commit})"
 msgstr "merge됨 ({commit})"
 
@@ -992,19 +992,28 @@ msgstr "PNG, JPEG, GIF, WebP 이미지만 올릴 수 있습니다."
 msgid "PR 만들기"
 msgstr "PR 만들기"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "PR 생성 실패"
 msgstr "PR 생성 실패"
 
-#: app/entry/chat/board-panel.tsx
+#. Link that opens the Goal's pull request in a new tab
+#: app/entry/chat/board/goal-merge.tsx
+msgid "PR 열기"
+msgstr "PR 열기"
+
+#: app/entry/chat/board/goal-merge.tsx
 msgid "PR을 만드는 중"
 msgstr "PR을 만드는 중"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "PR을 만들던 중 멈췄습니다. 원격 저장소에서 직접 확인해 주십시오"
 msgstr "PR을 만들던 중 멈췄습니다. 원격 저장소에서 직접 확인해 주십시오"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
+msgid "PR을 만듦"
+msgstr "PR을 만듦"
+
+#: app/entry/chat/board/goal-merge.tsx
 msgid "PR을 만듦: {url}"
 msgstr "PR을 만듦: {url}"
 
@@ -2174,15 +2183,15 @@ msgstr "대상 브랜치 변경 반영 중"
 msgid "대상 브랜치: {targetBranch}"
 msgstr "대상 브랜치: {targetBranch}"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "대상 브랜치가 계속 바뀌어 다시 시도할 예정"
 msgstr "대상 브랜치가 계속 바뀌어 다시 시도할 예정"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "대상 브랜치가 없어졌습니다"
 msgstr "대상 브랜치가 없어졌습니다"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "대상 브랜치와 충돌한 파일 {count}개를 에이전트가 해결하는 중"
 msgstr "대상 브랜치와 충돌한 파일 {count}개를 에이전트가 해결하는 중"
 
@@ -3139,7 +3148,7 @@ msgstr "빈 파일입니다."
 msgid "사람 판단"
 msgstr "사람 판단"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "사람의 판단을 기다리는 중"
 msgstr "사람의 판단을 기다리는 중"
 
@@ -5202,7 +5211,7 @@ msgstr "작업 중단을 기다리고 있습니다. 완료 후 다시 확인해 
 msgid "작업 트리"
 msgstr "작업 트리"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "작업 트리에 커밋하지 않은 변경이 있어 기다리는 중 ({worktree})"
 msgstr "작업 트리에 커밋하지 않은 변경이 있어 기다리는 중 ({worktree})"
 
@@ -5579,7 +5588,7 @@ msgstr "지침과 도구 정의를 포함한 마지막 요청 기준입니다. /
 msgid "직접 merge"
 msgstr "직접 merge"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "직접 merge하기로 함, Goal 브랜치를 남겨 둠"
 msgstr "직접 merge하기로 함, Goal 브랜치를 남겨 둠"
 
@@ -5809,7 +5818,7 @@ msgstr "추론 중"
 msgid "출처 추적"
 msgstr "출처 추적"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "충돌로 자동 merge를 멈췄습니다"
 msgstr "충돌로 자동 merge를 멈췄습니다"
 
@@ -5941,7 +5950,7 @@ msgstr "카드 취소"
 msgid "카드 하나를 맡아 그 카드의 worktree에서 작업하는 카드 에이전트의 모델입니다."
 msgstr "카드 하나를 맡아 그 카드의 worktree에서 작업하는 카드 에이전트의 모델입니다."
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "카드가 모두 끝난 뒤 merge합니다"
 msgstr "카드가 모두 끝난 뒤 merge합니다"
 

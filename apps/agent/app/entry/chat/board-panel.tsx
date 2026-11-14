@@ -1,5 +1,3 @@
-import type { MessageDescriptor } from "@lingui/core";
-import { msg } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
 import { isTruthy } from "../../truthy.ts";
 import { useState } from "react";
@@ -35,7 +33,6 @@ import {
   BoardEdit,
   type BoardView,
   type CardStatus,
-  type GoalMergeState,
   type HumanDecisionRequest,
   type KanbanScheduleView,
 } from "../api";
@@ -63,7 +60,8 @@ import {
 } from "./board/board-surface";
 import { cardStatusLabels, goalDecisionCardId } from "./board/board-moves";
 import { authorLabel, StatusIcon } from "./board/card-face";
-import { verdictText, waitsForUser } from "./board/hold-reason";
+import { mergeStateLabel } from "./board/goal-merge";
+import { waitsForUser } from "./board/hold-reason";
 import { BoardShortcuts } from "./board/kanban-board";
 
 export { authorLabel } from "./board/card-face";
@@ -655,49 +653,6 @@ function BoardSheet({
       </SheetContent>
     </Sheet>
   );
-}
-
-/** Why the scheduler stopped merging a Goal on its own. */
-const stoppedMergeTexts = {
-  no_target: msg`detached HEAD에서 시작해 브랜치가 없으므로 자동 merge하지 않습니다`,
-  target_missing: msg`대상 브랜치가 없어졌습니다`,
-  conflict_stopped: msg`충돌로 자동 merge를 멈췄습니다`,
-  goal_replaced: msg`Goal 변경으로 merge를 멈췄습니다`,
-} satisfies Record<
-  Extract<GoalMergeState, { readonly _tag: "Stopped" }>["reason"],
-  MessageDescriptor
->;
-
-/** Where a Goal's merge into its target stands, in words. */
-export function mergeStateLabel(state: GoalMergeState | null): MessageDescriptor {
-  if (state === null) return msg`카드가 모두 끝난 뒤 merge합니다`;
-  return Match.valueTags(state, {
-    ResolvingConflict: ({ files }) => {
-      const count = files.length;
-      return msg`대상 브랜치와 충돌한 파일 ${count}개를 에이전트가 해결하는 중`;
-    },
-    Verifying: () => msg`Goal 전체를 검증하는 중`,
-    VerifyFailed: ({ verdict: failure }) => {
-      const verdict = verdictText(failure);
-      return msg`Goal 검증 실패: ${verdict}`;
-    },
-    WaitingWorktree: ({ worktree }) =>
-      msg`작업 트리에 커밋하지 않은 변경이 있어 기다리는 중 (${worktree})`,
-    TargetMoving: () => msg`대상 브랜치가 계속 바뀌어 다시 시도할 예정`,
-    AwaitingDecision: () => msg`사람의 판단을 기다리는 중`,
-    Merged: ({ commit: full }) => {
-      const commit = full.slice(0, 8);
-      return msg`merge됨 (${commit})`;
-    },
-    ManualMerge: () => msg`직접 merge하기로 함, Goal 브랜치를 남겨 둠`,
-    PullRequestPending: () => msg`PR을 만드는 중`,
-    PullRequestCreated: ({ url }) => msg`PR을 만듦: ${url}`,
-    PullRequestUncertain: () =>
-      msg`PR을 만들던 중 멈췄습니다. 원격 저장소에서 직접 확인해 주십시오`,
-    PullRequestFailed: ({ stage }) =>
-      stage === "push" ? msg`Goal 브랜치 push 실패` : msg`PR 생성 실패`,
-    Stopped: ({ reason }) => stoppedMergeTexts[reason],
-  });
 }
 
 /** How the project scheduler runs this Goal: the Goals it waits for and its merge. */
