@@ -6,7 +6,7 @@ import { callTool, failureCode } from "../support/run-tools.ts";
 import { sqlAll, sqlGet, sqlRun } from "../support/sql.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 
-const decodeDispatch = Schema.decodeUnknownSync(SessionDispatch);
+const decodeDispatch = Schema.decodeUnknownEffect(SessionDispatch);
 /** The `notify_session` tool of one run, bound like chat.ts binds it. */
 const notifyToolFor = (projectId: string, sessionId: string) =>
   Effect.map(SessionDispatches, (dispatches) =>
@@ -167,7 +167,7 @@ testAgent()(function (it) {
       const other = yield* env.use(
         Effect.flatMap(Sessions, (sessions) => sessions.create(project.id)),
       );
-      const before = decodeDispatch(
+      const before = yield* decodeDispatch(
         yield* env.use(
           Effect.flatMap(notifyToolFor(project.id, session.id), (tools) =>
             callTool([tools], "notify_session", { toSession: other.id, body: "persist" }),
@@ -200,7 +200,7 @@ testAgent()(function (it) {
       const other = yield* env.use(
         Effect.flatMap(Sessions, (sessions) => sessions.create(project.id)),
       );
-      const stored = decodeDispatch(
+      const stored = yield* decodeDispatch(
         yield* env.use(
           Effect.flatMap(notifyToolFor(project.id, session.id), (tools) =>
             callTool([tools], "notify_session", { toSession: other.id, body: "later" }),
@@ -237,7 +237,7 @@ testAgent()(function (it) {
         Effect.flatMap(Sessions, (sessions) => sessions.create(project.id)),
       );
       const dispatches = yield* env.use(SessionDispatches);
-      const first = decodeDispatch(
+      const first = yield* decodeDispatch(
         yield* env.use(
           Effect.flatMap(notifyToolFor(project.id, session.id), (tools) =>
             callTool([tools], "notify_session", { toSession: target.id, body: "one" }),
@@ -284,7 +284,7 @@ testAgent()(function (it) {
         Effect.flatMap(Sessions, (sessions) => sessions.create(project.id)),
       );
       const dispatches = yield* env.use(SessionDispatches);
-      const stored = decodeDispatch(
+      const stored = yield* decodeDispatch(
         yield* env.use(
           Effect.flatMap(notifyToolFor(project.id, session.id), (tools) =>
             callTool([tools], "notify_session", { toSession: target.id, body: "retry" }),
@@ -321,7 +321,7 @@ testAgent()(function (it) {
         Effect.flatMap(Sessions, (sessions) => sessions.create(project.id)),
       );
       const dispatches = yield* env.use(SessionDispatches);
-      const stored = decodeDispatch(
+      const stored = yield* decodeDispatch(
         yield* env.use(
           Effect.flatMap(notifyToolFor(project.id, session.id), (tools) =>
             callTool([tools], "notify_session", { toSession: target.id, body: "wait out" }),

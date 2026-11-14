@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { Nodes, Recorder, SessionDispatches, Sessions } from "memory-agent";
 import { scriptedRun } from "../support/loop-run.ts";
@@ -10,6 +10,11 @@ const notifyToolFor = (projectId: string, sessionId: string) =>
   Effect.map(SessionDispatches, (dispatches) =>
     dispatches.notifyToolFor(projectId, sessionId, "run-1"),
   );
+
+/** A notify_session call's arguments as the model writes them. */
+const encodeArguments = Schema.encodeEffect(
+  Schema.fromJsonString(Schema.Struct({ toSession: Schema.String, body: Schema.String })),
+);
 
 /** A fresh session whose user node starts the run, as chat.ts records it. */
 const userTurn = Effect.fnUntraced(function* (text: string) {
@@ -31,6 +36,7 @@ testAgent()(function (it) {
       const other = yield* (yield* Sessions).create(project.id);
       const tools = yield* notifyToolFor(project.id, session.id);
       const runId = `${session.id}:run`;
+      const sent = yield* encodeArguments({ toSession: other.id, body: "아까 그 안건 보내요" });
       yield* scriptedRun({
         turns: [
           {
@@ -39,7 +45,7 @@ testAgent()(function (it) {
               {
                 id: "call-1",
                 name: "notify_session",
-                arguments: JSON.stringify({ toSession: other.id, body: "아까 그 안건 보내요" }),
+                arguments: sent,
               },
             ],
           },
@@ -64,10 +70,7 @@ testAgent()(function (it) {
         (node) => node.kind === "tool_call" && node.detail?.toolName === "notify_session",
       );
       expect(call).toMatchObject({
-        text: `notify_session ${JSON.stringify({
-          toSession: other.id,
-          body: "아까 그 안건 보내요",
-        })}`,
+        text: `notify_session ${sent}`,
         detail: { toolName: "notify_session", toolCallId: "call-1" },
       });
       const result = stored.find(
@@ -89,6 +92,7 @@ testAgent()(function (it) {
       const { project, session, user } = yield* userTurn("남겨 줘.");
       const tools = yield* notifyToolFor(project.id, session.id);
       const runId = `${session.id}:run`;
+      const sent = yield* encodeArguments({ toSession: "no-such-session", body: "hi" });
       yield* scriptedRun({
         turns: [
           {
@@ -96,7 +100,7 @@ testAgent()(function (it) {
               {
                 id: "call-2",
                 name: "notify_session",
-                arguments: JSON.stringify({ toSession: "no-such-session", body: "hi" }),
+                arguments: sent,
               },
             ],
           },

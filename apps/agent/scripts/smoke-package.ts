@@ -381,17 +381,22 @@ const program = Effect.gen(function* () {
     jsonLines(importRun.out).length === 1,
     jsonLines(importRun.out).slice(0, 2).join(" ⏎ ").slice(0, 120),
   );
-  // The command's contract is one JSON line; the shape below reads only the fields this check
-  // needs, and a different shape fails the check through its optional chains.
-  // SAFETY: JSON.parse of the line the CLI printed; the asserted shape is what commands print.
-  const importJson = yield* Effect.try({
-    try: () => JSON.parse(jsonLines(importRun.out)[0] ?? "") as { pass?: { written?: number } },
-    catch: (cause) => new Cause.UnknownError(cause),
-  });
+  // The command's contract is one JSON line. Each shape below holds only the fields its check
+  // needs; a line that is not JSON or has another shape reads as nothing, which fails the check.
+  const firstJson = <A, I>(schema: Schema.Codec<A, I>, out: string) =>
+    Option.getOrUndefined(
+      Schema.decodeOption(Schema.fromJsonString(schema))(jsonLines(out)[0] ?? ""),
+    );
+  const importJson = firstJson(
+    Schema.Struct({
+      pass: Schema.optionalKey(Schema.Struct({ written: Schema.optionalKey(Schema.Finite) })),
+    }),
+    importRun.out,
+  );
   yield* check(
     "memory import reports what it wrote",
-    (importJson.pass?.written ?? 0) > 0,
-    `${importJson.pass?.written ?? "no pass field"} written`,
+    (importJson?.pass?.written ?? 0) > 0,
+    `${importJson?.pass?.written ?? "no pass field"} written`,
   );
   yield* check(
     "memory import keeps progress on stderr",
@@ -409,19 +414,18 @@ const program = Effect.gen(function* () {
     jsonLines(searchRun.out).length === 1,
     jsonLines(searchRun.out).slice(0, 2).join(" ⏎ ").slice(0, 120),
   );
-  const searchJson = yield* Effect.try({
-    try: () =>
-      // SAFETY: JSON.parse of the line the CLI printed; the asserted shape is what find-memory
-      // prints, and a different shape fails the check through its optional chains.
-      JSON.parse(jsonLines(searchRun.out)[0] ?? "") as {
-        matches?: readonly { snippet?: string }[];
-      },
-    catch: (cause) => new Cause.UnknownError(cause),
-  });
+  const searchJson = firstJson(
+    Schema.Struct({
+      matches: Schema.optionalKey(
+        Schema.Array(Schema.Struct({ snippet: Schema.optionalKey(Schema.String) })),
+      ),
+    }),
+    searchRun.out,
+  );
   yield* check(
     "memory find-memory matches the imported conversation",
-    (searchJson.matches ?? []).some((match) => (match.snippet ?? "").includes("회상 기준")),
-    `${(searchJson.matches ?? []).length} matches`,
+    (searchJson?.matches ?? []).some((match) => (match.snippet ?? "").includes("회상 기준")),
+    `${(searchJson?.matches ?? []).length} matches`,
   );
 
   if (failures.length > 0) {
