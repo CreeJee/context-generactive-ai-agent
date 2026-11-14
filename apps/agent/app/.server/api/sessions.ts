@@ -93,7 +93,11 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
           // A conversation the app's own model answers starts on the model selected now.
           const model = Option.isSome(Option.fromNullishOr(agent))
             ? null
-            : yield* Effect.orDie(active.selected);
+            : // A provider that is not registered leaves the model unset; the run reports it.
+              yield* active.selected.pipe(
+                Effect.catchTag("ProviderUnavailable", () => Effect.succeed(null)),
+                Effect.orDie,
+              );
           const created = yield* sessions.create(projectId, title ?? null, agent ?? null, model);
           yield* events.publishProject(projectId, "sessions");
           return created;
