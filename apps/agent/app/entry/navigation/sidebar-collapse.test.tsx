@@ -71,7 +71,7 @@ const { createRoot } = await import("react-dom/client");
 const { I18nProvider } = await import("@lingui/react");
 const { createMemoryRouter, RouterProvider } = await import("react-router");
 const { SidebarProvider } = await import("../../components/ui/sidebar");
-const { SessionSection } = await import("./sidebar");
+const { ArchivedProjects, SessionSection } = await import("./sidebar");
 const { it } = await import("@effect/vitest");
 const { afterEach, describe, expect } = await import("vite-plus/test");
 
@@ -109,6 +109,12 @@ const group = (projectId: string, name: string, sessions: Session[], archived = 
   archived,
   folderMissing: false,
 });
+
+/** Ten conversations of one project, newest first as the server lists them. */
+const tenSessions = () =>
+  Array.from({ length: 10 }, (_, index) =>
+    sessionOf("alpha", `a${index + 1}`, `알파 대화 ${index + 1}`),
+  );
 
 /** No conversation of any project is at work; tests that need one name their own. */
 const idle: Array<import("../queries/project").ProjectWorking> = [];
@@ -269,7 +275,7 @@ describe("SessionSection collapsible groups (jsdom)", () => {
                   sessionOf("alpha", "a2", "알파 나중"),
                 ]),
               ]}
-              // a2 answers now: it leaves the "대화" section for the "진행 중" one above it.
+              // a2 answers now: it moves ahead of a1 in the one list.
               working={[
                 { projectId: "alpha", answering: new Set(["a2"]), boardRunning: new Set() },
               ]}
@@ -407,6 +413,95 @@ describe("SessionSection collapsible groups (jsdom)", () => {
         );
       expect(headerOf("Beta")?.querySelector('[data-slot="badge"][aria-label]')).not.toBeNull();
       expect(headerOf("Alpha")?.querySelector('[data-slot="badge"][aria-label]')).toBeNull();
+    }),
+  );
+
+  it.live("a group lists its first 8 conversations and shows the rest on request", () =>
+    Effect.gen(function* () {
+      const { container } = yield* renderSection(
+        <div className="w-72">
+          <SessionSection
+            groups={[group("alpha", "Alpha", tenSessions())]}
+            working={idle}
+            loading={false}
+            projectId="alpha"
+            sessionId={null}
+            archiveError={null}
+            onCreate={() => {}}
+            onArchive={() => {}}
+            onDelete={() => {}}
+            onRestore={() => {}}
+            header={null}
+            projectActions={() => null}
+          />
+        </div>,
+      );
+
+      expect(rowLinks(container)).toHaveLength(8);
+      yield* click(container, /^2개 더 보기$/u);
+      expect(rowLinks(container)).toHaveLength(10);
+    }),
+  );
+
+  it.live("the open conversation shows even beyond the first 8", () =>
+    Effect.gen(function* () {
+      const { container } = yield* renderSection(
+        <div className="w-72">
+          <SessionSection
+            groups={[group("alpha", "Alpha", tenSessions())]}
+            working={idle}
+            loading={false}
+            projectId="alpha"
+            sessionId="a10"
+            archiveError={null}
+            onCreate={() => {}}
+            onArchive={() => {}}
+            onDelete={() => {}}
+            onRestore={() => {}}
+            header={null}
+            projectActions={() => null}
+          />
+        </div>,
+      );
+
+      const links = rowLinks(container);
+      expect(links).toHaveLength(9);
+      expect(links.some((link) => link.getAttribute("href")?.endsWith("session=a10"))).toBe(true);
+    }),
+  );
+
+  it.live("an archived project is released from its row", () =>
+    Effect.gen(function* () {
+      const restored: string[] = [];
+      const { container } = yield* renderSection(
+        <div className="w-72">
+          <ArchivedProjects
+            projects={[
+              {
+                id: "gamma",
+                root: "/work/gamma",
+                name: "Gamma",
+                crossRecallExcluded: false,
+                permissionMode: "ask",
+                createdAt: "2026-10-01T09:00:00.000Z",
+                hiddenAt: "2026-10-02T09:00:00.000Z",
+                folderMissing: false,
+              },
+            ]}
+            onRestore={(projectId) => {
+              restored.push(projectId);
+            }}
+          />
+        </div>,
+      );
+
+      yield* click(container, /^보관된 프로젝트/u);
+      const release = container.querySelector('button[aria-label="Gamma 보관 해제"]');
+      expect(release).not.toBeNull();
+      yield* acting(() => {
+        release!.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+      });
+      expect(restored).toEqual(["gamma"]);
     }),
   );
 });

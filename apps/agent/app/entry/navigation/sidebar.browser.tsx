@@ -517,7 +517,7 @@ describe("sidebar disclosures", () => {
       );
       // Base UI's Collapsible unmounts a closed panel, so a folded group renders no row links;
       // its header keeps only the conversation count.
-      yield* sdkCall(() => expect.element(screen.getByText("대화 1개")).toBeVisible());
+      yield* sdkCall(() => expect.element(screen.getByLabelText("대화 1개")).toBeVisible());
       expect(screen.container.querySelectorAll('a[href*="session="]').length).toBe(0);
       // Opening a group mounts its rows.
       yield* sdkCall(() => screen.getByRole("button", { name: headerName("Alpha") }).click());
@@ -568,6 +568,9 @@ describe("sidebar disclosures", () => {
       );
       expect(yield* storedFolds()).toEqual({ alpha: false });
 
+      // The first render leaves the document before the second one, so the second one's queries
+      // see only itself and read the fold from storage.
+      yield* sdkCall(() => screen.unmount());
       const again = yield* sdkCall(() =>
         render(
           <div className="w-72">
@@ -606,7 +609,14 @@ describe("sidebar disclosures", () => {
         render(
           <div className="w-72">
             <SessionSection
-              groups={[group("alpha", "Alpha", [sessionOf("alpha", "a1", "알파 대화")])]}
+              groups={[
+                group(
+                  "alpha",
+                  "Alpha",
+                  [sessionOf("alpha", "a1", "알파 대화")],
+                  [sessionOf("alpha", "a0", "알파 보관")],
+                ),
+              ]}
               working={idle}
               loading={false}
               projectId="alpha"
@@ -623,14 +633,14 @@ describe("sidebar disclosures", () => {
           withSidebar,
         ),
       );
-      // The project's name pins to the list's top like the section headings; it must sit above
+      // The project's name pins to the list's top like the archive heading; it must sit above
       // them so a scrolling heading passes under it instead of covering it.
       // The row holding the folding trigger and the project's buttons is what pins.
       const header = screen
         .getByRole("button", { name: headerName("Alpha") })
         .element().parentElement!;
-      // The section heading below the header row is also a sticky button ("진행 중 {count}개").
-      const heading = screen.getByRole("button", { name: /^진행 중/u }).element();
+      // The section heading below the header row is also a sticky button ("보관함 {count}개").
+      const heading = screen.getByRole("button", { name: /^보관함/u }).element();
       const headerStyle = getComputedStyle(header);
       const headingStyle = getComputedStyle(heading);
       expect(headerStyle.position).toBe("sticky");
@@ -749,8 +759,7 @@ describe("sidebar disclosures", () => {
 
       // A group folds, so its conversations are behind its header: open it to reach the row.
       yield* sdkCall(() => screen.getByRole("button", { name: headerName("Alpha") }).click());
-      const row = screen.getByRole("listitem", { name: /알파 대화/u });
-      yield* sdkCall(() => row.getByRole("button", { name: "알파 대화 메뉴" }).click());
+      yield* sdkCall(() => screen.getByRole("button", { name: "알파 대화 메뉴" }).click());
       yield* sdkCall(() => screen.getByRole("menuitem", { name: "보관하기" }).click());
       expect(asked).toEqual(["archive:alpha:a1"]);
     }),
@@ -768,7 +777,7 @@ describe("sidebar disclosures", () => {
                   sessionOf("alpha", "a2", "알파 나중"),
                 ]),
               ]}
-              // a2 answers now: it leaves the "대화" section for the "진행 중" one above it.
+              // a2 answers now: it moves ahead of a1 in the one list.
               working={answeringIn("alpha", "a2")}
               loading={false}
               projectId="alpha"
