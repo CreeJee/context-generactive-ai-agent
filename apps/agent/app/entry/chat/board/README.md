@@ -15,7 +15,7 @@
 - `errorText` / `editErrorText` — `ApiErrorCode`(또는 `isApiError` Error)를 한국어 안내 문구로 바꾼다. 모르는 코드는 "보드를 바꾸지 못했습니다."로 떨어진다
 - `ProjectBoard` — 프로젝트의 모든 실행 중 Plan을 우선순위 트리 순서로 한 보드에 보여 준다. `useProjectBoardsQuery`, `useDecisionInboxQuery`, `useGoalOrderMutation`을 쓰고 `BoardSurface`를 렌더한다. 사람을 기다리는 대화(멈춘 루프, 멈춘 Plan 작성, 일시 중지, 실패한 merge, 확인 필요 카드, Goal 수준 판단)가 있으면 상태 패널이 펼쳐진 채로 열린다. 사용자가 접거나 펴면 그 뒤로는 그 선택을 따른다. 대화 줄에서 Goal 수준 판단에 답하고, "카드 추가"는 머리줄에 있다
 - `KanbanBoard` — 상태 열 7개와 dnd-kit 드래그(마우스, 터치 홀드, 그립 키보드), j/k/h/l·화살표 포커스 이동, 열 접기를 맡는다. 패널에 열린 카드는 `selectedKey`로 받아 테두리로 표시한다. 드롭 결과는 onReorder, onSend, onAskChange, onRefused 콜백으로 부모에 넘긴다
-- `CardPeek` — 보드 오른쪽 칸에 그리는 카드 패널이다(Sheet가 아니다). 카드 상세, DecisionPrompt, 보류 사유와 검증 의견, 편집기, 새 카드 폼, 다른 대화로 옮기기 Select, Hold/Release/Requeue 버튼을 보여 준다. 카드 상세는 카드가 위하는 Goal outcome id를 보여 준다. outcome은 계획자가 정하므로 편집기에는 없다. 승인을 기다리는 카드는 승인과 거절(확인 한 번 뒤 카드 취소와 같은 요청)을 둔다. 칸반 루프가 센 연속 실패, Plan 재작성, 충돌 해결 횟수는 하나라도 0이 아니면 "실행 기록"으로 보인다. 편집기에서 의존 카드는 같은 Plan의 카드를 제목으로 골라 넣고, 경계, 위험, 필요한 근거, 사람 판단은 "추가 조건"에 접힌다(값이 있으면 펼쳐서 연다)
+- `CardPeek` — 보드 오른쪽 칸에 그리는 카드 패널이다(Sheet가 아니다). 카드 상세, DecisionPrompt, 보류 사유와 검증 의견, 편집기, 새 카드 폼, 다른 대화로 옮기기 Select, Hold/Release/Requeue 버튼을 보여 준다. 카드 상세는 카드가 위하는 Goal outcome id를 보여 준다. outcome은 계획자가 정하므로 편집기에는 없다. 승인을 기다리는 카드는 승인과 거절(확인 한 번 뒤 카드 취소와 같은 요청)을 둔다. 칸반 루프가 센 연속 실패, Plan 재작성, 충돌 해결 횟수는 하나라도 0이 아니면 "실행 기록"으로 보인다. 편집기에서 의존 카드는 같은 Plan의 카드를 제목으로 골라 넣고, 경계, 위험, 필요한 근거, 사람 판단은 "추가 조건"에 접힌다(값이 있으면 펼쳐서 연다). 시작했고 끝나지 않은 카드(in_progress, verify, human_decision, blocked)는 작업 폴더와 브랜치를 따로 읽어 보인다(차례 실행 모드는 브랜치 없음)
 - `Peek` — peek 내용을 나타내는 TaggedEnum이다: `New` 또는 `Card{cardId, editing}`
 - `TransferTarget` — 카드를 옮길 수 있는 같은 프로젝트의 다른 대화 정보(sessionId, label)
 - `CardFace` / `CardSignals` — 보드와 드래그 오버레이가 함께 쓰는 카드 앞면이다. CardSignals는 판단 대기, 변경 요청 대기, 요청 중, 사유, 아직 끝나지 않은 선행 카드 제목, 그룹을 담는다
@@ -56,7 +56,7 @@
 - `BoardSurface`: 거절 알림을 `Effect.runFork(Effect.sleep("5 seconds"))` 타이머로 5초 뒤 지운다. notice가 바뀌거나 언마운트되면 `Fiber.interrupt`로 타이머를 중단한다
 - `ProjectBoard`: `useProjectBoardsQuery`, `useDecisionInboxQuery`로 서버를 조회하고, `useGoalOrderMutation`으로 Goal 순서를 바꾸는 요청을 보낸다(그래프 근거)
 - `KanbanBoard`: jotai `atomWithStorage("context-agent-board-collapsed-columns")`로 접은 열 목록을 브라우저 저장소(localStorage)에 브라우저별로 저장한다
-- `CardPeek`: `DecisionPrompt`를 렌더하고 onSubmit, onIntent, onTransfer 콜백으로 부모의 서버 요청을 시작한다. 자체 네트워크 호출은 없다
+- `CardPeek`: `DecisionPrompt`를 렌더하고 onSubmit, onIntent, onTransfer 콜백으로 부모의 서버 요청을 시작한다. 카드 작업 폴더는 `useCardFolderQuery`로 서버에서 직접 읽는다(카드가 폴더를 가질 수 있는 상태일 때만 요청한다)
 - `board-moves.ts`, `hold-reason.ts`, `card-face.tsx`는 순수 함수와 표시 컴포넌트이고 부수 효과가 없다
 
 ## Verification
