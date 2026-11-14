@@ -1,18 +1,17 @@
 import { overlay } from "overlay-kit";
-import type { ListedProject } from "../api";
-import { SettingsOverlay } from "./settings-dialog";
+import { SettingsOverlay, type SettingsPage } from "./settings-dialog";
 
-/** Open a settings view with the currently selected project. */
+/** Opens the settings on a project; the dialog reads it from the project list. */
 export function openSettingsOverlay({
-  project,
-  initialPage = "web",
+  projectId,
+  initialPage,
 }: {
-  readonly project: ListedProject | null;
-  readonly initialPage?: "web";
+  readonly projectId: string | null;
+  readonly initialPage?: SettingsPage;
 }) {
   overlay.open(({ isOpen, close, unmount }) => (
     <SettingsOverlay
-      project={project}
+      projectId={projectId}
       initialPage={initialPage}
       open={isOpen}
       onClose={() => {

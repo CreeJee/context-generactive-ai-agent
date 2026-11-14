@@ -25,8 +25,9 @@ import {
 import { Alert, AlertAction, AlertDescription } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
-import { type ListedProject, type Project } from "../api";
+import { type Project } from "../api";
 import { MissingFolderNotice } from "../navigation/sidebar";
+import { useProjectsQuery } from "../queries/global";
 import { useHideProjectMutation } from "../queries/mutations/project";
 import { QuerySection } from "../queries/boundary";
 import { ImageSettings } from "./pages/image";
@@ -91,7 +92,7 @@ const settingsGroups = [
   },
 ] as const;
 
-type SettingsPage = (typeof settingsGroups)[number]["pages"][number]["value"];
+export type SettingsPage = (typeof settingsGroups)[number]["pages"][number]["value"];
 
 /** Each page's body; every page reads its own data, so each gets its own loading boundary. */
 const pageBodies: Record<SettingsPage, (project: Project | null) => ReactNode> = {
@@ -150,17 +151,20 @@ function MissingFolderAlert({ project, onArchived }: { project: Project; onArchi
  * page scrolls inside it.
  */
 export function SettingsOverlay({
-  project,
+  projectId,
   open,
   onClose,
   initialPage = "web",
 }: {
-  project: ListedProject | null;
+  projectId: string | null;
   initialPage?: SettingsPage;
   open: boolean;
   onClose: () => void;
 }) {
   const { t } = useLingui();
+  const projects = useProjectsQuery().data ?? [];
+  const [chosenId, setChosenId] = useState(projectId);
+  const project = projects.find((item) => item.id === chosenId) ?? null;
   return (
     <Dialog
       open={open}

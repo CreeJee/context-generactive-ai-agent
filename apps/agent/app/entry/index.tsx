@@ -415,8 +415,7 @@ export function App() {
       ),
     );
 
-  const openSettings = () =>
-    openSettingsOverlay({ project: projects.find((item) => item.id === projectId) ?? null });
+  const openSettings = () => openSettingsOverlay({ projectId });
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const selectModel = (model: string, effort?: string) =>
