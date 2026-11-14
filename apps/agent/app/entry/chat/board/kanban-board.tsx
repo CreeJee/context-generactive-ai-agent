@@ -271,17 +271,8 @@ export function KanbanBoard({
 
   const columnKeys = boardColumns.map((status) => byStatus(status).map((item) => item.key));
   const moveFocus = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (activeKey !== null) {
-      // The board sits in a dialog, whose popup keeps arrow keys from reaching the document where
-      // dnd-kit's keyboard sensor listens. Hand them over so a picked-up card moves.
-      if (event.key.startsWith("Arrow")) {
-        event.preventDefault();
-        event.currentTarget.ownerDocument.dispatchEvent(
-          new KeyboardEvent("keydown", { key: event.key, code: event.code, bubbles: true }),
-        );
-      }
-      return;
-    }
+    // While a card is picked up the arrow keys move it; dnd-kit reads them from the document.
+    if (activeKey !== null) return;
     if (!(event.target instanceof HTMLElement)) return;
     const current = event.target.dataset.boardCard;
     if (current === undefined || event.altKey || event.ctrlKey || event.metaKey) return;

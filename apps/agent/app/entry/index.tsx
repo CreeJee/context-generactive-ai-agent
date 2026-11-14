@@ -96,6 +96,7 @@ import { DecisionInbox } from "./navigation/decision-inbox";
 import { ProjectMenu } from "./navigation/project-menu";
 import { boardCardKey, parseBoardCardKey } from "./chat/board/board-moves";
 import { ProjectBoard } from "./chat/board/project-board";
+import { SessionBoard } from "./chat/board-panel";
 import { AccountManager } from "./navigation/account-profiles";
 import { CompatibleAccounts } from "./navigation/compatible-accounts";
 import { AccountSwitcher } from "./navigation/account-switcher";
@@ -139,6 +140,12 @@ function SidebarReopen() {
       <SidebarTrigger aria-label={t`사이드바 펼치기`} title={t`사이드바 펼치기 (⌘B)`} />
     </div>
   );
+}
+
+/** Room in a board's title row for the button that reopens the sidebar, while that button shows. */
+function ReopenRoom() {
+  const { open, isMobile } = useSidebar();
+  return open && !isMobile ? null : <span aria-hidden className="w-8 shrink-0" />;
 }
 
 function Placeholder({
@@ -191,7 +198,14 @@ export function App() {
   const projects = projectsQuery.data ?? [];
   const hiddenProjects = useHiddenProjectsQuery().data ?? [];
   const [
-    { project: projectId, session: sessionId, boards: boardsOpen, boardCard: boardCardKeyParam },
+    {
+      project: projectId,
+      session: sessionId,
+      board: boardOpen,
+      card: cardParam,
+      boards: boardsOpen,
+      boardCard: boardCardKeyParam,
+    },
     setLocation,
   ] = useQueryStates(locationParsers);
   const addProjectMutation = useAddProjectMutation();
@@ -735,6 +749,11 @@ export function App() {
       />
     ))
     .exhaustive();
+  // One board per URL: the project board wins when both are named.
+  const projectBoardShown = boardsOpen === true || boardCardKeyParam !== null;
+  const sessionBoardShown = !projectBoardShown && (boardOpen === true || cardParam !== null);
+  const boardCoversChat =
+    isTruthy(projectId) && (projectBoardShown || (isTruthy(sessionId) && sessionBoardShown));
 
   return (
     <AppEventsProvider>
@@ -883,28 +902,42 @@ export function App() {
           </Sheet>
           <SidebarInset className="min-w-0">
             <SidebarReopen />
-            {main}
+            {/* The conversation stays mounted under an open board, so its lease, run and draft go on. */}
+            <div className={boardCoversChat ? "hidden" : "contents"}>{main}</div>
+            {projectId && projectBoardShown && (
+              <ProjectBoard
+                projectId={projectId}
+                holder={pageHolder()}
+                leading={<ReopenRoom />}
+                peek={boardCardKeyParam === null ? null : parseBoardCardKey(boardCardKeyParam)}
+                onPeek={(card) =>
+                  void setLocation({
+                    boards: true,
+                    boardCard: card === null ? null : boardCardKey(card),
+                  })
+                }
+                onOpenSession={(session) =>
+                  void setLocation(
+                    { ...leaveProjectBoard, session, board: true, card: null },
+                    { history: "push" },
+                  )
+                }
+                onClose={() => void setLocation({ boards: null, boardCard: null })}
+              />
+            )}
+            {projectId && sessionId && sessionBoardShown && (
+              <SessionBoard
+                key={sessionId}
+                projectId={projectId}
+                sessionId={sessionId}
+                holder={pageHolder()}
+                leading={<ReopenRoom />}
+                peekCardId={cardParam}
+                onPeek={(card) => void setLocation({ ...leaveProjectBoard, board: true, card })}
+                onClose={() => void setLocation({ board: null, card: null })}
+              />
+            )}
           </SidebarInset>
-          {projectId && (boardsOpen === true || boardCardKeyParam !== null) && (
-            <ProjectBoard
-              projectId={projectId}
-              holder={pageHolder()}
-              peek={boardCardKeyParam === null ? null : parseBoardCardKey(boardCardKeyParam)}
-              onPeek={(card) =>
-                void setLocation({
-                  boards: true,
-                  boardCard: card === null ? null : boardCardKey(card),
-                })
-              }
-              onOpenSession={(session) =>
-                void setLocation(
-                  { ...leaveProjectBoard, session, board: true, card: null },
-                  { history: "push" },
-                )
-              }
-              onClose={() => void setLocation({ boards: null, boardCard: null })}
-            />
-          )}
         </SidebarProvider>
       </SessionEventsProvider>
     </AppEventsProvider>

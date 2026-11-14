@@ -3005,6 +3005,7 @@ msgstr "보드를 바꾸지 못했습니다."
 msgid "보드를 불러오는 중"
 msgstr "보드를 불러오는 중"
 
+#: app/entry/chat/board-panel.tsx
 #: app/entry/chat/board/project-board.tsx
 msgid "보드를 불러오는 중입니다."
 msgstr "보드를 불러오는 중입니다."
@@ -4645,6 +4646,10 @@ msgstr "이 대화로 아직 모델에 요청하지 않았습니다."
 #: app/entry/chat/read-only-bar.tsx
 msgid "이 대화를 쓸 수 있는지 확인하지 못했습니다"
 msgstr "이 대화를 쓸 수 있는지 확인하지 못했습니다"
+
+#: app/entry/chat/board-panel.tsx
+msgid "이 대화에는 아직 Plan이 없습니다. Plan이 생기면 보드에 카드가 올라옵니다."
+msgstr "이 대화에는 아직 Plan이 없습니다. Plan이 생기면 보드에 카드가 올라옵니다."
 
 #: app/entry/chat/work-trace-panel.tsx
 msgid "이 대화에서 진행 중인 카드 작업과 하위 에이전트를 확인합니다."

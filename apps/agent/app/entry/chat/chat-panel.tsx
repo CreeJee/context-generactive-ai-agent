@@ -1134,14 +1134,7 @@ function ChatPanel({
             onExecute={() => void executePlan()}
             kanbanRunning={kanbanRunning}
             boardTally={<BoardTally projectId={projectId} sessionId={sessionId} />}
-            boardAction={
-              <OpenBoardButton
-                projectId={projectId}
-                sessionId={sessionId}
-                holder={holder}
-                disabled={readOnly || backendRestartRequired}
-              />
-            }
+            boardAction={<OpenBoardButton projectId={projectId} sessionId={sessionId} />}
             boardSlot={
               <WorkflowBoard
                 projectId={projectId}

@@ -1,6 +1,6 @@
 import { Trans, useLingui } from "@lingui/react/macro";
 import { isTruthy } from "../../truthy.ts";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Array as Arr, Match, Order } from "effect";
 import { ChevronRightIcon, CircleSlashIcon, KanbanSquareIcon, PlusIcon } from "lucide-react";
 import { createSerializer, parseAsBoolean, parseAsString, useQueryStates } from "nuqs";
@@ -21,13 +21,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "../../components/ui/collapsible";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "../../components/ui/sheet";
 import { Switch } from "../../components/ui/switch";
 import {
   BoardEdit,
@@ -58,6 +51,7 @@ import {
   ReplanWaitBadge,
   type BoardPlan,
 } from "./board/board-surface";
+import { BoardFrame } from "./board/board-frame";
 import { cardStatusLabels, goalDecisionCardId } from "./board/board-moves";
 import { authorLabel, StatusIcon } from "./board/card-face";
 import { GoalMergeStatus, mergeStateLabel } from "./board/goal-merge";
@@ -180,51 +174,24 @@ export function BoardTally({
 }
 
 /**
- * Opens the Plan's board wide over the page (`?board=1`), at the card it last showed; a card opens
- * in a peek panel beside it (`?card=…`, as the inbox links and the card rows do). The board lives
- * here so it opens whether or not the bar is unfolded.
+ * Opens the Plan's board in the page's main area (`?board=1`), at the card it last showed. The
+ * page draws the board, so it opens whether or not the bar is unfolded.
  */
 export function OpenBoardButton({
   projectId,
   sessionId,
-  holder,
-  disabled,
 }: {
   readonly projectId: string;
   readonly sessionId: string;
-  readonly holder: string;
-  readonly disabled: boolean;
 }) {
   const view = useBoardQuery(projectId, sessionId).data;
-  const decisions = useDecisionsQuery(projectId, sessionId).data ?? [];
-  const kanban = useKanbanQuery(projectId, sessionId);
-  const kanbanAction = useKanbanMutation(projectId, sessionId, holder);
-  const { location, setLocation, openBoard } = useBoardLocation();
+  const { location, openBoard } = useBoardLocation();
   if (!isTruthy(view) || view.plan === null) return null;
-  const open = location.board === true || location.card !== null;
   return (
-    <>
-      <Button type="button" size="sm" variant="ghost" onClick={() => openBoard(location.card)}>
-        <KanbanSquareIcon data-icon="inline-start" />
-        <Trans comment="Button that opens the kanban board of the Plan">보드</Trans>
-      </Button>
-      {open && (
-        <BoardSheet
-          projectId={projectId}
-          sessionId={sessionId}
-          holder={holder}
-          disabled={disabled}
-          view={view}
-          plan={view.plan}
-          decisions={decisions}
-          loop={kanban.data?.active === true ? kanban.data : null}
-          kanbanAction={kanbanAction}
-          peekCardId={location.card}
-          onPeek={openBoard}
-          onClose={() => void setLocation({ board: null, card: null })}
-        />
-      )}
-    </>
+    <Button type="button" size="sm" variant="ghost" onClick={() => openBoard(location.card)}>
+      <KanbanSquareIcon data-icon="inline-start" />
+      <Trans comment="Button that opens the kanban board of the Plan">보드</Trans>
+    </Button>
   );
 }
 
@@ -380,35 +347,107 @@ export function WorkflowBoard({
   );
 }
 
-/** The wide board over the page, with the card peek panel and the board's notices. */
-function BoardSheet({
+/**
+ * The conversation's board as the page's main area shows it (`?board=1`, a card open beside it
+ * with `?card=…`). It reads the board itself, so the page needs only the conversation.
+ */
+export function SessionBoard({
   projectId,
   sessionId,
   holder,
-  disabled,
-  view,
-  plan,
-  decisions,
-  loop,
-  kanbanAction,
   peekCardId,
+  leading,
   onPeek,
   onClose,
 }: {
   readonly projectId: string;
   readonly sessionId: string;
   readonly holder: string;
-  readonly disabled: boolean;
+  readonly peekCardId: string | null;
+  readonly leading?: ReactNode;
+  readonly onPeek: (cardId: string | null) => void;
+  readonly onClose: () => void;
+}) {
+  const { t } = useLingui();
+  const board = useBoardQuery(projectId, sessionId);
+  const decisions = useDecisionsQuery(projectId, sessionId).data ?? [];
+  const kanban = useKanbanQuery(projectId, sessionId);
+  const kanbanAction = useKanbanMutation(projectId, sessionId, holder);
+  const view = board.data;
+  if (!isTruthy(view) || view.plan === null)
+    return (
+      <BoardFrame
+        title={t`칸반 보드`}
+        leading={leading}
+        header={null}
+        onEscape={() => {}}
+        onClose={onClose}
+      >
+        {isTruthy(view) ? (
+          <p className="px-4 text-muted-foreground">
+            <Trans>이 대화에는 아직 Plan이 없습니다. Plan이 생기면 보드에 카드가 올라옵니다.</Trans>
+          </p>
+        ) : board.isError ? (
+          <LoadFailed className="px-4" onRetry={() => void board.refetch()}>
+            <Trans>보드를 불러오지 못했습니다.</Trans>
+          </LoadFailed>
+        ) : (
+          <p className="px-4 text-muted-foreground">
+            <Trans>보드를 불러오는 중입니다.</Trans>
+          </p>
+        )}
+      </BoardFrame>
+    );
+  return (
+    <SessionBoardBody
+      projectId={projectId}
+      sessionId={sessionId}
+      holder={holder}
+      view={view}
+      plan={view.plan}
+      decisions={decisions}
+      loop={kanban.data?.active === true ? kanban.data : null}
+      kanbanAction={kanbanAction}
+      peekCardId={peekCardId}
+      leading={leading}
+      onPeek={onPeek}
+      onClose={onClose}
+    />
+  );
+}
+
+/** The conversation's board in the page's main area, with its status and the board's notices. */
+function SessionBoardBody({
+  projectId,
+  sessionId,
+  holder,
+  view,
+  plan,
+  decisions,
+  loop,
+  kanbanAction,
+  peekCardId,
+  leading,
+  onPeek,
+  onClose,
+}: {
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly holder: string;
   readonly view: BoardView;
   readonly plan: BoardPlan;
   readonly decisions: readonly HumanDecisionRequest[];
   readonly loop: ActiveKanban | null;
   readonly kanbanAction: ReturnType<typeof useKanbanMutation>;
   readonly peekCardId: string | null;
+  readonly leading?: ReactNode;
   readonly onPeek: (cardId: string | null) => void;
   readonly onClose: () => void;
 }) {
   const { t } = useLingui();
+  // The page cannot tell whether another window holds the conversation; the server refuses then
+  // and the board shows why, as the project board does.
+  const disabled = false;
   const [adding, setAdding] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -444,27 +483,20 @@ function BoardSheet({
   ];
 
   return (
-    <Sheet
-      open
-      onOpenChange={(next, details) => {
-        if (!next && details.reason === "escape-key") {
-          // Esc puts a picked-up card back, or closes the open card panel; the board stays open.
-          if (dragging) return details.cancel();
-          if (adding || (peekCardId !== null && !goalAsked)) {
-            setAdding(false);
-            onPeek(null);
-            return details.cancel();
-          }
-        }
-        if (!next) onClose();
+    <BoardFrame
+      title={t`칸반 보드`}
+      leading={leading}
+      tools={<BoardShortcuts />}
+      onEscape={() => {
+        // Esc closes the open card panel; a picked-up card's Esc is dnd-kit's own.
+        if (dragging || !(adding || (peekCardId !== null && !goalAsked))) return;
+        setAdding(false);
+        onPeek(null);
       }}
-    >
-      <SheetContent className="w-full sm:max-w-none">
-        <SheetHeader>
-          <SheetTitle>
-            <Trans>칸반 보드</Trans>
-          </SheetTitle>
-          <SheetDescription>
+      onClose={onClose}
+      header={
+        <>
+          <div className="text-xs/relaxed text-muted-foreground">
             <span className="flex flex-wrap items-center gap-2">
               {loop !== null && <KanbanRunningBadge paused={loop.goalPaused} />}
               {loop !== null && loop.plannerStalled && <PlannerStalledBadge />}
@@ -487,7 +519,7 @@ function BoardSheet({
                 </Trans>
               </span>
             </span>
-          </SheetDescription>
+          </div>
           <Collapsible
             defaultOpen={goalAsked || goalDecisions.length > 0 || view.pendingChanges.length > 0}
           >
@@ -555,7 +587,6 @@ function BoardSheet({
                     )}
                   </CollapsibleTrigger>
                 )}
-                <BoardShortcuts />
               </span>
             </div>
             <Dialog open={askClose} onOpenChange={setAskClose}>
@@ -644,22 +675,23 @@ function BoardSheet({
               </CollapsibleContent>
             )}
           </Collapsible>
-        </SheetHeader>
-        <BoardSurface
-          projectId={projectId}
-          holder={holder}
-          disabled={disabled}
-          boards={[{ sessionId, label: null, view, plan, decisions, loop, rank: null }]}
-          shown={[]}
-          peek={peekCardId === null || goalAsked ? null : { sessionId, cardId: peekCardId }}
-          onPeek={(card) => onPeek(card === null ? null : card.cardId)}
-          adding={adding ? sessionId : null}
-          onAddingChange={(session) => setAdding(session !== null)}
-          onDraggingChange={setDragging}
-          className="min-h-0 flex-1 pt-3"
-        />
-      </SheetContent>
-    </Sheet>
+        </>
+      }
+    >
+      <BoardSurface
+        projectId={projectId}
+        holder={holder}
+        disabled={disabled}
+        boards={[{ sessionId, label: null, view, plan, decisions, loop, rank: null }]}
+        shown={[]}
+        peek={peekCardId === null || goalAsked ? null : { sessionId, cardId: peekCardId }}
+        onPeek={(card) => onPeek(card === null ? null : card.cardId)}
+        adding={adding ? sessionId : null}
+        onAddingChange={(session) => setAdding(session !== null)}
+        onDraggingChange={setDragging}
+        className="min-h-0 flex-1 pt-3"
+      />
+    </BoardFrame>
   );
 }
 
