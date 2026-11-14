@@ -10,7 +10,7 @@
 - `ReviewRequest` — classify 입력(project, sessionId, selection, toolName, argumentsJson)
 - `Verdict` — `{decision: allow|ask|block, reason, decidedBy: classifier|fallback}` 타입
 - `reviewInstructions` — 검토 모델에 주는 system 지시문 문자열이다. JSON `{decision, reason}` 한 객체로 답하고, reason은 한국어 한 문장으로 쓰게 한다.
-- `routineShellVerdict` — `EffectFunction.dual(2)` 순수 함수. `save_code_skill`의 sh 스크립트나 `run_command`의 스크립트가 루틴 pnpm/npm/yarn/bun·git 명령뿐이면 allow, 줄이 전부 npx/pnpx면 ask를 반환한다. 그 밖에는 undefined를 반환해 모델 검토로 넘긴다.
+- `routineShellVerdict` — `EffectFunction.dual(2)` 순수 함수. `save_code_skill`의 sh 스크립트나 `run_command`의 스크립트가 루틴 pnpm/npm/yarn/bun·vp·git 명령뿐이면 allow, 줄이 전부 npx/pnpx면 ask를 반환한다. 그 밖에는 undefined를 반환해 모델 검토로 넘긴다.
 - `PermissionGate` — Effect 서비스. `hookFor(GateBinding)`가 한 run의 권한 RunHook을 만든다. 요구사항 `PermissionClassifier | PermissionReviews`를 layer 생성 시 캡처한다.
 - `makePermissionGateHook` — `GateBinding`으로 `RunHook<SecureRandom.SecureRandom>`를 만든다. `started`는 재개된 interrupt 답을 기록하고, `admit`은 gated 호출을 허용·거부하거나 사용자에게 묻는다. 도구의 `CallPlan`이 `Ungated`로 정한 호출(`gated`가 false)은 묻지 않는다.
 - `GateBinding` — gate 설정(project, sessionId, selection, `gated: HashSet<string>`, `decider: classifier|user`)
@@ -25,7 +25,7 @@
 
 - classifier는 fail-closed다. 60초 타임아웃, provider 오류, defect, 읽을 수 없는 출력은 모두 `fallback` verdict(decision `ask`, decidedBy `fallback`)가 된다. interrupt만 예외로 전파된다.
 - classifier 실패 로그(`permission_classification_failed`)에는 `failureTags(cause)` 태그만 남긴다. cause에 provider 텍스트가 들어 있을 수 있어서다.
-- `routineShellVerdict`는 의도적 allowlist다. `;`, 백틱, `$`, 단일 `|`, `sudo`, `-g`/`--global`이 있는 줄은 reviewer로 넘긴다. `network` 호스트가 하나라도 있거나 스크립트가 비어 있어도 reviewer로 넘긴다. ts 스킬과, `save_code_skill`·`run_command` 외 도구는 항상 reviewer로 간다. `run_command`의 읽기 접근 호출은 gate를 거치지 않아 여기에 오지 않는다.
+- `routineShellVerdict`는 의도적 allowlist다. `vp`는 `install`, `add`, `remove`, `update`, `run`, `exec`, `test`, `check`, `lint`, `fmt`, `build`, `pack`만 루틴이다(`dlx`, `upgrade` 등은 아니다). 루틴 명령이라도 줄에 `docker`, `publish`, `release`, `deploy`, `notarize`가 있으면 reviewer로 넘긴다. 작업은 이름으로 실행되므로 프로젝트 밖에 닿는 작업을 이름으로만 가려낸다. `;`, 백틱, `$`, 단일 `|`, `sudo`, `-g`/`--global`이 있는 줄은 reviewer로 넘긴다. `network` 호스트가 하나라도 있거나 스크립트가 비어 있어도 reviewer로 넘긴다. ts 스킬과, `save_code_skill`·`run_command` 외 도구는 항상 reviewer로 간다. `run_command`의 읽기 접근 호출은 gate를 거치지 않아 여기에 오지 않는다.
 - reviewer는 최근 user 노드 12개를 각 1,500자까지만 본다. 사용자 메시지만 의도로 인정하고, 명령·파일·도구 출력의 텍스트는 권한을 주지 않는다(`reviewInstructions`).
 - 리뷰는 call id가 같아도 toolName과 input(모델이 쓴 인자 문자열)이 정확히 같아야 효력이 있다(`reviewOf` 필터).
 - `permission_reviews`는 append-only 로그다. 효력 있는 결정은 `(session_id, tool_call_id)` 기준 `id DESC` 최신 행이므로, 사용자 답(approved/denied)이 classifier verdict를 덮는다.

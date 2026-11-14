@@ -13,7 +13,6 @@ import {
   Match,
   Option,
   Predicate,
-  Result,
   Schema,
 } from "effect";
 import { SecureRandom } from "effect/crypto";
@@ -24,7 +23,9 @@ import { resolveProjectPath, type Fenced } from "../files/paths.ts";
 import { readTextFileEffect, sha256 } from "../files/text.ts";
 import { JsonValue } from "../json.ts";
 import type { Project } from "../projects/projects.ts";
+import { listedCoverage, ProjectCommands } from "../projects/commands.ts";
 import { path } from "../runtime/synchronous-path.ts";
+import { scriptSteps } from "../shell/script-text.ts";
 import { NetworkHost, type SaveCodeSkillInput } from "../tools/definitions.ts";
 import { AgentSkills, type SkillFiles } from "./agent-skills.ts";
 import { FoundSkill, ProjectSkills } from "./project-skills.ts";
@@ -58,6 +59,7 @@ export class CodeSkillRejected extends Schema.TaggedError<
 >()("CodeSkillRejected", {
   reason: Schema.Literals([
     "builtin_overlap",
+    "project_command",
     "not_code_skill",
     "network_line",
     "input_line",
@@ -105,37 +107,12 @@ const coveredBy = {
 const coveredTool = (program: string) =>
   Object.entries(coveredBy).find(([name]) => name === program)?.[1];
 
-/** Words that run nothing of their own; the program after them is what counts. */
-const prefixes = HashSet.make("command", "exec", "env", "time", "nice");
-/** Steps that only set up the shell. */
-const setup = HashSet.make("cd", "set", "export", "true", ":", "echo", "printf", "exit");
-
-/** The program each step of a script starts with: the first of every `;`/`&&`/`||` step's pipeline. */
-const leadingPrograms = (script: string) =>
-  EffectArray.filterMap(
-    EffectArray.filterMap(script.split("\n"), (line) => {
-      const trimmed = line.trim();
-      return trimmed !== "" && !trimmed.startsWith("#") ? Result.succeed(trimmed) : Result.failVoid;
-    }).flatMap((line) => line.split(/;|&&|\|\|/)),
-    (step) => {
-      const words = (step.split("|")[0] ?? "").trim().split(/\s+/);
-      const first =
-        words.find(
-          (word) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word) && !HashSet.has(prefixes, word),
-        ) ?? "";
-      const program = first.split("/").at(-1) ?? "";
-      return program !== "" && !HashSet.has(setup, program)
-        ? Result.succeed(program)
-        : Result.failVoid;
-    },
-  );
-
 /**
  * A script that only wraps what built-in tools do, as the start of what its refusal says: the
  * programs its steps begin with and the tools that cover them.
  */
 export const builtinCoverage = (script: string): Option.Option<string> => {
-  const programs = leadingPrograms(script);
+  const programs = scriptSteps(script).map(({ program }) => program);
   const tools = programs.map(coveredTool);
   return programs.length > 0 && tools.every(isTruthy)
     ? Option.some(
@@ -418,6 +395,7 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const projectSkills = yield* ProjectSkills;
   const agentSkills = yield* AgentSkills;
+  const projectCommands = yield* ProjectCommands;
   const platform = yield* Effect.context<FileSystem.FileSystem | SecureRandom.SecureRandom>();
   // The table keeps its name from when every saved skill was a shell script.
   const approved = (projectId: string, name: string, sha256: string) =>
@@ -525,6 +503,23 @@ const make = Effect.gen(function* () {
       yield* Option.match(programRefusal(input.program), {
         onNone: () => Effect.void,
         onSome: Effect.fail,
+      });
+      // A sh skill that only runs what the project's command list holds is a second name for a
+      // listed command. In `ask` mode every run_command call waits for the user, so there a sh
+      // skill is how a command is approved once, and it is saved.
+      const listedOnly =
+        input.program.runtime === "sh" && project.permissionMode !== "ask"
+          ? listedCoverage(input.program.script, yield* projectCommands.list(project.id))
+          : Option.none<string>();
+      yield* Option.match(listedOnly, {
+        onNone: () => Effect.void,
+        onSome: (covered) =>
+          Effect.fail(
+            CodeSkillRejected.make({
+              reason: "project_command",
+              detail: `${covered} Run the line with run_command, with the arguments this run needs; save a sh skill only for a script that does more than the listed commands.`,
+            }),
+          ),
       });
       const program = Option.getOrElse(
         yield* cardFolderRewritten(project, input.program),

@@ -24,6 +24,7 @@
 - `PermissionReviewPayload` / `PermissionReviewResponse` — 권한 검토 요청(`askedBy: review | every_call`)과 응답 계약
 - `definitions.ts` 재수출 묶음 — run-state, report(diagnosis/bundle/delivery), uncertain-runs, lease, shown-failure, subagent, loop-health, provider-retry, approvals, queue, improve 계약을 채팅 UI와 공유
 - `ApprovedTools` — 코드 스킬 저장·`run_skill`(sh 스킬 샌드박스 실행)·`run_command`(저장하지 않는 스크립트의 샌드박스 실행)·외부 파일 쓰기/삭제를 제공하는 서비스(`ApprovedTools.layer`)
+- `save_project_commands` — 프로젝트 명령 목록에 줄을 넣고 빼는 도구(`projects/commands.ts`의 `ProjectCommands.toolFor`). 승인 없이 실행된다. 목록은 메모이고, 거기 있는 명령도 `run_command`로 실행한다. 채팅 run과 그 서브에이전트, 카드 에이전트가 받고 검증자는 받지 않는다. 프로그램(`run_code`, ts 스킬)은 부르지 못한다
 - `RunCommandInput` / `runCommandSpec` — `run_command`의 입력(`script`, `access`: `read`|`write`, `network`, `workdir`, `timeoutSeconds`, `yieldMs`, `reason`)과 이름·설명. `definitions.ts`에 있어 승인 카드가 함께 쓴다
 - `BackgroundTasks` / `BackgroundBinding` / `BackgroundResult` / `BackgroundEnd` / `BackgroundOperationFailed` / `BackgroundStoreFailed` / `BackgroundTaskNotFound` — 백그라운드 작업(sh 스킬 실행, 외부 에이전트 턴) 서비스와 그 바인딩(`sessionId`, `runId`, `abortSignal`), 끝난 작업의 결과, 세션에 아직 알리지 않은 끝, 오류. 서비스는 작업 시작·결과 대기(`start`, `waitResult`), 끝 알림의 소비·반환(`consume`, `release`, `untold`), 실행 중 목록(`running`)을 맡는다
 - `FileTools` / `fileToolNames` / `listPageSize` — 프로젝트 파일 도구 서비스(`SecretRedactor.layer` 제공), 목록 페이지 크기 500

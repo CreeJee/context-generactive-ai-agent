@@ -12,7 +12,7 @@ const tempFile = Effect.gen(function* () {
 }).pipe(Effect.provide([NodeFileSystem.layer, NodePath.layer]));
 
 describe("session dispatches table", () => {
-  it.effect("the last migration step creates it additively", () =>
+  it.effect("its migration step creates it additively", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const file = yield* tempFile;
@@ -87,9 +87,13 @@ describe("session dispatches table", () => {
           Effect.sync(() => new DatabaseSync(file)),
           (sqlite) =>
             Effect.sync(() => {
-              // An app from before the claims table applied every step but the last one.
-              migrations.slice(0, -1).forEach((step) => sqlite.exec(step));
-              sqlite.exec(`PRAGMA user_version = ${migrations.length - 1}`);
+              // An app from before the claims table applied every step before the one that
+              // creates it.
+              const claimsStep = migrations.findIndex((step) =>
+                step.includes("CREATE TABLE session_dispatch_claims"),
+              );
+              migrations.slice(0, claimsStep).forEach((step) => sqlite.exec(step));
+              sqlite.exec(`PRAGMA user_version = ${claimsStep}`);
               // The dispatch table came one step before; the claims table is what is missing.
               expect(
                 sqlite

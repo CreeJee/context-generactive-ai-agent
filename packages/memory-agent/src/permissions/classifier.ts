@@ -1,4 +1,4 @@
-import { Array as Arr, Function as EffectFunction, Result } from "effect";
+import { Function as EffectFunction } from "effect";
 import { failureTags } from "../runtime/logged-failures.ts";
 import { isTruthy } from "../truthy.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -10,6 +10,7 @@ import { singleAnswer } from "../model/single-call.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
 import { Nodes } from "../memory/nodes.ts";
 import type { Project } from "../projects/projects.ts";
+import { scriptLines } from "../shell/script-text.ts";
 import { msg } from "@lingui/core/runtime-macro";
 import { i18n } from "../i18n.ts";
 
@@ -59,6 +60,14 @@ export interface ReviewRequest {
 
 const routinePackageCommand =
   /^(?:corepack\s+)?(?:pnpm|npm|yarn|bun)\s+(?:i|install|ci|add|remove|rm|uninstall|update|up|run|exec|test|build|lint|check|typecheck)(?:\s|$)/u;
+/** Vite+ (`vp`), which wraps the package manager and the project's task runner. */
+const routineToolchainCommand =
+  /^vp\s+(?:i|install|add|remove|rm|un|uninstall|update|up|run|exec|test|check|lint|fmt|format|build|pack)(?:\s|$)/u;
+/**
+ * Words of a project task that reaches outside the project (an image build, a release, a signing
+ * service). A task is run by its name, so the name is all this check sees of it.
+ */
+const outwardTask = /docker|publish|release|deploy|notarize/iu;
 const routineGitCommand =
   /^git\s+(?:status|diff|log|show|branch|rev-parse|ls-files|fetch|pull)(?:\s|$)/u;
 const downloadCapablePackageRunner = /^(?:npx|pnpx)(?:\s|$)/u;
@@ -90,7 +99,11 @@ const lineKind = (line: string): "routine" | "download" | "review" => {
   if (components.every((component) => downloadCapablePackageRunner.test(component)))
     return "download";
   return components.every(
-    (component) => routinePackageCommand.test(component) || routineGitCommand.test(component),
+    (component) =>
+      !outwardTask.test(component) &&
+      (routinePackageCommand.test(component) ||
+        routineToolchainCommand.test(component) ||
+        routineGitCommand.test(component)),
   )
     ? "routine"
     : "review";
@@ -111,10 +124,7 @@ function routineShellVerdictBody(toolName: string, argumentsJson: string): Verdi
       decode(argumentsJson),
     ),
   );
-  const lines = Arr.filterMap((decoded?.script ?? "").split("\n"), (line) => {
-    const trimmed = line.trim();
-    return trimmed !== "" && !trimmed.startsWith("#") ? Result.succeed(trimmed) : Result.failVoid;
-  });
+  const lines = scriptLines(decoded?.script ?? "");
   // Hosts are judged by the reviewer: whether each one fits the job is not a string match.
   if (lines.length === 0 || (decoded?.network ?? []).length > 0) return undefined;
   const kinds = lines.map(lineKind);

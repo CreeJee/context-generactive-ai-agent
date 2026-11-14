@@ -16,6 +16,7 @@ import { McpServers, mcpInstructionsForMode } from "../mcp/servers.ts";
 import { SecureRandom } from "effect/crypto";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import type { AgentRole } from "../providers/contracts.ts";
+import { ProjectCommands } from "../projects/commands.ts";
 import { Projects, type Project } from "../projects/projects.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { Subagents } from "../subagents/subagents.ts";
@@ -172,6 +173,7 @@ const make = Effect.gen(function* () {
   const subagents = yield* Subagents;
   const sessions = yield* Sessions;
   const projects = yield* Projects;
+  const projectCommands = yield* ProjectCommands;
   const active = yield* ActiveProvider;
   const fileTools = yield* FileTools;
   const outsideTools = yield* OutsideTools;
@@ -297,6 +299,7 @@ const make = Effect.gen(function* () {
       ...approvedTools.toolsFor(project, sessionId, "gate"),
       ...evidenceTools(projectId, sessionId),
       ...skills.tools,
+      projectCommands.toolFor(projectId),
     ]),
     ...mcp.tools,
   ];

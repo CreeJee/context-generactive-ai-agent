@@ -57,6 +57,8 @@ export const builtinToolEffects = {
   // Content-only handover, but the dispatch row it inserts is durable, so the response settles
   // before it runs; its refusals write nothing and are recorded through `refused`.
   notify_session: "effectful",
+  // Changes the project's command list, which later runs read.
+  save_project_commands: "effectful",
 } as const satisfies Record<string, "read" | "effectful">;
 
 /** Built-ins since replaced, whose calls are still in recorded runs and history. */

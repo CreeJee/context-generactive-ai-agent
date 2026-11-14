@@ -437,6 +437,11 @@ msgstr "폴더를 찾을 수 없습니다: {cwd}"
 
 #. Tool call title in the editor
 #: src/acp/tool-view.ts
+msgid "프로젝트 명령 저장"
+msgstr "프로젝트 명령 저장"
+
+#. Tool call title in the editor
+#: src/acp/tool-view.ts
 msgid "프로젝트 밖 파일 검색"
 msgstr "프로젝트 밖 파일 검색"
 

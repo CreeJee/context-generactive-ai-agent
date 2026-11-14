@@ -85,6 +85,8 @@ const programCallable = {
   run_code: false,
   // Leaves a message in the other conversation's `session_dispatches`; it does not steer the run.
   notify_session: true,
+  // A note for later runs: what is worth keeping is the model's own call, not a program's.
+  save_project_commands: false,
 } as const satisfies Record<keyof typeof builtinToolEffects, boolean>;
 
 const notCallable = HashSet.fromIterable(

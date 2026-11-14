@@ -6291,6 +6291,10 @@ msgstr "프로젝트 검색"
 msgid "프로젝트 기억으로 채택된 내용과 그 출처 기록은 남습니다."
 msgstr "프로젝트 기억으로 채택된 내용과 그 출처 기록은 남습니다."
 
+#: app/entry/chat/message.tsx
+msgid "프로젝트 명령 저장"
+msgstr "프로젝트 명령 저장"
+
 #: app/entry/index.tsx
 msgid "프로젝트 목록을 불러오지 못했습니다"
 msgstr "프로젝트 목록을 불러오지 못했습니다"

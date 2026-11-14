@@ -57,6 +57,26 @@ describe("routine shell verdict", () => {
     expect(command("rm -rf build")).toBeUndefined();
   });
 
+  it.each(["vp check", "vp test run tests/a.test.ts", "vp run memory-agent#typecheck && vp fmt"])(
+    "pre-allows the toolchain's routine command %s",
+    (command) => {
+      expect(shell(command)).toMatchObject({ decision: "allow", decidedBy: "classifier" });
+    },
+  );
+
+  it.each([
+    "vp run build:docker",
+    "pnpm run release",
+    "vp run agent#notarize",
+    "vp dlx cowsay",
+    "vp upgrade",
+  ])(
+    "leaves a task that reaches outside the project, or an unfamiliar one, to the reviewer: %s",
+    (command) => {
+      expect(shell(command)).toBeUndefined();
+    },
+  );
+
   it("only classifies the sh programs of save_code_skill", () => {
     expect(
       routineShellVerdict(

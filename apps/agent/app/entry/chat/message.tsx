@@ -74,6 +74,7 @@ const toolLabels = {
   save_code_skill: msg`코드 스킬 저장`,
   run_skill: msg`코드 스킬 실행`,
   run_command: msg`명령 실행`,
+  save_project_commands: msg`프로젝트 명령 저장`,
   run_code: msg`코드 실행`,
   write_outside_file: msg`프로젝트 밖 파일 쓰기`,
   delete_outside_file: msg`프로젝트 밖 파일 삭제`,

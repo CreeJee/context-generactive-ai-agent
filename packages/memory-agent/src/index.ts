@@ -336,6 +336,7 @@ export {
   ProjectRootRejected,
   Projects,
 } from "./projects/projects.ts";
+export { maxProjectCommands, ProjectCommand, ProjectCommands } from "./projects/commands.ts";
 export { FolderPick, ListedProject } from "./projects/contracts.ts";
 export { Session, SessionNotFound, Sessions } from "./sessions/sessions.ts";
 export { BtwChat } from "./btw/chat.ts";

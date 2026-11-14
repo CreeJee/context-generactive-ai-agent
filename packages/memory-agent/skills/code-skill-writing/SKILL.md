@@ -33,6 +33,11 @@ A skill is one of two kinds:
   `run_code` instead, and a host command you run once goes in `run_command`: with access
   "read" to look (git status, diff, log, show), which asks nothing, or with access "write".
   A read-only git command is not a skill.
+- A command on the project's command list ([Project commands]) is not a skill either: run the
+  line with `run_command`, with the arguments this run needs. A sh skill whose every step is a
+  listed command is refused, except in a project where each `run_command` call waits for the
+  user. When you find how the project runs its tests, build or checks and it is not listed, put
+  it on the list with `save_project_commands` instead of saving a skill for it.
 - Try a ts program with `run_code` before saving it. Put a `const input = { … };` line on top to
   stand in for run_skill's input, and drop that line when you save the program.
 - Do not save a sh script that only wraps what built-in tools already do: listing, reading,

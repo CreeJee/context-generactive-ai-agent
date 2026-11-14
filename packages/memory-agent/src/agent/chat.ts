@@ -74,6 +74,7 @@ import { Interpreter } from "../memory/interpret.ts";
 import { Nodes } from "../memory/nodes.ts";
 import { Recorder } from "../memory/record.ts";
 import { ProgressMemos } from "../memory/progress-memo.ts";
+import { ProjectCommands } from "../projects/commands.ts";
 import { Projects, type Project } from "../projects/projects.ts";
 import { type GateBinding, PermissionGate } from "../permissions/gate.ts";
 import { Sessions } from "../sessions/sessions.ts";
@@ -297,7 +298,7 @@ const workspaceInstructionsBody = Effect.fn("workspaceInstructions")(function* (
         : 'save_code_skill, run_command with access "write", write_outside_file and delete_outside_file wait for the user\'s approval of each call. Give a short reason. If the user declines, do not retry the same thing; ask or choose another way.'
   }
 - Use the tool made for the question first: a listed skill or an MCP tool whose description fits, such as a code graph for where code is and what calls what, before generic file searches and reads. search_files is for exact text (tool names, SQL, test values, prose); read_file is for a known file or range. When a fitting tool misses, ask it again with narrower terms, such as the names it did return, before switching tools.
-- Host commands run in a sandbox. To look at something no file tool shows (git status, diff, log and show, a tool's version), call run_command with access "read": it runs at once and can change nothing. A command that changes files or needs the network is run_command with access "write" when you run it once, and a sh code skill when you will run it again with other arguments (tests, builds, installs): run a listed one with run_skill, or save a purpose-specific one with save_code_skill. Reading, listing and searching files stay with the file tools; a script made only of those is refused. Work you will repeat with your tools can be a ts code skill. run_code batches calls you do once: it runs the tools you would pick anyway and is never a reason to pick a different one. Never print secrets.
+- Host commands run in a sandbox. To look at something no file tool shows (git status, diff, log and show, a tool's version), call run_command with access "read": it runs at once and can change nothing. A command that changes files or needs the network is run_command with access "write" when you run it once, and a sh code skill when you will run it again with other arguments (tests, builds, installs): run a listed one with run_skill, or save a purpose-specific one with save_code_skill. Reading, listing and searching files stay with the file tools; a script made only of those is refused. How this project runs its tests, build and checks is on its command list ([Project commands], when it has one): run a listed line with run_command instead of working it out again or saving a skill for it, and when you find such a command that is not listed (in AGENTS.md, a CI file, the package scripts or the task runner's own listing), put it on the list with save_project_commands. Work you will repeat with your tools can be a ts code skill. run_code batches calls you do once: it runs the tools you would pick anyway and is never a reason to pick a different one. Never print secrets.
 - Credential files and .git internals are off limits to the file tools; no approval changes that.
 - Report what you actually changed and verified. Do not claim a change or check that did not happen.
 - This app (context-agent) keeps its own settings, the account login and the memory database in ${places.storageRoot}. Neither the file tools nor host scripts open that folder: for a file there, show the user the exact change to make. Read the app-settings skill before adding or changing external agents, MCP servers, skills or app settings.`;
@@ -564,6 +565,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const queue = yield* MessageQueue;
   const delivery = yield* QueueDelivery;
   const sessionDispatches = yield* SessionDispatches;
+  const projectCommands = yield* ProjectCommands;
   const summaries = yield* TurnSummaries;
   const workflows = yield* Workflows;
   const execution = yield* WorkflowExecution;
@@ -2012,6 +2014,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ...background.toolsFor(sessionId),
           // Content-only handover between the same project's conversations; no approval is asked.
           sessionDispatches.notifyToolFor(projectId, sessionId, runId),
+          // A note for the project's later runs; a listed command still runs through run_command.
+          projectCommands.toolFor(projectId),
         ]);
         const sharedTools =
           reportSource !== null
@@ -2178,6 +2182,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 yield* projectInstructionsHook(project.root).pipe(
                   Effect.provideContext(workflowRuleContext),
                 ),
+                yield* projectCommands.hookFor(projectId),
               ]),
           // Before the gate, so a refused repeat is never reviewed or put to the user.
           yield* repeatGuardHook,

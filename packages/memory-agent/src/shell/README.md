@@ -22,6 +22,7 @@
 - `SandboxUnavailableReason` — 위 `reason`의 `Schema.Literals`
 - `SandboxReportFailed` — 위반 로그 annotate 실패(`reason: annotate_failed`)를 나타내는 TaggedError
 - `Prepare` / `Finish` / `SandboxRpcs` — 샌드박스 worker RPC 그룹. `Prepare`는 감싼 명령 줄을 돌려주고, `Finish`는 `{stderr}`를 받아 주석이 달린 stderr를 돌려준다
+- `scriptLines(script)` / `scriptSteps(script)` — sh 스크립트를 실행하지 않고 글로 읽는 순수 함수(`script-text.ts`). `scriptLines`는 빈 줄과 주석을 뺀 줄을, `scriptSteps`는 `;`, `&&`, `||`로 나뉜 단계마다 첫 명령(`program`: 폴더를 뺀 프로그램 이름, `text`: 프로그램부터 첫 파이프 앞까지)을 돌려준다. `command`, `exec`, `env`, `time`, `nice` 접두와 `VAR=` 대입은 건너뛰고, `cd`, `set`, `export`, `true`, `:`, `echo`, `printf`, `exit` 단계는 뺀다. 내장 도구 겹침 거부(`skills/code-skills.ts`), 명령 목록 겹침 거부(`projects/commands.ts`), 일상 명령 빠른 경로(`permissions/classifier.ts`)가 쓴다. 셸 문법을 해석하지 않으므로 이것만으로 안전을 판단하지 않는다
 - `sandbox-worker.ts` — worker thread 진입점. `runtimeWorker("sandbox-worker")`로 로드되고 `runNativeEffect(Layer.launch(server))`로 RpcServer를 띄운다. export는 없다
 - 하위 디렉터리 없음
 

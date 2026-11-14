@@ -30,7 +30,7 @@
 - `Skill` / `SkillProblem` / `SkillCatalog` / `SkillDocument` — 스킬 메타(scope, name, description, directory, contentHash), 문제(no_description, too_large, unreadable), 카탈로그와 문서. 앞의 셋은 `contracts.ts`의 Schema 타입이고(앱 API projects group `skills`가 돌려준다), `SkillDocument`는 `skills.ts`의 인터페이스다
 - `parseFrontMatter(text)` / `FrontMatter` — SKILL.md front matter의 작은 YAML 부분집합을 `MutableHashMap` 필드와 body로 파싱한다. 지원 형식은 `key: value`, 따옴표 값, `>`, `|`, `>-`, `|-` 블록이다
 - `CodeSkills` — 코드 스킬 `Context.Service`이고 `CodeSkills.layer`를 가진다. 구현 `make`는 프로젝트 파일 생성, 읽기, 교체, 삭제와 SKILL.md 생성을 다룬다
-- `CodeSkillRejected` — `Schema.TaggedError`. reason은 builtin_overlap, not_code_skill, network_line, input_line, input_schema, not_found, not_approved, ts_skill, absolute_path 중 하나다. 필드는 `detail`이다
+- `CodeSkillRejected` — `Schema.TaggedError`. reason은 builtin_overlap, project_command, not_code_skill, network_line, input_line, input_schema, not_found, not_approved, ts_skill, absolute_path 중 하나다. 필드는 `detail`이다
 - `SkillRuntime` — `"ts" | "sh"`
 - `codeSkillDirectory(name)` — 문자열 `.agents/skills/<name>`
 - `builtinCoverage(script)` — sh 스크립트의 모든 선두 프로그램이 내장 도구(ls, cat, grep, rm 등)로 대체 가능하면, 그 프로그램과 대신 쓸 도구를 적은 문장을 `Option.some`으로 돌려준다. `run_command`도 이것으로 거부한다
@@ -62,6 +62,7 @@
 - ts 스킬의 input은 `type: "object"`인 JSON Schema여야 한다. 아니면 `input_schema`로 거부한다
 - 저장할 프로그램(sh의 script, ts의 code)이 프로젝트 폴더를 절대 경로로 적어도 거부하지 않는다. 카드 밖에서는 run의 root가 사용자 프로젝트 폴더라 적은 그대로 저장한다. 칸반 카드에서는 카드 worktree를 적은 곳을 사용자 프로젝트 폴더로 바꿔 저장한다(`CodeSkills.rewritten`). 카드 worktree는 merge 뒤 사라지고, 카드에서 sh 스킬을 실행할 때는 사용자 프로젝트 폴더를 다시 카드 worktree로 바꾸며(`tools/approved.ts`, 카드 worktree에 없는 `.env`·`node_modules` 같은 경로는 사용자 폴더 그대로), ts 스킬이 부르는 도구는 경로 정책이 옮기기 때문이다. 찾는 표기는 그대로 적은 경로, 실제 경로, 홈 아래면 `~/…`·`$HOME/…`·`${HOME}/…`이고, 경로 전체이거나 `/`가 이어질 때만이다(`files/path-policy.ts`의 `folderMentions`)
 - 이 바꾸기는 승인보다 먼저 한다. `save_code_skill`의 `plan`이 바꾼 프로그램으로 `Rewritten` 호출을 정해, 승인 창과 권한 검토가 저장될 프로그램을 본다. 저장 결과에는 카드에서 사용자 폴더를 적은 프로그램이면 `pathNote`가 붙는다. 사용자 프로젝트 폴더 경로가 프로그램에 그대로 들어갈 수 없으면(`isPlainPath`가 아니면) 예전처럼 `absolute_path`로 거부한다
+- sh 스크립트의 모든 단계가 프로젝트 명령 목록(`projects/commands.ts`)의 명령으로 시작하면 `save`가 `project_command`로 거부한다. 목록에 있는 명령에 이름만 하나 더 붙이는 스킬이기 때문이다. 권한 모드가 `ask`인 프로젝트에서는 거부하지 않는다. 거기서는 `run_command` 호출마다 사용자가 승인하므로, sh 스킬이 명령을 한 번만 승인받는 수단이다.
 - sh 스크립트의 모든 단계(`;`, `&&`, `||`로 나뉨)가 내장 도구로 대체 가능한 프로그램으로 시작하면 `builtin_overlap`으로 거부한다. 파이프 뒤 필터는 허용한다. 판정할 때 `command`, `exec`, `env`, `time`, `nice` 접두와 `VAR=` 대입은 건너뛴다. `cd`, `set`, `export`, `true`, `:`, `echo`, `printf`, `exit` 단계는 무시한다
 
 ## Side Effects

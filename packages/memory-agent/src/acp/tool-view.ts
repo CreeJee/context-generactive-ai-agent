@@ -47,6 +47,10 @@ const titles = {
   save_code_skill: msg({ message: "코드 스킬 저장", comment: "Tool call title in the editor" }),
   run_skill: msg({ message: "코드 스킬 실행", comment: "Tool call title in the editor" }),
   run_command: msg({ message: "명령 실행", comment: "Tool call title in the editor" }),
+  save_project_commands: msg({
+    message: "프로젝트 명령 저장",
+    comment: "Tool call title in the editor",
+  }),
   run_code: msg({ message: "코드 실행", comment: "Tool call title in the editor" }),
   write_outside_file: msg({
     message: "프로젝트 밖 파일 쓰기",
@@ -91,6 +95,7 @@ const views = HashMap.fromIterable<string, ToolViewMessage>([
   ["save_code_skill", { title: titles.save_code_skill, kind: "edit" }],
   ["run_skill", { title: titles.run_skill, kind: "execute" }],
   ["run_command", { title: titles.run_command, kind: "execute" }],
+  ["save_project_commands", { title: titles.save_project_commands, kind: "other" }],
   ["run_code", { title: titles.run_code, kind: "execute" }],
   ["write_outside_file", { title: titles.write_outside_file, kind: "edit" }],
   ["delete_outside_file", { title: titles.delete_outside_file, kind: "delete" }],

@@ -3114,6 +3114,18 @@ export const migrations: readonly string[] = [
   );
   CREATE INDEX session_dispatch_claims_run ON session_dispatch_claims(run_id);
   `,
+  `
+  -- The command lines a project is run with, one list per project (decisions.md "프로젝트가 이미
+  -- 가진 명령은 목록 하나에 적는다"). A run's model saves them and every later run of the project
+  -- reads them, in the order they were first saved (rowid).
+  CREATE TABLE project_commands (
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    command TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    saved_at TEXT NOT NULL,
+    UNIQUE (project_id, command)
+  );
+  `,
 ];
 
 /** One of the two startup migrations that may rebuild a referenced table with FK checks suspended;
