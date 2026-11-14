@@ -23,6 +23,7 @@ import { Projects } from "../src/projects/projects.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
 import {
   AuthConnectionState,
+  type CatalogTarget,
   type ModelRun,
   type ModelSelection,
   type ProviderId,
@@ -174,9 +175,11 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
         ...fallback,
         get: (provider: ProviderId) =>
           provider === "openai" ? Effect.succeed(openai) : upstream.get(provider),
-        runtime: (provider: ProviderId) =>
+        configurationOf: (chosen: CatalogTarget) =>
+          chosen.provider === "openai" ? Effect.succeed(openai) : upstream.configurationOf(chosen),
+        runtime: (chosen: ModelSelection) =>
           Effect.map(
-            provider === "openai" ? Effect.succeed(openaiRuntime) : upstream.runtime(provider),
+            chosen.provider === "openai" ? Effect.succeed(openaiRuntime) : upstream.runtime(chosen),
             (service) => ({
               ...service,
               model: (selected: ModelSelection, run: ModelRun) =>

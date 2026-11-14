@@ -34,7 +34,7 @@
 - 같은 threadId에는 동시에 한 run만 있다. `liveRuns.get` 검사 뒤 `liveRuns.claim`이 null이면 자원을 해제하고 `run_in_progress`로 거부한다
 - `ask`의 거부 검사 순서: 스레드 존재 → live run → 인증 error/미로그인 → 모델 선택 → 빈 메시지 → 첨부 확인 → 이미지 지원 여부
 - 모델 능력 조회가 실패하면 이미지 미지원으로 간주해 `images_not_supported`로 거부한다
-- openai-compatible 공급자에서 `compatibleToolCalling`이 false면 도구 목록을 비운다
+- openai-compatible 공급자에서 `compatibleToolCalling`(선택이 적은 계정에 등록된 그 모델 기준)이 false면 도구 목록을 비운다
 - 답변은 요청이 아니라 서비스 scope(`Effect.scope`)에 fork된다. 패널을 닫아도 계속 실행된다. 명시적 삭제나 서비스 종료(`service_shutdown`)만 취소한다
 - run 종료 시 `claim.release`가 실행된다. `released`는 cancellation 해제 후 모델 scope(`modelScope`)를 닫는다
 - 메시지 그룹핑은 TanStack `modelMessagesToUIMessages`와 같아야 한다. 답변 그룹은 같은 id나 `${id}-segment-` 접두 assistant와 tool 결과를 다음 질문 전까지 흡수한다

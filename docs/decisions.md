@@ -5238,3 +5238,13 @@
 
 - 계기: 모델은 `node_modules/.cache/wording`에 받았다. 카드 worktree는 `node_modules`를 새로 설치하므로 모델이 없고, 샌드박스는 GitHub를 막아 받지도 못했다. 세션 `cc6157a4`의 검증은 라운드마다 89~116건의 같은 다운로드 실패를 내고, 검증자가 그것을 매번 환경 오류로 다시 분류했다.
 - 결정(사용자 승인): 모델을 사용자 캐시 폴더(`$XDG_CACHE_HOME`, 없으면 `~/.cache`)의 `context-generactive-agent/wording/kiwi-<version>`에 둔다. 모든 checkout과 worktree가 한 벌을 읽는다. 샌드박스 안에서는 네트워크가 막혀 받지 못하지만, 사용자 쪽 `vp check`(커밋 hook 포함)가 한 번 받아 두면 worktree는 그것을 읽는다. 받기·검증·풀기 방식은 그대로다.
+
+## 호환 모델 선택은 엔드포인트 계정까지 담는다 (2026-11-14)
+
+- 계기: 호환(로컬 LLM) 계정은 여러 개 등록할 수 있는데, 검증자 같은 역할 모델 칸은 "OpenAI 호환" 하나만 보여 줬다. 그 공급자는 하단 전환기에서 선택된 계정만 가리켰고, `ModelSelection`에도 계정 자리가 없었다. 역할 모델을 호환 모델로 저장한 뒤 선택된 계정을 바꾸면 그 역할도 다른 엔드포인트로 돌았다.
+- 결정(사용자 승인):
+  - `ModelSelection`은 구독 선택(`openai`·`anthropic`)과 호환 선택(`openai-compatible`, `account` 필수)의 유니언이다. 호환 선택의 모델 목록·이미지 입력·도구 호출·runtime은 그 선택이 적은 계정의 것을 쓴다(`ProviderRegistry.configurationOf`·`runtime(selection)`).
+  - 역할 모델과 skill router 모델 칸은 구독 공급자와 호환 계정을 하나씩 따로 보여 준다(계정은 사용자가 붙인 이름으로). `/api/models`는 호환 공급자에 `account`를 받아 그 계정의 목록을 준다.
+  - 이번에는 전역 선택(채팅 모델)을 바꾸지 않는다. 설정 파일에는 계속 공급자·모델·추론 단계만 저장하고, 계정은 `compatibleAccounts.selected`를 따른다. 읽을 때(`models.selected`) 그 계정을 `account`로 채운다.
+  - 역할 모델 설정은 0.1.4 이후에 생겨 릴리스된 적이 없으므로, 계정 없이 저장된 호환 역할 모델을 읽는 호환 처리는 두지 않는다.
+- 남은 일: 전역 선택도 계정을 담고 `compatibleAccounts.selected`를 없애는 것.

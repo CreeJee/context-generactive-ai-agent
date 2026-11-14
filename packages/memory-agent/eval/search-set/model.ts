@@ -11,7 +11,11 @@ import { defaultStorageRoot } from "../../src/config/storage-root.ts";
 import { memoryAgentLayer } from "../../src/layers.ts";
 import { singleAnswer } from "../../src/model/single-call.ts";
 import { ActiveProvider } from "../../src/providers/active-provider.ts";
-import { AuthConnectionState, type ProviderId } from "../../src/providers/contracts.ts";
+import {
+  AuthConnectionState,
+  type ModelSelection,
+  type SubscriptionAccountProvider,
+} from "../../src/providers/contracts.ts";
 import { path } from "../../src/runtime/synchronous-path.ts";
 import { fakeEmbedderLayer } from "../../src/testing/fake-embedder.ts";
 import { setFiles } from "./files.ts";
@@ -31,7 +35,7 @@ const callTimeout = "3 minutes";
  */
 export interface ModelChoice {
   readonly storage: string;
-  readonly provider: Option.Option<ProviderId>;
+  readonly provider: Option.Option<SubscriptionAccountProvider>;
   readonly model: Option.Option<string>;
 }
 
@@ -81,7 +85,7 @@ const make = Effect.fn("searchSet.EvalModel.make")(function* ({
                 ModelUnavailable.make({ reason: `name the model of ${other} with --model` }),
               ),
             ),
-            (id) => ({ provider: other, model: id, reasoningEffort: "default" }),
+            (id): ModelSelection => ({ provider: other, model: id, reasoningEffort: "default" }),
           ),
       });
       const auth = yield* active.auth(selection);

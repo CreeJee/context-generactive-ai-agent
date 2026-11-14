@@ -124,6 +124,9 @@ const endpointOf = (settings: Settings) => {
     ? undefined
     : (compatibleEndpointModel(account, model.id) ?? undefined);
 };
+/** The endpoint account a compatible selection names after these settings. */
+const selectedAccountId = (settings: Settings) =>
+  selectedCompatibleAccount(compatibleAccountsOf(settings))?.id;
 /** The stored model fields, with the source that `compatibleEndpointModel` drops. */
 const storedEndpointOf = (settings: Settings) => {
   const account = selectedCompatibleAccount(compatibleAccountsOf(settings));
@@ -242,6 +245,7 @@ describe("OpenAI compatible settings", () => {
         );
         expect(selection).toEqual({
           provider: "openai-compatible",
+          account: LEGACY_COMPATIBLE_ACCOUNT_ID,
           model: configuration.model,
           reasoningEffort: "default",
         });
@@ -671,6 +675,7 @@ describe("OpenAI compatible settings", () => {
         yield* f.api.services.models.select(configuration.model);
         expect(yield* f.restore().services.models.selected).toEqual({
           provider: "openai-compatible",
+          account: selectedAccountId(f.saved()),
           model: "manual-model",
           reasoningEffort: "default",
         });
@@ -894,6 +899,7 @@ describe("OpenAI compatible settings", () => {
       yield* f.api.update({ ...configuration, model: "changed-manual-model" });
       expect(yield* f.api.services.models.selected).toEqual({
         provider: "openai-compatible",
+        account: selectedAccountId(f.saved()),
         model: "changed-manual-model",
         reasoningEffort: "default",
       });
@@ -946,6 +952,7 @@ describe("OpenAI compatible settings", () => {
         expect((yield* Fiber.join(selection)).model).toBe(configuration.model);
         expect(yield* api.services.models.selected).toEqual({
           provider: "openai-compatible",
+          account: selectedAccountId(MutableRef.get(saved)),
           model: "new-model",
           reasoningEffort: "default",
         });
@@ -977,6 +984,7 @@ describe("OpenAI compatible settings", () => {
             runtime.model(
               {
                 provider: "openai-compatible",
+                account: LEGACY_COMPATIBLE_ACCOUNT_ID,
                 model: configuration.model,
                 reasoningEffort: "default",
               },
@@ -1030,6 +1038,7 @@ describe("OpenAI compatible settings", () => {
           const { model } = yield* (yield* api.runtime).model(
             {
               provider: "openai-compatible",
+              account: selectedAccountId(MutableRef.get(saved)) ?? "",
               model: configuration.model,
               reasoningEffort: "default",
             },
@@ -1281,5 +1290,47 @@ describe("OpenAI compatible settings", () => {
         expect(missing).toBeInstanceOf(OpenAICompatibleFailed);
         expect(missing).toMatchObject({ operation: "missing" });
       }),
+  );
+  effectTest.effect("runs a choice on the endpoint it names while another one is selected", () =>
+    Effect.gen(function* () {
+      const f = fixture(undefined, {
+        provider: "openai-compatible",
+        model: configuration.model,
+        reasoningEffort: "default",
+        openaiCompatible: configuration,
+      });
+      const id =
+        (yield* f.api.create({ baseUrl: "https://second.test/v1", label: "Second" })).accounts.at(
+          -1,
+        )?.id ?? "";
+      yield* f.api.saveModel(id, {
+        id: "second",
+        contextWindow: 16384,
+        outputBudget: 1024,
+        toolCalling: false,
+        imageInput: true,
+      });
+      const role = {
+        provider: "openai-compatible",
+        account: id,
+        model: "second",
+        reasoningEffort: "default",
+      } as const;
+
+      expect(selectedAccountId(f.saved())).toBe(LEGACY_COMPATIBLE_ACCOUNT_ID);
+      expect((yield* f.api.runtimeOf(role)).contextWindow("second")).toBe(16384 - 1024);
+      expect(yield* f.api.configurationOf(role).models.acceptsImages("second")).toBe(true);
+      expect(yield* f.api.services.models.acceptsImages("second")).toBe(false);
+      // The selected endpoint does not run a model registered on another one.
+      const elsewhere = yield* Effect.flip(
+        Effect.scoped(
+          (yield* f.api.runtimeOf({ ...role, account: LEGACY_COMPATIBLE_ACCOUNT_ID })).model(
+            role,
+            run,
+          ),
+        ),
+      );
+      expect(elsewhere._tag).toBe("ModelUnavailable");
+    }),
   );
 });

@@ -49,6 +49,7 @@ describe("sidebar disclosures", () => {
       const props = {
         selection: {
           provider: "openai-compatible" as const,
+          account: "endpoint",
           model: model.id,
           reasoningEffort: "default",
         },

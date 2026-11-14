@@ -11,28 +11,42 @@ import {
   SelectValue,
 } from "~/components/ui/select";
 import { Spinner } from "~/components/ui/spinner";
-import type { ModelSelection, ProviderId } from "../api";
+import type { CatalogTarget, ModelSelection, SubscriptionAccountProvider } from "../api";
 import { effortChoices, providerLabels } from "../navigation/providers";
-import { useModelsQuery } from "../queries/global";
+import { useCatalogQuery, useCompatibleAccountsQuery } from "../queries/global";
 import { PageError } from "./shared";
 
-const providerIds = [
+const subscriptionProviders = [
   "openai",
   "anthropic",
-  "openai-compatible",
-] as const satisfies readonly ProviderId[];
+] as const satisfies readonly SubscriptionAccountProvider[];
 
-/** The provider select's value for "no model of its own". */
+/** The source select's value for "no model of its own". */
 const unset = "unset";
 
+/** The source select's value: a subscription provider, or one compatible endpoint account. */
+const sourceKey = (source: CatalogTarget) =>
+  source.provider === "openai-compatible"
+    ? `${source.provider}:${source.account}`
+    : source.provider;
+
+/** Where a saved model comes from; a compatible one names its endpoint account. */
+const sourceOf = (selection: ModelSelection): CatalogTarget =>
+  selection.provider === "openai-compatible"
+    ? { provider: selection.provider, account: selection.account }
+    : { provider: selection.provider };
+
 const sameSelection = (left: ModelSelection | null, right: ModelSelection | null) =>
-  left?.provider === right?.provider &&
-  left?.model === right?.model &&
-  left?.reasoningEffort === right?.reasoningEffort;
+  left !== null &&
+  right !== null &&
+  sourceKey(sourceOf(left)) === sourceKey(sourceOf(right)) &&
+  left.model === right.model &&
+  left.reasoningEffort === right.reasoningEffort;
 
 /**
- * A model the user gives one part of the app: a provider, one of its models and an effort, or
- * none (`unsetLabel`). Saving hands the choice to `onSave`, null for none.
+ * A model the user gives one part of the app: a subscription provider or one compatible endpoint,
+ * one of its models and an effort, or none (`unsetLabel`). Saving hands the choice to `onSave`,
+ * null for none.
  */
 export function ModelSelectionField({
   id,
@@ -49,7 +63,7 @@ export function ModelSelectionField({
   label: string;
   description: ReactNode;
   saved: ModelSelection | null;
-  /** The provider select's option for no model of its own. */
+  /** The source select's option for no model of its own. */
   unsetLabel: string;
   /** What happens while no model is saved. */
   unsetNote: ReactNode;
@@ -58,24 +72,41 @@ export function ModelSelectionField({
   onSave: (selection: ModelSelection | null) => void;
 }) {
   const { t } = useLingui();
-  const [provider, setProvider] = useState<ProviderId | null>(saved?.provider ?? null);
+  const [source, setSource] = useState<CatalogTarget | null>(
+    saved === null ? null : sourceOf(saved),
+  );
   const [modelId, setModelId] = useState<string | null>(saved?.model ?? null);
   const [effort, setEffort] = useState<string | null>(saved?.reasoningEffort ?? null);
-  const catalog = useModelsQuery(provider ?? "openai", provider !== null);
+  const compatible = useCompatibleAccountsQuery();
+  const catalog = useCatalogQuery(source);
   const models = catalog.data?.models ?? [];
   const model = models.find((candidate) => candidate.id === modelId);
   const draft: ModelSelection | null =
-    provider !== null &&
+    source !== null &&
     model !== undefined &&
     effort !== null &&
     model.supportedReasoningEfforts.includes(effort)
-      ? { provider, model: model.id, reasoningEffort: effort }
+      ? { ...source, model: model.id, reasoningEffort: effort }
       : null;
   const efforts = draft === null || model === undefined ? [] : effortChoices(draft, model);
+  // Each compatible endpoint is a source of its own, named by the user's label for it.
+  const sources: ReadonlyArray<{ readonly source: CatalogTarget; readonly label: string }> = [
+    ...subscriptionProviders.map((provider) => ({
+      source: { provider },
+      label: t(providerLabels[provider]),
+    })),
+    ...(compatible.data?.accounts ?? []).map((account) => ({
+      source: { provider: "openai-compatible" as const, account: account.id },
+      label: account.label,
+    })),
+  ];
+  const sourceLabel = (target: CatalogTarget) =>
+    sources.find((candidate) => sourceKey(candidate.source) === sourceKey(target))?.label ??
+    t(providerLabels[target.provider]);
   // Each select's labels by value, so the closed select shows the label and not the raw value.
-  const providerItems = [
+  const sourceItems = [
     { value: unset, label: unsetLabel },
-    ...providerIds.map((candidate) => ({ value: candidate, label: t(providerLabels[candidate]) })),
+    ...sources.map((candidate) => ({ value: sourceKey(candidate.source), label: candidate.label })),
   ];
   const modelItems = models.map((candidate) => ({
     value: candidate.id,
@@ -87,18 +118,20 @@ export function ModelSelectionField({
     <form
       onSubmit={(event) => {
         event.preventDefault();
-        onSave(provider === null ? null : draft);
+        onSave(source === null ? null : draft);
       }}
     >
       <Field>
         <FieldLabel htmlFor={id}>{label}</FieldLabel>
         <div className="flex flex-wrap gap-2">
           <Select
-            value={provider ?? unset}
-            items={providerItems}
+            value={source === null ? unset : sourceKey(source)}
+            items={sourceItems}
             disabled={busy}
             onValueChange={(value) => {
-              setProvider(providerIds.find((candidate) => candidate === value) ?? null);
+              setSource(
+                sources.find((candidate) => sourceKey(candidate.source) === value)?.source ?? null,
+              );
               setModelId(null);
               setEffort(null);
             }}
@@ -107,14 +140,14 @@ export function ModelSelectionField({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {providerItems.map((item) => (
+              {sourceItems.map((item) => (
                 <SelectItem key={item.value} value={item.value}>
                   {item.label}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
-          {provider !== null && (
+          {source !== null && (
             <Select
               value={modelId ?? ""}
               items={modelItems}
@@ -178,7 +211,7 @@ export function ModelSelectionField({
             type="submit"
             disabled={
               busy ||
-              (provider === null ? saved === null : draft === null || sameSelection(draft, saved))
+              (source === null ? saved === null : draft === null || sameSelection(draft, saved))
             }
           >
             {busy && <Spinner />} <Trans comment="Button that saves a settings field">저장</Trans>
@@ -189,9 +222,9 @@ export function ModelSelectionField({
           {saved === null ? (
             unsetNote
           ) : (
-            <Trans comment="Which provider, model and reasoning effort a settings field runs on">
-              지금은 {ph({ provider: t(providerLabels[saved.provider]) })} /{" "}
-              {ph({ model: saved.model })} ({ph({ effort: saved.reasoningEffort })})로 실행합니다.
+            <Trans comment="Which provider (or compatible endpoint, by its label), model and reasoning effort a settings field runs on">
+              지금은 {ph({ provider: sourceLabel(sourceOf(saved)) })} / {ph({ model: saved.model })}{" "}
+              ({ph({ effort: saved.reasoningEffort })})로 실행합니다.
             </Trans>
           )}{" "}
           <Trans>저장하면 다음 실행부터 적용됩니다.</Trans>

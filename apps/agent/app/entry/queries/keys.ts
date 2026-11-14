@@ -21,6 +21,9 @@ export const appQueryKeys = {
     improvements: ["app", "global", "improvements"] as const,
     modelsRoot: ["app", "global", "models"] as const,
     models: (provider: string) => [...appQueryKeys.global.modelsRoot, provider] as const,
+    /** Under the compatible `models` key, so refreshing that list refreshes each endpoint's too. */
+    endpointModels: (account: string) =>
+      [...appQueryKeys.global.modelsRoot, "openai-compatible", "account", account] as const,
     projects: ["app", "global", "projects"] as const,
     /** Under `projects`, so whatever refreshes the list refreshes the archive too. */
     hiddenProjects: ["app", "global", "projects", "hidden"] as const,

@@ -200,9 +200,11 @@ export const ModelsApiHandlers = HttpApiBuilder.group(
     };
 
     return handlers.handleAll({
-      list: ({ query: { provider } }) =>
+      list: ({ query: { provider, account } }) =>
         Effect.gen(function* () {
-          const configured = yield* registry.get(provider);
+          const configured = yield* provider === "openai-compatible" && account !== undefined
+            ? registry.configurationOf({ provider, account })
+            : registry.get(provider);
           const status = yield* configured.auth.status;
           if (!AuthConnectionState.$is("signed-in")(status))
             return yield* Effect.fail({

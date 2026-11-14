@@ -1,7 +1,7 @@
 import { Function as EffectFunction } from "effect";
 import { queryOptions, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { ScanState } from "memory-agent/definitions";
-import { api, type ProviderId, type SubscriptionAccountProvider } from "../api";
+import { api, type CatalogTarget, type ProviderId, type SubscriptionAccountProvider } from "../api";
 import { compatibleClient, compatibleQueryKey } from "../navigation/compatible-client";
 import { appQueryKeys } from "./keys";
 
@@ -100,3 +100,19 @@ const useModelsQueryBody = (provider: ProviderId, enabled: boolean) =>
 export const useModelsQuery: {
   (enabled: boolean): (provider: ProviderId) => ReturnType<typeof useModelsQueryBody>;
 } & typeof useModelsQueryBody = EffectFunction.dual(2, useModelsQueryBody);
+
+/** The models a source offers: a subscription provider's, or one compatible endpoint's. */
+const catalogOptions = (target: CatalogTarget) =>
+  queryOptions({
+    queryKey:
+      target.provider === "openai-compatible"
+        ? appQueryKeys.global.endpointModels(target.account)
+        : appQueryKeys.global.models(target.provider),
+    queryFn: () =>
+      target.provider === "openai-compatible"
+        ? api.models(target.provider, target.account)
+        : api.models(target.provider),
+  });
+/** A source's models, once one is chosen. */
+export const useCatalogQuery = (target: CatalogTarget | null) =>
+  useQuery({ ...catalogOptions(target ?? { provider: "openai" }), enabled: target !== null });

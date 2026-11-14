@@ -17,7 +17,7 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Effect, Layer, Option, Schema } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
-import { ProviderId } from "../src/providers/contracts.ts";
+import { SubscriptionAccountProvider } from "../src/providers/contracts.ts";
 import { searchTuning, type SearchTuning } from "../src/memory/search.ts";
 import { copyDatabase, copyLayer } from "./copy-storage.ts";
 import { agreement, judgeCheck, judgePools } from "./search-set/judge.ts";
@@ -37,9 +37,9 @@ const model = Flag.String("model").pipe(
   Flag.withDescription("another model, by id: of the selected provider, or of --provider"),
   Flag.optional,
 );
-const provider = Flag.Literals("provider", ProviderId.literals).pipe(
+const provider = Flag.Literals("provider", SubscriptionAccountProvider.literals).pipe(
   Flag.withDescription(
-    "a provider other than the selected one, set up in the app; name its model with --model",
+    "a subscription provider other than the selected one, set up in the app; name its model with --model",
   ),
   Flag.optional,
 );
@@ -69,7 +69,7 @@ const tuning = Flag.String("tuning").pipe(
 /** The model, for the steps that ask it, beside the copy's database read-only. */
 const withModel = (
   storage: string,
-  provider: Option.Option<ProviderId>,
+  provider: Option.Option<SubscriptionAccountProvider>,
   model: Option.Option<string>,
 ) => Layer.merge(copyDatabase(storage), EvalModel.layer({ storage, provider, model }));
 

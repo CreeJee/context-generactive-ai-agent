@@ -27,6 +27,8 @@ import {
   AuthConnectionState,
   ModelUnavailable,
   type AgentModelRuntime,
+  type CompatibleModelSelection,
+  type ModelSelection,
   type ProviderConfiguration,
   type ProviderModel,
 } from "./contracts.ts";
@@ -34,7 +36,6 @@ import {
   compatibleAccountsOf,
   compatibleEndpointModel,
   compatibleHostLabel,
-  compatibleImageInput,
   CompatibleConnectionInput,
   CompatibleModelInput,
   LEGACY_COMPATIBLE_CREDENTIAL_ENTRY,
@@ -690,7 +691,7 @@ function makeOpenAICompatibleSettingsBody(
         load,
         (account) => account?.models.find((entry) => entry.id === modelId)?.imageInput === true,
       ).pipe(Effect.mapError(() => ProviderOperationFailed.make({ provider, operation: "model" }))),
-    cheapestEffort: <S extends ModelSelection>(selection: S) =>
+    cheapestEffort: (selection: ModelSelection) =>
       load.pipe(
         Effect.map((account) =>
           Option.liftPredicate(account, isTruthy).pipe(
@@ -727,23 +728,21 @@ function makeOpenAICompatibleSettingsBody(
           chosen: Option.liftPredicate(settings.model, isTruthy),
         }).pipe(
           Option.filter(() => settings.provider === provider),
-          Option.map(
-            ({ account, chosen }): CompatibleModelSelection => ({
-              provider,
-              account: account.id,
-              model: chosen,
-              reasoningEffort: Option.exists(
-                selectedEndpoint(settings),
-                (endpoint) =>
-                  endpoint.model === chosen &&
-                  model(endpoint, false).supportedReasoningEfforts.includes(
-                    settings.reasoningEffort ?? "default",
-                  ),
-              )
-                ? (settings.reasoningEffort ?? "default")
-                : "default",
-            }),
-          ),
+          Option.map(({ account, chosen }): CompatibleModelSelection => ({
+            provider,
+            account: account.id,
+            model: chosen,
+            reasoningEffort: Option.exists(
+              selectedEndpoint(settings),
+              (endpoint) =>
+                endpoint.model === chosen &&
+                model(endpoint, false).supportedReasoningEfforts.includes(
+                  settings.reasoningEffort ?? "default",
+                ),
+            )
+              ? (settings.reasoningEffort ?? "default")
+              : "default",
+          })),
           Option.getOrNull,
         ),
       ),
@@ -761,14 +760,12 @@ function makeOpenAICompatibleSettingsBody(
                     (settings) => model(settings, false).supportedReasoningEfforts.includes(effort),
                   ),
                 ),
-                Option.map(
-                  (found): CompatibleModelSelection => ({
-                    provider,
-                    account: found.id,
-                    model: id,
-                    reasoningEffort: effort,
-                  }),
-                ),
+                Option.map((found): CompatibleModelSelection => ({
+                  provider,
+                  account: found.id,
+                  model: id,
+                  reasoningEffort: effort,
+                })),
               ),
               () => ModelUnavailable.make({ provider, model: id, reasoningEffort: effort }),
             );
@@ -801,6 +798,7 @@ function makeOpenAICompatibleSettingsBody(
           Effect.filterOrFail(
             (found) =>
               selection.provider === provider &&
+              selection.account === pinned.id &&
               model(found, false).supportedReasoningEfforts.includes(selection.reasoningEffort),
             unavailable,
           ),
@@ -851,6 +849,17 @@ function makeOpenAICompatibleSettingsBody(
   });
   /** A runtime pinned to the settings saved now; resolve again to see later changes. */
   const runtime = Effect.map(read, runtimeFor);
+  /**
+   * The models of the endpoint a choice names, so a role keeps its endpoint when the selected one
+   * changes. Auth and the global selection stay those of the selected endpoint.
+   */
+  const configurationOf = (target: { readonly account: string }): ProviderConfiguration => ({
+    ...services,
+    models: { ...services.models, ...catalogOf(accountNamed(target.account)) },
+  });
+  /** A runtime pinned to the endpoint a choice names, as saved now. */
+  const runtimeOf = (selection: CompatibleModelSelection) =>
+    Effect.map(accountNamed(selection.account), runtimeFor);
   return {
     status,
     create,
@@ -864,6 +873,8 @@ function makeOpenAICompatibleSettingsBody(
     discover,
     services,
     runtime,
+    configurationOf,
+    runtimeOf,
   };
 }
 export type OpenAICompatibleSettingsApi = ReturnType<typeof makeOpenAICompatibleSettings>;

@@ -5460,7 +5460,7 @@ msgstr "지금 다시 연결"
 msgid "지금 진행"
 msgstr "지금 진행"
 
-#. Which provider, model and reasoning effort a settings field runs on
+#. Which provider (or compatible endpoint, by its label), model and reasoning effort a settings field runs on
 #: app/entry/settings/model-selection-field.tsx
 msgid "지금은 {provider} / {model} ({effort})로 실행합니다."
 msgstr "지금은 {provider} / {model} ({effort})로 실행합니다."

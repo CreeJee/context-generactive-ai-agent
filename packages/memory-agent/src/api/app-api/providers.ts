@@ -227,9 +227,12 @@ export class AccountsGroup extends HttpApiGroup.make("accounts")
 /** A provider's models and the global selection (`/api/models/*`). */
 export class ModelsGroup extends HttpApiGroup.make("models")
   .add(
-    /** The signed-in provider's catalog and the current selection. */
+    /**
+     * The signed-in provider's catalog and the current selection. A compatible `account` lists that
+     * endpoint's models instead of the selected one's.
+     */
     HttpApiEndpoint.get("list", "/api/models", {
-      query: { provider: ProviderId },
+      query: { provider: ProviderId, account: Schema.optional(Schema.NonEmptyString) },
       success: ModelCatalogView,
       error: [LoginRequired, ProviderUnavailable, ModelListFailed],
     }),

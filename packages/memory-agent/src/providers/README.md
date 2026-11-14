@@ -8,7 +8,7 @@
 
 - `ProviderId` / `ProviderVendor` / `SubscriptionAccountProvider` — 저장되는 공급자 ID 리터럴 스키마(`openai`, `anthropic`, `openai-compatible`)와 벤더·구독 계정 공급자 스키마
 - `providerConnection` / `ProviderConnection` / `NativeToolSupport` — 공급자 ID를 `subscription` 또는 `compatible-endpoint` 연결과 네이티브 도구 지원 여부로 한 번에 해석하는 TaggedUnion
-- `ModelSelection` / `SubscriptionModelSelection` / `ProviderModel` / `ModelCapabilities` / `CacheRetention` — 공급자+모델+reasoningEffort 선택, 카탈로그 모델, 입력 모달리티·도구 호출·추론 능력 스키마
+- `ModelSelection` / `SubscriptionModelSelection` / `CompatibleModelSelection` / `CatalogTarget` / `ProviderModel` / `ModelCapabilities` / `CacheRetention` — 공급자+모델+reasoningEffort 선택(호환 선택은 엔드포인트 계정 `account`도 담는 유니언), 카탈로그를 읽을 대상(공급자, 호환이면 계정), 카탈로그 모델, 입력 모달리티·도구 호출·추론 능력 스키마
 - `ProviderUnavailable` / `ModelUnavailable` / `ProviderOperationFailed` — 공급자 계층 TaggedError(operation: auth|catalog|model)
 - `AuthConnectionState` / `AuthStatus` / `AuthProvider` — signed-out|pending|signed-in|error 로그인 상태 TaggedEnum과 status/connect/cancel/disconnect 인증 수명주기 인터페이스. 타입은 비공개 TaggedUnion Schema에서 꺼낸다
 - `ProviderAuthState` — 브라우저가 받는 `AuthConnectionState` Schema. pending의 `authorizationUrl`이 `authUrl`이다
@@ -16,12 +16,12 @@
 - `ActiveProvider` — GlobalConfig와 ProviderRegistry로 저장된 공급자/모델을 resolve하고 models/runtime/auth/authFor를 제공하는 Context.Service(`ActiveProvider.layer`). 역할별 모델: `chosenFor(role)`(그 역할에 고른 모델, 없으면 null), `selectedFor(role)`(Goal 역할만: 고른 모델, 없으면 `selected`), `chooseFor(role, selection | null)`(공급자 목록에 그 모델·추론 단계가 있을 때만 저장, null이면 지움). `role`은 `ModelRole`이다
 - `AgentRole` — Goal 역할 `planner`·`executor`·`verifier` 리터럴 Schema(`contracts.ts`)
 - `ModelRole` — 사용자가 모델을 따로 고를 수 있는 역할: `AgentRole`과 `find_skill`의 `skillRouter` 리터럴 Schema(`contracts.ts`)
-- `ProviderRegistry` / `ProviderRegistryApi` / `providerRegistryFrom` — 공급자별 configuration·runtime 조회 레지스트리 서비스(registry.ts; 시그니처만 확인)
+- `ProviderRegistry` / `ProviderRegistryApi` / `providerRegistryFrom` — 공급자 configuration 조회(`get(provider)`), 선택이 보는 configuration(`configurationOf(target)`)과 runtime(`runtime(selection)`) 조회 레지스트리 서비스(registry.ts). 호환 선택은 그 선택이 적은 계정의 모델 목록과 runtime을 받는다
 - `SubscriptionProviderRegistry` / `AccountSubscriptionProviderRegistry` — 구독 공급자 레지스트리 구성(subscriptions.ts; 이름만 확인)
 - `createSubscriptionProvider` / `parseSubscriptionCatalog` / `ProductOAuthClient` — 구독 OAuth 공급자 configuration 생성과 구독 카탈로그 페이지 파싱(subscription-provider.ts; 시그니처만 확인)
 - `createSubscriptionRuntime` / `createSubscriptionRuntimeImplementation` — 구독 계정 공급자용 `AgentModelRuntime` 생성(subscription-runtime.ts; 시그니처만 확인)
 - `OpenAICompatibleSettings` / `makeOpenAICompatibleSettings` / `OpenAICompatibleFailed` — OpenAI 호환 엔드포인트 계정·키·모델 설정 서비스(openai-compatible.ts; 시그니처만 확인)
-- `CompatibleAccount` / `CompatibleAccounts` / `OpenAICompatibleConfiguration` / `CompatibleReasoning` / `compatibleAccountsOf` / `compatibleEndpointModel` / `compatibleToolCalling` / `OPENAI_COMPATIBLE_DEFAULT_CONTEXT_WINDOW` — 호환 엔드포인트 설정 스키마와 헬퍼(openai-compatible-config.ts; 이름·시그니처만 확인)
+- `CompatibleAccount` / `CompatibleAccounts` / `OpenAICompatibleConfiguration` / `CompatibleReasoning` / `compatibleAccountsOf` / `compatibleEndpointModel` / `compatibleToolCalling`(선택이 적은 계정·모델 기준) / `OPENAI_COMPATIBLE_DEFAULT_CONTEXT_WINDOW` — 호환 엔드포인트 설정 스키마와 헬퍼(openai-compatible-config.ts; 이름·시그니처만 확인)
 - `readCompatibleReasoning` / `CompatibleModelPage` — 호환 서버 `/models` 페이지에서 모델의 reasoning 레벨을 읽는 dual 함수
 - `CrossProviderMediaConsent` / `makeCrossProviderMediaConsent` / `decideCrossProviderMediaConsent` / `crossProviderMediaConsentKey` / `CrossProviderMediaConsentStoreFailed` — 교차 공급자 미디어 실행 동의(always|ask|disabled) 판정·저장 서비스
 - `ImageFeature` / `makeImageFeature` / `decideImageContext` / `imageProviderWorkflowPrompt` — 이미지 생성 사용자 설정과 턴 단위 이미지 컨텍스트 게이트. 설정 값 `ImageFeatureStatus`는 `contracts.ts`의 Schema다
@@ -39,7 +39,7 @@
 ## Invariants
 
 - `ProviderId`는 저장되는 연결 ID다. `openai-compatible`은 OpenAI 벤더 ID가 아니다. 소비자는 `providerConnection`으로 한 번 해석한 뒤 연결 종류와 `nativeTools`로 분기해야 한다(contracts.ts 주석).
-- 모델은 언제나 공급자와 함께 식별한다(`ModelSelection`에 provider 필수).
+- 모델은 언제나 공급자와 함께 식별한다(`ModelSelection`에 provider 필수). 호환 모델은 엔드포인트 계정까지 함께 식별한다(`account` 필수). 역할 모델은 하단 전환기에서 고른 호환 계정이 바뀌어도 자기 계정에서 돈다. 전역 선택(`models.selected`)은 그 시점에 선택된 호환 계정을 `account`로 채운다.
 - `AuthProvider`에는 의도적으로 토큰·자격증명 getter가 없다. 추가하지 말 것.
 - `ShownFailure`는 앱의 문구만 담고 공급자 원문 텍스트를 절대 담지 않는다.
 - `RunModel.historyKey`는 자격증명을 보관하지 않고 연결 ID만 고정한다. `RunModel.source`는 모델이 쓰는 모든 메시지에 기록되고 replay가 비교한다.

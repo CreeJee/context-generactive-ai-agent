@@ -141,36 +141,24 @@ export function compatibleAccountsOf(settings: {
 export const selectedCompatibleAccount = (accounts: CompatibleAccounts) =>
   accounts.accounts.find((account) => account.id === accounts.selected) ?? null;
 
-/** Whether the selected endpoint registered this model with tool calling on. */
+/** The account and model a compatible choice names. */
+export interface CompatibleChoice {
+  readonly account: string;
+  readonly model: string;
+}
+
+/** Whether the chosen endpoint registered the chosen model with tool calling on. */
 export const compatibleToolCalling: {
-  (modelId: string): (settings: Parameters<typeof compatibleAccountsOf>[0]) => boolean;
+  (choice: CompatibleChoice): (settings: Parameters<typeof compatibleAccountsOf>[0]) => boolean;
 } & typeof compatibleToolCallingBody = EffectFunction.dual(2, compatibleToolCallingBody);
 function compatibleToolCallingBody(
   settings: Parameters<typeof compatibleAccountsOf>[0],
-  modelId: string,
+  choice: CompatibleChoice,
 ) {
   return (
-    selectedCompatibleAccount(compatibleAccountsOf(settings))?.models.find(
-      (model) => model.id === modelId,
-    )?.toolCalling === true
-  );
-}
-
-/**
- * Whether the selected endpoint's registered model accepts image parts. Absent settings read as
- * off, as every model written before the setting did (decisions.md 2026-11-02).
- */
-export const compatibleImageInput: {
-  (modelId: string): (settings: Parameters<typeof compatibleAccountsOf>[0]) => boolean;
-} & typeof compatibleImageInputBody = EffectFunction.dual(2, compatibleImageInputBody);
-function compatibleImageInputBody(
-  settings: Parameters<typeof compatibleAccountsOf>[0],
-  modelId: string,
-) {
-  return (
-    selectedCompatibleAccount(compatibleAccountsOf(settings))?.models.find(
-      (model) => model.id === modelId,
-    )?.imageInput === true
+    compatibleAccountsOf(settings)
+      .accounts.find((account) => account.id === choice.account)
+      ?.models.find((model) => model.id === choice.model)?.toolCalling === true
   );
 }
 

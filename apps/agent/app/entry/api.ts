@@ -46,6 +46,7 @@ import type {
   AgentLinkState as AgentLinkStateCase,
   AgentTrustState as AgentTrustStateCase,
   Attachment,
+  CatalogTarget,
   BoardEdit as BoardEditCase,
   BoardEditResult,
   BoardIntent as BoardIntentCase,
@@ -245,6 +246,7 @@ export type {
   WorkflowPhase,
   WorkflowState,
   AgentRole,
+  CatalogTarget,
 };
 
 /**
@@ -555,8 +557,9 @@ export const api = {
   accountQuota: (provider: SubscriptionAccountProvider) =>
     appCall((client) => client.accounts.quota({ query: { provider } })),
 
-  models: (provider: ProviderId) =>
-    appCall((client) => client.models.list({ query: { provider } })),
+  /** A provider's models; a compatible `account` lists that endpoint's, not the selected one's. */
+  models: (provider: ProviderId, account?: string) =>
+    appCall((client) => client.models.list({ query: { provider, account } })),
   selectModel: (model: string, reasoningEffort: string | undefined, provider: ProviderId) =>
     appCall((client) =>
       client.models.select({ params: { model }, payload: { provider, reasoningEffort } }),

@@ -173,7 +173,7 @@ const make = Effect.gen(function* () {
 
     const toolCalling =
       selection.provider !== "openai-compatible" ||
-      compatibleToolCalling(yield* config.read, selection.model);
+      compatibleToolCalling(yield* config.read, selection);
     const system = [
       btwInstructions,
       // Only the messages the prompt shows are read, not the parent's tool calls and results.

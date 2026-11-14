@@ -2084,7 +2084,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         ];
         const tools =
           selection.provider === "openai-compatible" &&
-          !compatibleToolCalling(yield* config.read, selection.model)
+          !compatibleToolCalling(yield* config.read, selection)
             ? []
             : offered;
         // The page sends only its new user turn; a turn the thread already holds is not added again.

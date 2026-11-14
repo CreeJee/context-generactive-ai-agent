@@ -6,7 +6,12 @@ import { path } from "./runtime/synchronous-path.ts";
 const { join } = path;
 import { optionalProperty } from "./optional-property.ts";
 import { Effect, Layer } from "effect";
-import { ProviderUnavailable, type ProviderId } from "./providers/contracts.ts";
+import {
+  ProviderUnavailable,
+  type CatalogTarget,
+  type ModelSelection,
+  type ProviderId,
+} from "./providers/contracts.ts";
 import { AgentChat } from "./agent/chat.ts";
 import { BtwChat } from "./btw/chat.ts";
 import { ProjectImprovement } from "./improve/discovery.ts";
@@ -250,10 +255,20 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
             provider === compatible.provider
               ? Effect.succeed(compatible)
               : subscriptions.get(provider),
-          runtime: (provider: ProviderId) =>
-            provider === compatible.provider
-              ? settings.runtime.pipe(Effect.mapError(() => ProviderUnavailable.make({ provider })))
-              : subscriptions.runtime(provider),
+          configurationOf: (target: CatalogTarget) =>
+            target.provider === "openai-compatible"
+              ? Effect.succeed(settings.configurationOf(target))
+              : subscriptions.configurationOf(target),
+          runtime: (selection: ModelSelection) =>
+            selection.provider === "openai-compatible"
+              ? settings
+                  .runtimeOf(selection)
+                  .pipe(
+                    Effect.mapError(() =>
+                      ProviderUnavailable.make({ provider: selection.provider }),
+                    ),
+                  )
+              : subscriptions.runtime(selection),
         };
       }),
     ).pipe(Layer.provide(AccountSubscriptionProviderRegistry), Layer.provide(compatibleSettings));

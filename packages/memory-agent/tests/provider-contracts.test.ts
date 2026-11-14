@@ -99,6 +99,12 @@ describe("provider-neutral contracts", () => {
         runtimes: [openai.runtime],
       });
 
+      const openaiSelection = {
+        provider: "openai",
+        model: "gpt-5",
+        reasoningEffort: "medium",
+      } as const;
+      const anthropicSelection = { ...openaiSelection, provider: "anthropic" } as const;
       expect(yield* registry.runtime(openaiSelection)).toBe(openai.runtime);
       const missing = yield* Effect.result(registry.runtime(anthropicSelection));
       expect(Result.isFailure(missing) && missing.failure).toEqual(

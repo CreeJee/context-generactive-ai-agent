@@ -141,7 +141,16 @@ const provider = (providerId: ProviderId, list: ModelCatalog["list"]): ProviderC
     acceptsImages: () => Effect.succeed(false),
     cheapestEffort: (selection) => Effect.succeed(selection),
     select: (selected) =>
-      Effect.succeed({ provider: providerId, model: selected, reasoningEffort: "medium" }),
+      Effect.succeed(
+        providerId === "openai-compatible"
+          ? {
+              provider: providerId,
+              account: "endpoint",
+              model: selected,
+              reasoningEffort: "medium",
+            }
+          : { provider: providerId, model: selected, reasoningEffort: "medium" },
+      ),
   },
 });
 

@@ -123,6 +123,8 @@ export { attachmentIdOf, attachmentUrl } from "./attachments/urls.ts";
 export { JsonValue, type JsonValue as Json } from "./json.ts";
 export {
   AgentRole,
+  type CatalogTarget,
+  CompatibleModelSelection,
   ModelCapabilities,
   ModelSelection,
   ModelUnavailable,

@@ -3,6 +3,8 @@ import { Iterable, MutableHashMap, Option, Context, Effect, Layer } from "effect
 import {
   ProviderUnavailable,
   type AgentModelRuntime,
+  type CatalogTarget,
+  type ModelSelection,
   type ProviderConfiguration,
   type ProviderId,
   type SubscriptionAccountProvider,
@@ -17,7 +19,17 @@ export type SubscriptionDependencyResolver = (
 export interface ProviderRegistryApi {
   readonly providers: ReadonlyArray<ProviderId>;
   readonly get: (provider: ProviderId) => Effect.Effect<ProviderConfiguration, ProviderUnavailable>;
-  readonly runtime: (provider: ProviderId) => Effect.Effect<AgentModelRuntime, ProviderUnavailable>;
+  /**
+   * The provider as a selection sees it: a compatible one lists the models of the endpoint account
+   * it names, not of the selected one.
+   */
+  readonly configurationOf: (
+    target: CatalogTarget,
+  ) => Effect.Effect<ProviderConfiguration, ProviderUnavailable>;
+  /** The runtime a selection runs on; a compatible one runs on the endpoint account it names. */
+  readonly runtime: (
+    selection: ModelSelection,
+  ) => Effect.Effect<AgentModelRuntime, ProviderUnavailable>;
   /** Central dependencies only: resolving does not select an account or acquire a run lease. */
   readonly subscriptionDependencies?: SubscriptionDependencyResolver;
 }
@@ -48,19 +60,21 @@ const providerRegistryFromBody = (
   const runtimeByProvider = MutableHashMap.fromIterable(
     Iterable.map(runtimes, (runtime) => [runtime.provider, runtime] as const),
   );
+  const get = (provider: ProviderId) => {
+    const configuration = Option.getOrUndefined(MutableHashMap.get(byProvider, provider));
+    return isTruthy(configuration)
+      ? Effect.succeed(configuration)
+      : Effect.fail(ProviderUnavailable.make({ provider }));
+  };
   return {
     providers: [...MutableHashMap.keys(byProvider)],
     subscriptionDependencies: (provider) =>
       MutableHashMap.has(byProvider, provider) && subscriptionDependencies !== undefined
         ? subscriptionDependencies(provider)
         : Effect.fail(ProviderUnavailable.make({ provider })),
-    get: (provider) => {
-      const configuration = Option.getOrUndefined(MutableHashMap.get(byProvider, provider));
-      return isTruthy(configuration)
-        ? Effect.succeed(configuration)
-        : Effect.fail(ProviderUnavailable.make({ provider }));
-    },
-    runtime: (provider) => {
+    get,
+    configurationOf: ({ provider }) => get(provider),
+    runtime: ({ provider }) => {
       const runtime = Option.getOrUndefined(MutableHashMap.get(runtimeByProvider, provider));
       return isTruthy(runtime)
         ? Effect.succeed(runtime)

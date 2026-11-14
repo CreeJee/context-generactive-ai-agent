@@ -75,7 +75,7 @@
 - foundation 계층의 조립 순서는 다음과 같다. `OAuthProfiles.layer`에 `OAuthKeychain.keychain`, `defectReports`, `GlobalConfig.layer`를 차례로 `provideMerge`한다. `GlobalConfig.layer`에는 `StorageRoot.layer(storageRoot)`, `Database.layer(join(storageRoot, "agent.db"), options.openDatabase)`, `ExecutionAdmission.layer()`를 merge하고 `nodePlatformLayer`를 provideMerge한다. DB 파일 위치는 항상 `<storageRoot>/agent.db`다
 - 위 계층 어디의 defect든, 설정되어 있으면 report 페이지가 쓰는 webhook으로 보고된다. `defectReportsLayer`에는 `ReportDelivery.layer()`와 `SecretRedactor.layer`를 제공한다
 - 주석 "One store per owner: the cleanup schedule shares it with the card queue."에 따라 `persistedQueueStoreLayer()`는 한 번만 만든다. `persistedQueueCleanupLayer()`와 kanban 묶음은 같은 store 인스턴스를 공유해야 한다
-- 기본 `providerRegistry`는 `AccountSubscriptionProviderRegistry` 목록 끝에 OpenAI 호환 provider를 덧붙인다. compatible provider id의 `get`은 `settings.services`를 돌려준다. `runtime` 실패는 `ProviderUnavailable.make({ provider })`로 매핑한다
+- 기본 `providerRegistry`는 `AccountSubscriptionProviderRegistry` 목록 끝에 OpenAI 호환 provider를 덧붙인다. compatible provider id의 `get`은 `settings.services`(선택된 계정)를 돌려준다. 호환 선택의 `configurationOf`·`runtime`은 그 선택이 적은 계정의 것(`settings.configurationOf`·`settings.runtimeOf`)이고, `runtime` 실패는 `ProviderUnavailable.make({ provider })`로 매핑한다
 - `ModelFeatureFlags.layer`는 `providerToolDescriptors`의 id 목록으로 만든다. 기본 `ProviderToolPolicy.featureFlagLayer`와 `ProviderToolRuntime.layer`는 같은 `providerToolRegistry`와 `modelFeatureFlags`를 공유한다
 - 보안 기본값: `providerToolRegistry`는 도구를 실행하거나 정책을 강제하지 않는다. `providerToolRuntime`은 명시적 입력 없이 도구를 노출하지 않는다. `directImageExecutor`는 production에서 명시적으로 구성하기 전까지 unavailable이다
 - 옵션 기본값: `interpretAutomatically`, `summarizeAutomatically`, `sweepSecrets`는 true다. `secrets`는 OS 키체인을 쓴다. 임포트는 실제 home을 계속 따라간다. `embedder`는 로컬 임베딩 모델을 쓴다

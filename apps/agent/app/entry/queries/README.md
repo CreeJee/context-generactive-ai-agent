@@ -6,13 +6,14 @@
 
 ## Interface
 
-- `appQueryKeys` — 모든 React Query 키의 단일 정의. `root`(`["app"]`), `global.*`(auth, accountsRoot/accounts(provider), accountQuota(provider), imports, embedding, downloads, interpretation, imageSettings, kagi, conversation, recall, kanban, skillRouter, modelsRoot/models(provider), projects, hiddenProjects), `project.*`(root, sessions, mcp, agents, skills, decisions, boards, running, kanban), `session.*`(root, runState, queue, subagents, approvals, trace, traceTask(trace 키 아래), btw, board, decisions, kanban)
+- `appQueryKeys` — 모든 React Query 키의 단일 정의. `root`(`["app"]`), `global.*`(auth, accountsRoot/accounts(provider), accountQuota(provider), imports, embedding, downloads, interpretation, imageSettings, kagi, conversation, recall, kanban, skillRouter, modelsRoot/models(provider)/endpointModels(account)(호환 `models` 키 아래), projects, hiddenProjects), `project.*`(root, sessions, mcp, agents, skills, decisions, boards, running, kanban), `session.*`(root, runState, queue, subagents, approvals, trace, traceTask(trace 키 아래), btw, board, decisions, kanban)
 - `AppQueryKey` — 쿼리 키 타입 `readonly unknown[]`
 - `globalQueries` — global 범위 `queryOptions` 팩토리: auth(60초 `refetchInterval`), accounts, compatibleAccounts(`compatibleQueryKey`+`compatibleClient.list`), accountQuota, projects, hiddenProjects, imports, embedding, downloads, interpretation, imageSettings, kagi, conversation, recall, kanban, skillRouter, models
 - `projectQueries` — project 범위 `queryOptions` 팩토리: sessions(active와 archived를 `Effect.all`로 함께 읽어 `{active, archived}` 반환), mcp, agents, skills, decisions, boards, running, kanban
 - `sessionQueries` — session 범위 `queryOptions` 팩토리: runState(holder 인자), queue, subagents, approvals, trace, traceTask, board, decisions, kanban, btw
 - `useAuthQuery` / `useCompatibleAccountsQuery` / `useProjectsQuery` / `useHiddenProjectsQuery` / `useImageSettingsQuery` — global 범위의 일반 `useQuery` 훅
 - `useAccountsQuery` / `useAccountQuotaQuery` / `useModelsQuery` — `(provider, enabled)` 형태의 global 훅. `Function.dual(2, ...)`로 data-last `(enabled)(provider)` 호출도 지원한다
+- `useCatalogQuery(target | null)` — 구독 공급자나 호환 계정 하나(`CatalogTarget`)의 모델 목록. 호환 계정은 선택된 계정과 상관없이 그 계정의 목록을 `endpointModels(account)` 키로 읽는다. null이면 읽지 않는다
 - `useSuspenseImageSettingsQuery` / `useImportsQuery` / `useEmbeddingQuery` / `useKagiQuery` / `useConversationSettingsQuery` / `useRecallSettingsQuery` / `useKanbanSettingsQuery` / `useSkillRouterQuery` — 설정 페이지용 `useSuspenseQuery` 훅
 - `useModelDownloadsQuery` — 로컬 모델 다운로드 목록. 사이드바와 대기 중인 턴이 늘 읽으므로 suspense 없이 읽고, 읽기 전이나 실패하면 데이터가 없다
 - `useInterpretationQuery` — 기억 해석이 실패로 남긴 발언 수(`{failed}`). 실패한 발언이 있을 때만 보이므로 suspense 없이 읽고, 읽기 전이나 실패하면 데이터가 없다. global `interpretation` 이벤트로 다시 읽는다

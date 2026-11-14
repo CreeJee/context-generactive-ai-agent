@@ -52,13 +52,33 @@ export function providerConnection(provider: ProviderId): ProviderConnection {
   return connections[provider];
 }
 
-/** A model is never identified without its provider. */
-export const ModelSelection = Schema.Struct({
-  provider: ProviderId,
+export const SubscriptionModelSelection = Schema.Struct({
+  provider: SubscriptionAccountProvider,
   model: Schema.String,
   reasoningEffort: Schema.String,
 });
+export type SubscriptionModelSelection = typeof SubscriptionModelSelection.Type;
+
+/**
+ * A compatible model names the endpoint account it is registered on, so a role keeps its endpoint
+ * when the selected account changes.
+ */
+export const CompatibleModelSelection = Schema.Struct({
+  provider: Schema.Literal("openai-compatible"),
+  account: Schema.NonEmptyString,
+  model: Schema.String,
+  reasoningEffort: Schema.String,
+});
+export type CompatibleModelSelection = typeof CompatibleModelSelection.Type;
+
+/** A model is never identified without its provider, and a compatible one without its account. */
+export const ModelSelection = Schema.Union([SubscriptionModelSelection, CompatibleModelSelection]);
 export type ModelSelection = typeof ModelSelection.Type;
+
+/** What a catalog is read for: a provider, and for a compatible one the endpoint account. */
+export type CatalogTarget =
+  | Pick<SubscriptionModelSelection, "provider">
+  | Pick<CompatibleModelSelection, "provider" | "account">;
 
 /**
  * The parts a Goal's work is split into: the planner keeps the Goal and writes Plans, the executor
@@ -73,12 +93,6 @@ export type AgentRole = typeof AgentRole.Type;
  */
 export const ModelRole = Schema.Literals([...AgentRole.literals, "skillRouter"]);
 export type ModelRole = typeof ModelRole.Type;
-
-export const SubscriptionModelSelection = Schema.Struct({
-  ...ModelSelection.fields,
-  provider: SubscriptionAccountProvider,
-});
-export type SubscriptionModelSelection = typeof SubscriptionModelSelection.Type;
 
 export const ModelCapabilities = Schema.Struct({
   inputModalities: Schema.Array(Schema.Literals(["text", "image"])),

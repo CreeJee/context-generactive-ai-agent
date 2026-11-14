@@ -57,7 +57,7 @@ const make = Effect.gen(function* () {
     selection: ModelSelection | null,
   ) {
     if (selection !== null) {
-      const { models } = yield* registry.get(selection.provider);
+      const { models } = yield* registry.configurationOf(selection);
       yield* Effect.fromOption(
         Arr.findFirst(
           yield* models.list,
@@ -74,8 +74,8 @@ const make = Effect.gen(function* () {
 
   const resolve = (selection: ModelSelection) =>
     Effect.gen(function* () {
-      const configuration = yield* registry.get(selection.provider);
-      const runtime = yield* registry.runtime(selection.provider);
+      const configuration = yield* registry.configurationOf(selection);
+      const runtime = yield* registry.runtime(selection);
       return {
         selection,
         services: { ...configuration, runtime },

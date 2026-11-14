@@ -61,8 +61,9 @@ const guardedRegistry = Layer.effect(
     return {
       providers: upstream.providers,
       get: upstream.get,
-      runtime: (provider: "openai" | "anthropic" | "openai-compatible") =>
-        Effect.map(upstream.runtime(provider), (runtime) => ({
+      configurationOf: upstream.configurationOf,
+      runtime: (chosen: ModelSelection) =>
+        Effect.map(upstream.runtime(chosen), (runtime) => ({
           ...runtime,
           model: (selection: ModelSelection, run: ModelRun) =>
             Effect.map(
