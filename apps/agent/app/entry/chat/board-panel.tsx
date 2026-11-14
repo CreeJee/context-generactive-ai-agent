@@ -57,9 +57,11 @@ import {
   startErrorText,
   type ActiveKanban,
   KanbanRunningBadge,
+  PlannerStalledBadge,
+  ReplanWaitBadge,
   type BoardPlan,
 } from "./board/board-surface";
-import { cardStatusLabels } from "./board/board-moves";
+import { cardStatusLabels, goalDecisionCardId } from "./board/board-moves";
 import { authorLabel, StatusIcon } from "./board/card-face";
 import { verdictText, waitsForUser } from "./board/hold-reason";
 import { BoardShortcuts } from "./board/kanban-board";
@@ -179,23 +181,6 @@ export function BoardTally({
   );
 }
 
-/** The cards whose replan the planner left undone: they wait for the user. */
-function ReplanWaitBadge({ loop }: { readonly loop: ActiveKanban }) {
-  const { t } = useLingui();
-  const waiting = Arr.countBy(loop.cards, (card) => waitsForUser(card.reason));
-  if (waiting === 0) return null;
-  return (
-    <Badge
-      variant="outline"
-      title={t`계속 실패해 다시 짜 달라고 요청한 카드를 Plan 작성자가 고치지 않았습니다. 카드를 고치거나 다시 대기열에 넣어 주십시오.`}
-    >
-      <Trans comment="Badge: blocked cards the planner did not replan, waiting for the user">
-        확인 필요 카드 {waiting}
-      </Trans>
-    </Badge>
-  );
-}
-
 /**
  * Opens the Plan's board wide over the page (`?board=1`), at the card it last showed; a card opens
  * in a peek panel beside it (`?card=…`, as the inbox links and the card rows do). The board lives
@@ -312,16 +297,7 @@ export function WorkflowBoard({
       {(loop !== null || switchable || view.pendingChanges.length > 0) && (
         <div className="flex flex-wrap items-center gap-1.5 px-1.5">
           {loop !== null && <KanbanRunningBadge paused={loop.goalPaused} />}
-          {loop !== null && loop.plannerStalled && (
-            <Badge
-              variant="outline"
-              title={t`Plan 작성자가 연속으로 카드를 고쳤지만 새로 충족된 결과가 없어 자동 Plan 작성을 멈췄습니다. 이미 맡은 카드는 계속 실행됩니다. 대화에서 방향을 알려 주면 다시 Plan을 짭니다.`}
-            >
-              <Trans comment="Badge: the automatic Plan writer has stopped">
-                자동 Plan 작성 멈춤
-              </Trans>
-            </Badge>
-          )}
+          {loop !== null && loop.plannerStalled && <PlannerStalledBadge />}
           {loop !== null && <ReplanWaitBadge loop={loop} />}
           {view.pendingChanges.length > 0 && (
             <Badge variant="outline">
@@ -486,16 +462,7 @@ function BoardSheet({
           <SheetDescription>
             <span className="flex flex-wrap items-center gap-2">
               {loop !== null && <KanbanRunningBadge paused={loop.goalPaused} />}
-              {loop !== null && loop.plannerStalled && (
-                <Badge
-                  variant="outline"
-                  title={t`Plan 작성자가 연속으로 카드를 고쳤지만 새로 충족된 결과가 없어 자동 Plan 작성을 멈췄습니다. 이미 맡은 카드는 계속 실행됩니다. 대화에서 방향을 알려 주면 다시 Plan을 짭니다.`}
-                >
-                  <Trans comment="Badge: the automatic Plan writer has stopped">
-                    자동 Plan 작성 멈춤
-                  </Trans>
-                </Badge>
-              )}
+              {loop !== null && loop.plannerStalled && <PlannerStalledBadge />}
               {loop !== null && <ReplanWaitBadge loop={loop} />}
               {loop !== null && loop.loop._tag !== "Healthy" && (
                 <LoopHealthStatus
@@ -689,9 +656,6 @@ function BoardSheet({
     </Sheet>
   );
 }
-
-/** The card id Goal-level requests carry (memory-agent `goalDecisionCardId`). */
-const goalDecisionCardId = "@goal";
 
 /** Why the scheduler stopped merging a Goal on its own. */
 const stoppedMergeTexts = {

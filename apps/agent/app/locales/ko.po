@@ -966,8 +966,7 @@ msgstr "Plan 작성자가 Plan을 다시 준비하면 바로 이어서 실행합
 msgid "Plan 작성자가 실행 중에 더한 카드라 승인을 기다립니다. 승인하기 전에는 실행하지 않습니다."
 msgstr "Plan 작성자가 실행 중에 더한 카드라 승인을 기다립니다. 승인하기 전에는 실행하지 않습니다."
 
-#: app/entry/chat/board-panel.tsx
-#: app/entry/chat/board/project-board.tsx
+#: app/entry/chat/board/board-surface.tsx
 msgid "Plan 작성자가 연속으로 카드를 고쳤지만 새로 충족된 결과가 없어 자동 Plan 작성을 멈췄습니다. 이미 맡은 카드는 계속 실행됩니다. 대화에서 방향을 알려 주면 다시 Plan을 짭니다."
 msgstr "Plan 작성자가 연속으로 카드를 고쳤지만 새로 충족된 결과가 없어 자동 Plan 작성을 멈췄습니다. 이미 맡은 카드는 계속 실행됩니다. 대화에서 방향을 알려 주면 다시 Plan을 짭니다."
 
@@ -1347,7 +1346,7 @@ msgstr "계속 가져오기"
 msgid "계속 실패해 Plan 작성자에게 카드를 다시 짜 달라고 요청했습니다: {failure}"
 msgstr "계속 실패해 Plan 작성자에게 카드를 다시 짜 달라고 요청했습니다: {failure}"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/board-surface.tsx
 msgid "계속 실패해 다시 짜 달라고 요청한 카드를 Plan 작성자가 고치지 않았습니다. 카드를 고치거나 다시 대기열에 넣어 주십시오."
 msgstr "계속 실패해 다시 짜 달라고 요청한 카드를 Plan 작성자가 고치지 않았습니다. 카드를 고치거나 다시 대기열에 넣어 주십시오."
 
@@ -5059,10 +5058,8 @@ msgstr "자동 merge 멈춤"
 
 #. Badge: the automatic Plan writer has stopped
 #. Badge: the automatic Plan writer has stopped
-#. Badge: the automatic Plan writer has stopped
-#. Badge: the automatic Plan writer has stopped
 #: app/entry/chat/board-panel.tsx
-#: app/entry/chat/board/project-board.tsx
+#: app/entry/chat/board/board-surface.tsx
 msgid "자동 Plan 작성 멈춤"
 msgstr "자동 Plan 작성 멈춤"
 
@@ -6525,7 +6522,7 @@ msgid "확인 필요 카드 {replanWaits}"
 msgstr "확인 필요 카드 {replanWaits}"
 
 #. Badge: blocked cards the planner did not replan, waiting for the user
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/board-surface.tsx
 msgid "확인 필요 카드 {waiting}"
 msgstr "확인 필요 카드 {waiting}"
 

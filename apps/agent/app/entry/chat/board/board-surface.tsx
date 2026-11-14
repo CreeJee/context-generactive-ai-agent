@@ -1,7 +1,7 @@
 import { t } from "@lingui/core/macro";
 import { Trans } from "@lingui/react/macro";
 import { useEffect, useState } from "react";
-import { Effect, Fiber } from "effect";
+import { Array as Arr, Effect, Fiber } from "effect";
 import { Alert, AlertDescription } from "../../../components/ui/alert";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -40,7 +40,7 @@ import {
 } from "./board-moves";
 import type { CardSignals } from "./card-face";
 import { CardPeek, Peek, type TransferTarget } from "./card-peek";
-import { holdReasonText } from "./hold-reason";
+import { holdReasonText, waitsForUser } from "./hold-reason";
 import { KanbanBoard } from "./kanban-board";
 
 export type ActiveKanban = Extract<KanbanView, { readonly active: true }>;
@@ -62,6 +62,35 @@ export function KanbanRunningBadge({ paused }: { readonly paused: boolean }) {
     </Badge>
   );
 }
+
+/** The board stopped waking its planner; the badge's title says what still runs. */
+export function PlannerStalledBadge() {
+  return (
+    <Badge
+      variant="outline"
+      title={t`Plan 작성자가 연속으로 카드를 고쳤지만 새로 충족된 결과가 없어 자동 Plan 작성을 멈췄습니다. 이미 맡은 카드는 계속 실행됩니다. 대화에서 방향을 알려 주면 다시 Plan을 짭니다.`}
+    >
+      <Trans comment="Badge: the automatic Plan writer has stopped">자동 Plan 작성 멈춤</Trans>
+    </Badge>
+  );
+}
+
+/** The cards whose replan the planner left undone: they wait for the user. */
+export function ReplanWaitBadge({ loop }: { readonly loop: ActiveKanban }) {
+  const waiting = Arr.countBy(loop.cards, (card) => waitsForUser(card.reason));
+  if (waiting === 0) return null;
+  return (
+    <Badge
+      variant="outline"
+      title={t`계속 실패해 다시 짜 달라고 요청한 카드를 Plan 작성자가 고치지 않았습니다. 카드를 고치거나 다시 대기열에 넣어 주십시오.`}
+    >
+      <Trans comment="Badge: blocked cards the planner did not replan, waiting for the user">
+        확인 필요 카드 {waiting}
+      </Trans>
+    </Badge>
+  );
+}
+
 export type BoardPlan = NonNullable<BoardView["plan"]>;
 
 /** One Plan on the surface: a conversation's board with its loop and its waiting decisions. */

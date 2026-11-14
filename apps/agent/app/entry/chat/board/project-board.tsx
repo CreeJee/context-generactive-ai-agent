@@ -39,6 +39,7 @@ import {
   BoardSurface,
   editErrorText,
   KanbanRunningBadge,
+  PlannerStalledBadge,
   type SurfaceBoard,
 } from "./board-surface";
 import { BoardShortcuts } from "./kanban-board";
@@ -414,14 +415,7 @@ function ConversationRow({
       ) : (
         <Badge variant="outline">{t(planStatusLabels[row.plan.status])}</Badge>
       )}
-      {loop !== null && loop.plannerStalled && (
-        <Badge
-          variant="outline"
-          title={t`Plan 작성자가 연속으로 카드를 고쳤지만 새로 충족된 결과가 없어 자동 Plan 작성을 멈췄습니다. 이미 맡은 카드는 계속 실행됩니다. 대화에서 방향을 알려 주면 다시 Plan을 짭니다.`}
-        >
-          <Trans comment="Badge: the automatic Plan writer has stopped">자동 Plan 작성 멈춤</Trans>
-        </Badge>
-      )}
+      {loop !== null && loop.plannerStalled && <PlannerStalledBadge />}
       {loop !== null && loop.loop._tag !== "Healthy" && (
         <LoopHealthStatus
           label={t({
