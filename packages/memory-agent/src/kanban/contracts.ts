@@ -123,6 +123,18 @@ export const KanbanCardView = Schema.Struct({
 });
 export type KanbanCardView = typeof KanbanCardView.Type;
 
+/**
+ * Where a card's work is on disk, for the person asked to look at it or fix it by hand. It is read
+ * apart from the board and the decisions, so a path never rides along in them.
+ */
+export const CardFolderView = Schema.Struct({
+  /** The folder the card's tools run in. */
+  folder: Schema.String,
+  /** The card's branch; null when the cards run in the project itself. */
+  branch: Schema.NullOr(Schema.String),
+});
+export type CardFolderView = typeof CardFolderView.Type;
+
 /** Another kanban Goal of the project, as a Goal this one can wait for. */
 export const KanbanGoalOption = Schema.Struct({
   goalInstanceId: Schema.String,

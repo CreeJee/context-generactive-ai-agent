@@ -418,6 +418,7 @@ export {
 export {
   KanbanActionRefused,
   KanbanBoardActions,
+  type CardFolderView,
   type KanbanBoardView,
   type KanbanCardView,
   type KanbanGoalOption,
