@@ -88,6 +88,16 @@ export default function ReportPage() {
   const [diagnosis, setDiagnosis] = useState<DiagnosisState>(DiagnosisState.idle());
   const [sessionRetry, setSessionRetry] = useState(0);
   const [sessionFailed, setSessionFailed] = useState(false);
+  const [backLink, setBackLink] = useState("/");
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const project = params.get("project");
+    const session = params.get("session");
+    if (!isTruthy(project)) return;
+    const query = new URLSearchParams({ project });
+    if (isTruthy(session)) query.set("session", session);
+    setBackLink(`/?${query}`);
+  }, []);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const projectId = params.get("project");
@@ -192,7 +202,7 @@ export default function ReportPage() {
   return (
     <main className="mx-auto max-w-3xl space-y-6 px-4 py-8 text-foreground">
       <header className="space-y-2">
-        <a href="/" className="text-sm text-primary underline">
+        <a href={backLink} className="text-sm text-primary underline">
           <Trans>← 앱으로 돌아가기</Trans>
         </a>
         <h1 className="text-2xl font-semibold">

@@ -101,7 +101,7 @@ import { CompatibleAccounts } from "./navigation/compatible-accounts";
 import { AccountSwitcher } from "./navigation/account-switcher";
 import { WorkTracePanel } from "./chat/work-trace-panel";
 import { BtwPanel } from "./chat/btw-panel";
-import { ReportLink, reportHref } from "./report/report-link";
+import { reportHref } from "./report/report-link";
 import { RetryButton } from "./shared/load-failed";
 import { useHydrated } from "./shared/use-hydrated";
 import { ModelDownloadList } from "./shared/model-downloads";
@@ -745,7 +745,6 @@ export function App() {
             <SidebarHeader>
               <div className="flex items-center gap-1 pl-1">
                 <span className="min-w-0 flex-1 truncate text-sm font-semibold">Context Agent</span>
-                <ReportLink projectId={projectId} sessionId={sessionId} />
                 <Button
                   variant="ghost"
                   size="icon-sm"

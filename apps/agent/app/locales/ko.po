@@ -2406,11 +2406,6 @@ msgstr "로컬 서버 요청이 실패했습니다"
 msgid "루프 {loop}: {health}"
 msgstr "루프 {loop}: {health}"
 
-#. Icon link in the sidebar header that opens the problem report page
-#: app/entry/report/report-link.tsx
-msgid "리포트하기"
-msgstr "리포트하기"
-
 #: app/entry/session/run-state.tsx
 msgid "마지막 답변이 끝나지 않았습니다"
 msgstr "마지막 답변이 끝나지 않았습니다"

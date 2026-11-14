@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { describe, expect, test, vi } from "vite-plus/test";
 import ReportPage from "../../routes/report";
-import { ReportLink, reportHref } from "./report-link";
+import { reportHref } from "./report-link";
 import { BundleEvent, type ReportBundle } from "memory-agent/definitions";
 import { DiagnosisText } from "./report-diagnosis";
 import { DraftEvidence, reportText, shareableText } from "./report-draft";
@@ -15,13 +15,6 @@ describe("independent report entry", () => {
     expect(reportHref("project &1", "session/2")).toBe(
       "/report?project=project+%261&session=session%2F2",
     );
-    expect(
-      renderToStaticMarkup(
-        <I18nProvider i18n={i18n}>
-          <ReportLink projectId={null} sessionId={null} />
-        </I18nProvider>,
-      ),
-    ).toContain('href="/report"');
   });
 
   test("renders a draft without fetching session, run, or AI data", () => {
