@@ -13,7 +13,7 @@
 - `Separator` — sidebar.tsx가 `~/components/ui/separator`에서 다시 내보내는 구분선
 - `SidebarDisclosureTrigger` — `CollapsibleTrigger` 래퍼. `leading` 슬롯, 말줄임 본문, 회전하는 chevron을 그린다
 - `AccountModelPanel` / `accountSummary` — 공급자 인증 상태와 선택 모델을 한 줄로 요약하고 설정을 접어 두는 패널. `accountSummary`는 `{status, model, hasError}`를 돌려주는 dual 함수다
-- `DecisionInbox` — 프로젝트 전체에서 사람의 판단을 기다리는 카드 수를 `SidebarMenuBadge`로 보여 준다(0이면 배지 없음). `SidebarMenuItem`을 돌려주므로 `SidebarMenu` 안에 둔다. Sheet에서 `DecisionPrompt`로 답하거나 `onOpenCard(sessionId, cardId)`로 보드를 연다
+- `DecisionInbox` — `projects`로 받은 모든 프로젝트에서 사람의 판단과 승인을 기다리는 카드 수를 `useAllWaitingDecisions`로 모아 `SidebarMenuBadge`로 보여 준다(0이면 배지 없음). `SidebarMenuItem`을 돌려주므로 `SidebarMenu` 안에 둔다. Sheet는 기다리는 것이 있는 프로젝트만 프로젝트별로 그리고(둘 이상이면 프로젝트 이름 머리줄), `ProjectWaitingList`가 `DecisionPrompt`로 답하거나 승인한다. `onOpenCard(projectId, sessionId, cardId)`는 그 프로젝트의 대화에서 보드를 연다
 - `providerLabels` — `ProviderId`별 표시 이름(ChatGPT/Claude/OpenAI 호환) Lingui 메시지. `satisfies Record<ProviderId, MessageDescriptor>`라서 화면에서 `t(…)`로 푼다
 - 문구 — 쓰이는 자리에 Lingui 메시지로 쓴다. `app/locales/ko.po`로 추출되고 `lint/wording`이 검사한다
 - `effortChoices` / `EffortChoice` — `(selection, model)` dual 함수. 사이드바와 `/effort`가 쓰는 추론 강도 선택지를 만든다
@@ -55,7 +55,7 @@
 ## Side Effects
 
 - 네트워크: `compatibleClient`가 `appFetch`로 `/api/accounts`를 GET/POST한다(list, create, connect, rename, save-model, remove-model, select, remove, test, discover).
-- React Query 조회·변경 훅이 백엔드 API를 호출한다: `useAccountsQuery`, `useAccountQuotaQuery`, `useCompatibleAccountsQuery`, `useDecisionInboxQuery`, `useProjectBoardsQuery`, `useAccountActionMutation`, `useCompatibleAccountMutation`.
+- React Query 조회·변경 훅이 백엔드 API를 호출한다: `useAccountsQuery`, `useAccountQuotaQuery`, `useCompatibleAccountsQuery`, `useAllWaitingDecisions`, `useProjectBoardsQuery`, `useAccountActionMutation`, `useCompatibleAccountMutation`.
 - 브라우저 localStorage: jotai `atomWithStorage("context-agent-project-section-open-v2")`에 프로젝트 섹션이 열려 있는지, `atomWithStorage("context-agent-session-groups-open-v1")`에 프로젝트별 대화 그룹 접힘을 저장한다.
 - 확인 창: 구독 계정 로그아웃(`remove`), 호환 엔드포인트 삭제, 대화 원본 삭제는 `AlertDialog`로 먼저 확인받는다.
 - 시계 읽기: `DateTime.nowUnsafe()`로 한도 창이 초기화되기까지 남은 시간을 계산한다(account-switcher, account-profiles).
