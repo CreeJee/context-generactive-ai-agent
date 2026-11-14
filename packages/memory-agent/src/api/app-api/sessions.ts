@@ -9,6 +9,7 @@ import {
   KanbanBoardView,
   KanbanStarted,
 } from "../../kanban/contracts.ts";
+import { ModelSelection } from "../../providers/contracts.ts";
 import {
   QueuedMessage,
   QueueEditRequest,
@@ -33,7 +34,12 @@ import { PlanDependencyIssue } from "../../workflow/plan-schedule.ts";
 import { UnknownStepOutcome } from "../../workflow/step-outcomes.ts";
 import { sessionHolderHeaders } from "../chat-api.ts";
 import { appRefusalFields, refusalWith, SameSite } from "../refusal.ts";
-import { SelectedProviderUnavailable } from "./providers.ts";
+import {
+  ModelListFailed,
+  ModelUnavailable,
+  ProviderUnavailable,
+  SelectedProviderUnavailable,
+} from "./providers.ts";
 
 const appRefusal = refusalWith(appRefusalFields);
 
@@ -506,6 +512,17 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
       headers: sessionHolderHeaders,
       success: CompactResult,
       error: [SessionInUse, UnknownSession, RunInProgress, SelectedProviderUnavailable],
+    }),
+    /**
+     * Gives the conversation a model of its own, or with null lets it follow the app's selected
+     * model again. The next run uses it; a run in progress keeps the model it started with.
+     */
+    HttpApiEndpoint.post("setModel", "/api/sessions/:session/model", {
+      params: session,
+      headers: sessionHolderHeaders,
+      payload: Schema.Struct({ model: Schema.NullOr(ModelSelection) }),
+      success: Session,
+      error: [SessionInUse, UnknownSession, ModelUnavailable, ProviderUnavailable, ModelListFailed],
     }),
     /** Abandons approvals whose continuation was lost; the gated tools never run. */
     HttpApiEndpoint.post("discardInterrupts", "/api/sessions/:session/interrupts/discard", {

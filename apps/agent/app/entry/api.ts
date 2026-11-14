@@ -732,6 +732,15 @@ export const api = {
     appCall((client) =>
       client.sessions.compact({ params: { session }, headers: { "x-session-holder": holder } }),
     ),
+  /** null lets the conversation follow the app's selected model again. */
+  setSessionModel: (session: string, holder: string, model: ModelSelection | null) =>
+    appCall((client) =>
+      client.sessions.setModel({
+        params: { session },
+        headers: { "x-session-holder": holder },
+        payload: { model },
+      }),
+    ),
   leaseAction: (session: string, holder: string, action: "claim" | "release") =>
     appCall((client) =>
       client.sessions.lease({ params: { session }, payload: { holder, action } }),
