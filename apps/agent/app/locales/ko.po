@@ -5888,7 +5888,8 @@ msgstr "카드 작업 폴더를 준비하지 못했습니다"
 msgid "카드 작업 폴더에 정리되지 않은 변경이 있습니다"
 msgstr "카드 작업 폴더에 정리되지 않은 변경이 있습니다"
 
-#. Button that opens the form for a new card in this conversation
+#. Button that opens the form for a new card
+#. Button that opens the form for a new card
 #. Title of the form that adds a new card
 #: app/entry/chat/board-panel.tsx
 #: app/entry/chat/board/card-peek.tsx

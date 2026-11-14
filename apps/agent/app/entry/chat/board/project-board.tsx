@@ -18,6 +18,12 @@ import {
   CollapsibleTrigger,
 } from "../../../components/ui/collapsible";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../../../components/ui/dropdown-menu";
+import {
   Sheet,
   SheetContent,
   SheetDescription,
@@ -261,6 +267,39 @@ export function ProjectBoard({
                   justify-between row leaves these alone across an empty strip. Without filters
                   the ghost button's padding is pulled back so its chevron lines up with the title. */}
               <span className="flex items-center gap-1">
+                {rows.length === 1 && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={surfaces.length === 0}
+                    onClick={() => setAdding(rows[0]?.sessionId ?? null)}
+                  >
+                    <PlusIcon data-icon="inline-start" />
+                    <Trans comment="Button that opens the form for a new card">카드 추가</Trans>
+                  </Button>
+                )}
+                {rows.length > 1 && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={<Button type="button" size="sm" variant="outline" />}
+                    >
+                      <PlusIcon data-icon="inline-start" />
+                      <Trans comment="Button that opens the form for a new card">카드 추가</Trans>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      {rows.map((row) => (
+                        <DropdownMenuItem
+                          key={row.sessionId}
+                          disabled={surfaceOf(row.sessionId) === null}
+                          onClick={() => setAdding(row.sessionId)}
+                        >
+                          {titleOf(row)}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
                 {rows.length > 0 && (
                   <CollapsibleTrigger
                     render={
@@ -318,7 +357,6 @@ export function ProjectBoard({
                         ? null
                         : () => move(row.sessionId, rows[index + 2]?.sessionId ?? null)
                     }
-                    onAdd={() => setAdding(row.sessionId)}
                     onOpenSession={() => onOpenSession(row.sessionId)}
                   />
                 ))}
@@ -389,7 +427,6 @@ function ConversationRow({
   moving,
   onMoveUp,
   onMoveDown,
-  onAdd,
   onOpenSession,
 }: {
   readonly projectId: string;
@@ -407,7 +444,6 @@ function ConversationRow({
   readonly onMoveUp: (() => void) | null;
   /** Null at the bottom of the order. */
   readonly onMoveDown: (() => void) | null;
-  readonly onAdd: () => void;
   readonly onOpenSession: () => void;
 }) {
   const { t } = useLingui();
@@ -501,18 +537,6 @@ function ConversationRow({
             </Trans>
           </Button>
         )}
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={surface === null}
-          onClick={onAdd}
-        >
-          <PlusIcon data-icon="inline-start" />
-          <Trans comment="Button that opens the form for a new card in this conversation">
-            카드 추가
-          </Trans>
-        </Button>
         <Button type="button" size="sm" variant="outline" onClick={onOpenSession}>
           <MessageSquareTextIcon data-icon="inline-start" />
           <Trans comment="Button that goes to the conversation">대화 열기</Trans>
