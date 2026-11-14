@@ -472,6 +472,9 @@ export function BoardSurface({
           closed={peekBoard === null || closedIn(peekBoard)}
           planVersion={peekBoard?.plan.version ?? 0}
           cardCount={peekBoard?.view.cards.length ?? 0}
+          planCards={
+            peekBoard?.view.cards.map(({ card }) => ({ id: card.id, title: card.title })) ?? []
+          }
           editPending={edit.isPending || action.isPending}
           intentPending={action.isPending || request.isPending}
           kanbanActive={peekBoard !== null && peekBoard.loop !== null}

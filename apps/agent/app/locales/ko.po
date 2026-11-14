@@ -1449,6 +1449,10 @@ msgstr "계정을 찾을 수 없습니다. 목록을 새로 고친 뒤 다시 �
 msgid "계정을 추가하고 계정마다 이름을 바꾸거나 로그아웃합니다. 쓸 계정은 사이드바 아래 계정 전환에서 고릅니다."
 msgstr "계정을 추가하고 계정마다 이름을 바꾸거나 로그아웃합니다. 쓸 계정은 사이드바 아래 계정 전환에서 고릅니다."
 
+#: app/entry/chat/board/card-peek.tsx
+msgid "고른 카드가 끝난 뒤에 이 카드를 시작합니다."
+msgstr "고른 카드가 끝난 뒤에 이 카드를 시작합니다."
+
 #. Heading of the values the typed slash command can take
 #: app/entry/chat/slash-palette.tsx
 msgid "고를 수 있는 값"
@@ -4596,7 +4600,7 @@ msgstr "의존"
 msgid "의존 관계가 올바르지 않습니다. 없는 카드나 순환 의존을 확인해 주십시오."
 msgstr "의존 관계가 올바르지 않습니다. 없는 카드나 순환 의존을 확인해 주십시오."
 
-#. Card editor field: ids of the cards this card waits for
+#. Card editor field: the cards this card waits for
 #: app/entry/chat/board/card-peek.tsx
 msgid "의존 카드"
 msgstr "의존 카드"
@@ -4633,6 +4637,10 @@ msgstr "이 Goal을 중단할까요?"
 #: app/entry/chat/board/board-surface.tsx
 msgid "이 Goal의 카드 브랜치(취소한 카드 것 포함)가 남아 있어 대상 브랜치를 바꿀 수 없습니다."
 msgstr "이 Goal의 카드 브랜치(취소한 카드 것 포함)가 남아 있어 대상 브랜치를 바꿀 수 없습니다."
+
+#: app/entry/chat/board/card-peek.tsx
+msgid "이 Plan에 다른 카드가 없습니다."
+msgstr "이 Plan에 다른 카드가 없습니다."
 
 #: app/entry/chat/board-panel.tsx
 msgid "이 Plan을 닫을까요?"
@@ -5863,10 +5871,6 @@ msgstr "카드 {done}/{cardCount}"
 #: app/entry/chat/board-panel.tsx
 msgid "카드 {done}/{total} 완료"
 msgstr "카드 {done}/{total} 완료"
-
-#: app/entry/chat/board/card-peek.tsx
-msgid "카드 id를 쉼표로 구분합니다."
-msgstr "카드 id를 쉼표로 구분합니다."
 
 #. Button that confirms rejecting a card waiting for approval
 #: app/entry/chat/board/card-peek.tsx

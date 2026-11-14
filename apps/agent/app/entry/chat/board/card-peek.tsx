@@ -36,6 +36,7 @@ import {
   SheetTitle,
 } from "../../../components/ui/sheet";
 import { Textarea } from "../../../components/ui/textarea";
+import { ToggleGroup, ToggleGroupItem } from "../../../components/ui/toggle-group";
 import {
   BoardEdit,
   type BoardView,
@@ -82,13 +83,12 @@ const trimmed = (text: string) => {
   return kept.length > 0 ? Result.succeed(kept) : Result.failVoid;
 };
 const lines = (text: string) => Arr.filterMap(text.split("\n"), trimmed);
-const ids = (text: string) => Arr.filterMap(text.split(","), trimmed);
 
 /** The editor's text fields; contract fields left empty are cleared. */
 interface CardForm {
   readonly title: string;
   readonly description: string;
-  readonly dependsOn: string;
+  readonly dependsOn: readonly string[];
   readonly acceptanceCriteria: string;
   readonly boundaries: string;
   readonly risk: CardRisk | "none";
@@ -99,13 +99,16 @@ interface CardForm {
 const formOf = (card: PlanStep | null): CardForm => ({
   title: card?.title ?? "",
   description: card?.description ?? "",
-  dependsOn: card?.dependsOn.join(", ") ?? "",
+  dependsOn: card?.dependsOn ?? [],
   acceptanceCriteria: card?.acceptanceCriteria.join("\n") ?? "",
   boundaries: card?.boundaries?.join("\n") ?? "",
   risk: card?.risk ?? "none",
   requiredEvidence: card?.requiredEvidence?.join("\n") ?? "",
   humanDecision: card?.humanDecision ?? "",
 });
+
+/** The form's fields that hold plain text. */
+type TextField = Exclude<keyof CardForm, "dependsOn" | "risk">;
 
 const blankToNull = (text: string) => (text.trim().length === 0 ? null : text.trim());
 const listOrNull = (text: string) => {
@@ -132,6 +135,7 @@ export function CardPeek({
   closed,
   planVersion,
   cardCount,
+  planCards,
   editPending,
   intentPending,
   kanbanActive,
@@ -159,6 +163,8 @@ export function CardPeek({
   readonly closed: boolean;
   readonly planVersion: number;
   readonly cardCount: number;
+  /** The Plan's cards a card can wait for, in Plan order. */
+  readonly planCards: ReadonlyArray<{ readonly id: string; readonly title: string }>;
   readonly editPending: boolean;
   readonly intentPending: boolean;
   /** Holding and requeueing need the kanban loop that assigns cards. */
@@ -189,6 +195,7 @@ export function CardPeek({
           card={null}
           planVersion={planVersion}
           cardCount={cardCount}
+          planCards={planCards}
           pending={editPending}
           onCancel={onClose}
           onSubmit={(edit) =>
@@ -351,6 +358,7 @@ export function CardPeek({
                   card={card}
                   planVersion={planVersion}
                   cardCount={cardCount}
+                  planCards={planCards}
                   pending={editPending}
                   onCancel={() => onEdit(false)}
                   onSubmit={(edit) =>
@@ -642,6 +650,7 @@ function CardEditor({
   card,
   planVersion,
   cardCount,
+  planCards,
   pending,
   onCancel,
   onSubmit,
@@ -650,6 +659,8 @@ function CardEditor({
   readonly card: PlanStep | null;
   readonly planVersion: number;
   readonly cardCount: number;
+  /** The Plan's cards a card can wait for, in Plan order. */
+  readonly planCards: ReadonlyArray<{ readonly id: string; readonly title: string }>;
   readonly pending: boolean;
   readonly onCancel: () => void;
   /** Resolves with an error message, or null once the change was accepted. */
@@ -658,8 +669,15 @@ function CardEditor({
   const { t } = useLingui();
   const [form, setForm] = useState<CardForm>(() => formOf(card));
   const [error, setError] = useState<string | null>(null);
-  const set = (key: keyof CardForm) => (value: string) => setForm({ ...form, [key]: value });
+  const set = (key: TextField) => (value: string) => setForm({ ...form, [key]: value });
   const executing = card?.status === "in_progress";
+  const others = planCards.filter((other) => other.id !== card?.id);
+  const choices = [
+    ...others,
+    ...form.dependsOn
+      .filter((id) => !others.some((other) => other.id === id))
+      .map((id) => ({ id, title: id })),
+  ];
 
   const submit = (change: BoardEdit) => void onSubmit(change).then((message) => setError(message));
   const save = () =>
@@ -671,7 +689,7 @@ function CardEditor({
             card: {
               title: form.title.trim(),
               description: form.description,
-              dependsOn: ids(form.dependsOn),
+              dependsOn: form.dependsOn,
               acceptanceCriteria: lines(form.acceptanceCriteria),
               ...contractFields(form),
             },
@@ -684,7 +702,7 @@ function CardEditor({
             patch: {
               title: form.title.trim(),
               description: form.description,
-              dependsOn: ids(form.dependsOn),
+              dependsOn: form.dependsOn,
               acceptanceCriteria: lines(form.acceptanceCriteria),
               boundaries: listOrNull(form.boundaries),
               risk: form.risk === "none" ? null : form.risk,
@@ -744,18 +762,32 @@ function CardEditor({
             />
           </Field>
           <Field>
-            <FieldLabel htmlFor="card-depends">
-              <Trans comment="Card editor field: ids of the cards this card waits for">
-                의존 카드
-              </Trans>
+            <FieldLabel id="card-depends-label">
+              <Trans comment="Card editor field: the cards this card waits for">의존 카드</Trans>
             </FieldLabel>
-            <Input
-              id="card-depends"
-              value={form.dependsOn}
-              onChange={(event) => set("dependsOn")(event.target.value)}
-            />
+            {choices.length > 0 ? (
+              <ToggleGroup
+                aria-labelledby="card-depends-label"
+                multiple
+                size="sm"
+                spacing={1}
+                value={form.dependsOn}
+                onValueChange={(dependsOn) => setForm({ ...form, dependsOn })}
+                className="flex-wrap"
+              >
+                {choices.map((choice) => (
+                  <ToggleGroupItem key={choice.id} value={choice.id} title={choice.id}>
+                    {choice.title}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+            ) : (
+              <p className="text-muted-foreground">
+                <Trans>이 Plan에 다른 카드가 없습니다.</Trans>
+              </p>
+            )}
             <FieldDescription>
-              <Trans>카드 id를 쉼표로 구분합니다.</Trans>
+              <Trans>고른 카드가 끝난 뒤에 이 카드를 시작합니다.</Trans>
             </FieldDescription>
           </Field>
           <Field>
