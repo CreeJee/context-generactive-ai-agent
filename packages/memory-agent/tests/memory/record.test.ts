@@ -1,5 +1,6 @@
 import { Effect, Ref, Schema } from "effect";
 import { expect } from "vite-plus/test";
+import { Attachments } from "../../src/attachments/attachments.ts";
 import type { JsonValue } from "../../src/json.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { makeRecordingHook, Recorder } from "../../src/memory/record.ts";
@@ -9,6 +10,10 @@ import { ToolFailed } from "../../src/tools/failure.ts";
 import { runTool } from "../../src/tools/run-tool.ts";
 import { modelFailed, scriptedRun } from "../support/loop-run.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
+
+/** A one-rectangle SVG; each fill makes a picture of its own. */
+const drawing = (fill: string) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="${fill}"/></svg>`;
 
 const secret = `${"gh"}p_${"Z9y8X7w6V5u4T3s2R1q0P9o8N7m6L5k4J3i2"}`;
 
@@ -361,6 +366,57 @@ testAgent()("Recorder", (it) => {
         }),
         { concurrency: "unbounded" },
       );
+    }),
+  );
+
+  it.effect("a result's picture stays through attachment cleanup", () =>
+    Effect.gen(function* () {
+      const { project, session, user } = yield* userTurn("고양이 그려줘");
+      const attachments = yield* Attachments;
+      const nodes = yield* Nodes;
+      const picture = yield* attachments.saveDrawing(Buffer.from(drawing("#ff0000")));
+      const runId = `${session.id}:run`;
+      const writeFile = runTool({
+        name: "write_file",
+        description: "Write a project file",
+        parameters: Schema.Struct({}),
+        handler: () =>
+          Effect.succeed({
+            path: "a.svg",
+            preview: { attachmentId: picture.id, mimeType: picture.mimeType },
+          }),
+      });
+      yield* scriptedRun({
+        turns: [
+          { text: "", toolCalls: [{ id: "call-1", name: "write_file", arguments: "{}" }] },
+          { text: "그렸어요." },
+        ],
+        runId,
+        conversation: [{ role: "user", content: user.text }],
+        tools: [writeFile],
+        hooks: [
+          yield* (yield* Recorder).hookFor({
+            projectId: project.id,
+            sessionId: session.id,
+            runId,
+            replyTo: Effect.succeedSome(user.id),
+          }),
+        ],
+      });
+
+      expect(yield* attachments.purgeOrphans).toBe(0);
+      expect(yield* attachments.get(picture.id)).not.toBeNull();
+      const result = yield* nodes.toolNode(session.id, "tool_result", "call-1");
+      expect((yield* attachments.forNode(result!.id)).map(({ id }) => id)).toEqual([picture.id]);
+    }),
+  );
+
+  it.effect("a picture no result names is removed by cleanup", () =>
+    Effect.gen(function* () {
+      const attachments = yield* Attachments;
+      const picture = yield* attachments.saveDrawing(Buffer.from(drawing("#0000ff")));
+      expect(yield* attachments.purgeOrphans).toBe(1);
+      expect(yield* attachments.get(picture.id)).toBeNull();
     }),
   );
 });

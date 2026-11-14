@@ -104,6 +104,18 @@ const drawingIn = (result: JsonValue) =>
     Option.filter(({ path }) => isDrawing(path)),
   );
 
+const decodePreview = Schema.decodeUnknownOption(
+  Schema.Struct({ preview: Schema.Struct({ attachmentId: Schema.String }) }),
+  { onExcessProperty: "ignore" },
+);
+
+/** The pictures a tool result names, for tying them to the node that records the result. */
+export const picturesIn = (result: JsonValue): ReadonlyArray<string> =>
+  Option.match(decodePreview(result), {
+    onNone: () => [],
+    onSome: ({ preview }) => [preview.attachmentId],
+  });
+
 /** Pictures of the drawings the model writes, for showing them in the conversation. */
 export class DrawingPreviews extends Context.Service<
   DrawingPreviews,

@@ -5505,3 +5505,11 @@
 - 결정: 읽기 하나를 따로 둔다(`GET /api/sessions/:session/kanban/cards/:card/folder`, 서버는 `KanbanBoardActions.cardFolder`). 카드 패널이 열려 있고 카드가 시작했지만 끝나지 않았을 때(in_progress, verify, human_decision, blocked)만 읽어 "작업 폴더"와 "브랜치"로 보인다. 판단 내용(`DecisionKind`)과 보드 전체 읽기(`/kanban`), 제보 묶음에는 경로를 넣지 않는다. 폴더가 지금 없으면 null이다. 차례 실행 모드는 폴더가 프로젝트 폴더이고 브랜치는 없다. 브랜치 이름 함수(`goalBranchName`, `cardBranchFolder`, `cardBranchName`)는 서버가 같은 이름을 쓰도록 `kanban/worktree.ts`로 옮겼다.
 - 버린 안: `KanbanCardView`에 경로를 넣기. 보드를 읽을 때마다 카드 수만큼 git이 돈다. `DecisionKind`에 경로를 넣기. 판단 내용에 경로를 넣지 않는 기존 설계와 어긋난다.
 - 남은 것: `cardFolder`는 폴더를 찾지 못한 까닭을 구분하지 않는다. git이 실패해도 폴더 없음으로 답하고 화면에는 항목이 나오지 않을 뿐이다.
+
+## 모델이 그린 그림은 결과를 기록하는 node에 묶는다 (2026-11-15)
+
+- 계기: `write_file`/`edit_file`이 `.svg`를 쓰면 서버가 그림을 첨부로 저장하지만, 그 첨부는 어디에도 묶이지 않았다. 첨부 정리는 묶이지 않은 첨부를 만든 시각과 상관없이 지우고, 정리는 앱이 시작할 때마다 돈다. 그래서 앱을 다시 시작하면 대화에 남아 있던 그림이 사라졌다. 도구 결과 기록에는 `preview.attachmentId`가 남아 있는데 그 id의 파일이 없었다. 2026-09-16의 "그때 그린 그림이 남아야 한다"가 지켜지지 않았다.
+- 결정: 도구 결과를 기록하는 `tool_result` node에 그 결과가 가리키는 그림을 `node_attachments`로 묶는다(`Attachments.linkStored`). 같은 transaction 안에서 node를 적은 바로 뒤에 묶는다. 그림 id는 결과의 `preview.attachmentId`에서 읽는다(`picturesIn`). 대화를 지우면 그 node의 연결이 지워지고, 그 뒤 정리가 그림을 지운다. 정리 조건은 그대로다.
+- 모델에 보내는 대화 기록은 바뀌지 않는다. 첨부를 읽어 기록에 붙이는 곳(`forNode`)은 사용자 node에만 불리기 때문이다.
+- 남는 틈: 그림을 저장한 때부터 결과 node를 적는 step이 끝날 때까지는 그림이 묶이지 않는다. 그 사이에 다른 대화의 삭제가 정리를 돌리면 그 그림은 지워진다. 그때 기록은 실패하지 않고(묶는 SQL은 없는 그림을 건너뛴다) 그림만 없다.
+- 하지 않은 것: 이미 지워진 그림은 되살리지 못한다.
