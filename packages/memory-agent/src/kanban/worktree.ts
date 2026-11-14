@@ -22,6 +22,16 @@ export interface CardRef extends GoalRef {
   readonly cardId: string;
 }
 
+/** The Goal's branch in the user's repository. */
+export const goalBranchName = (goal: string) => `ctx/goal/${goal}`;
+/** The folder of the Goal's card branches; as a ref pattern it matches every one of them. */
+export const cardBranchFolder = (goal: string) => `ctx/card/${goal}`;
+/** A card's branch; it keeps the card's work when the worktree is gone. */
+export const cardBranchName: {
+  (card: string): (goal: string) => string;
+  (goal: string, card: string): string;
+} = EffectFunction.dual(2, (goal: string, card: string) => `${cardBranchFolder(goal)}/${card}`);
+
 /** A worktree as the card's file tools and code skills see it. */
 export interface CardWorktree {
   /** Where the project sits inside the worktree; the card's file tools and code skills start here. */
