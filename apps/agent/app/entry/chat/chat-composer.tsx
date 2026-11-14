@@ -3,7 +3,14 @@ import { msg } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
 import { isTruthy } from "../../truthy.ts";
 import { ArrowUpIcon, CheckIcon, ImagePlusIcon, SquareIcon, WandSparklesIcon } from "lucide-react";
-import { type Ref, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  type Ref,
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { Command } from "~/components/ui/command";
 import {
   PromptInput,
@@ -105,6 +112,7 @@ export function ChatComposer({
   onCancel,
   onClear,
   onWorkflowMode,
+  controls,
 }: {
   ref?: Ref<ChatComposerHandle>;
   draft: string;
@@ -137,6 +145,8 @@ export function ChatComposer({
   onCancel: () => void;
   onClear: () => void;
   onWorkflowMode: (mode: (typeof workflowModes)[number]) => void;
+  /** Pickers the page puts on the footer, after the mode buttons: model and permission. */
+  controls?: ReactNode;
 }) {
   const { t } = useLingui();
   const [highlight, setHighlight] = useState("");
@@ -396,6 +406,7 @@ export function ChatComposer({
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
+            {controls}
             <div className="ml-auto flex items-center gap-3">
               <ComposerShortcuts mode={composerMode} />
               {stoppable && editingId === null && (
