@@ -53,6 +53,12 @@ export const sessionQueries = {
       queryFn: () => api.kanban(sessionId),
       staleTime: 0,
     }),
+  cardFolder: (projectId: string, sessionId: string, cardId: string) =>
+    queryOptions({
+      queryKey: appQueryKeys.session.cardFolder(projectId, sessionId, cardId),
+      queryFn: () => api.cardFolder(sessionId, cardId),
+      staleTime: 0,
+    }),
   btw: (projectId: string, sessionId: string) =>
     queryOptions({
       queryKey: appQueryKeys.session.btw(projectId, sessionId),
@@ -98,6 +104,20 @@ const useKanbanQueryBody = (projectId: string, sessionId: string) =>
 export const useKanbanQuery: {
   (sessionId: string): (projectId: string) => ReturnType<typeof useKanbanQueryBody>;
 } & typeof useKanbanQueryBody = EffectFunction.dual(2, useKanbanQueryBody);
+/** The open card's folder; read only while the card can have one. */
+const useCardFolderQueryBody = (
+  projectId: string,
+  sessionId: string,
+  cardId: string,
+  enabled: boolean,
+) => useQuery({ ...sessionQueries.cardFolder(projectId, sessionId, cardId), enabled });
+export const useCardFolderQuery: {
+  (
+    sessionId: string,
+    cardId: string,
+    enabled: boolean,
+  ): (projectId: string) => ReturnType<typeof useCardFolderQueryBody>;
+} & typeof useCardFolderQueryBody = EffectFunction.dual(4, useCardFolderQueryBody);
 const useObservedRunStateQueryBody = (
   projectId: string,
   sessionId: string,

@@ -62,5 +62,7 @@ export const appQueryKeys = {
       [...appQueryKeys.session.root(projectId, sessionId), "decisions"] as const,
     kanban: (projectId: string, sessionId: string) =>
       [...appQueryKeys.session.root(projectId, sessionId), "kanban"] as const,
+    cardFolder: (projectId: string, sessionId: string, cardId: string) =>
+      [...appQueryKeys.session.kanban(projectId, sessionId), "folder", cardId] as const,
   },
 };
