@@ -1527,6 +1527,7 @@ msgstr "권한"
 #. Field label: the project's permission mode
 #. Picker of the project's permission mode
 #: app/entry/settings/pages/permission.tsx
+#: app/entry/settings/permission-mode-select.tsx
 msgid "권한 모드"
 msgstr "권한 모드"
 
@@ -2490,7 +2491,7 @@ msgstr "맡은 카드 없음"
 #. Permission mode 'ask': ask before each tool call
 #. Project permission mode `ask`
 #: app/entry/chat/slash-commands.ts
-#: app/entry/settings/pages/permission.tsx
+#: app/entry/settings/permission-mode-select.tsx
 msgid "매번 묻기"
 msgstr "매번 묻기"
 
@@ -4716,7 +4717,7 @@ msgstr "이 페이지와 연결이 끊겼지만 서버에서는 계속 답하고
 msgid "이 프로젝트의 대화가 도구를 부를 때 따르는 권한 모드입니다. 바꾸면 다음 도구 호출부터 적용됩니다."
 msgstr "이 프로젝트의 대화가 도구를 부를 때 따르는 권한 모드입니다. 바꾸면 다음 도구 호출부터 적용됩니다."
 
-#: app/entry/settings/pages/permission.tsx
+#: app/entry/settings/permission-mode-select.tsx
 msgid "이 프로젝트의 대화가 셸 명령과 MCP 도구처럼 승인을 받던 도구를 묻지 않고 바로 실행합니다. 믿을 수 있는 프로젝트에서만 써 주십시오."
 msgstr "이 프로젝트의 대화가 셸 명령과 MCP 도구처럼 승인을 받던 도구를 묻지 않고 바로 실행합니다. 믿을 수 있는 프로젝트에서만 써 주십시오."
 
@@ -5067,7 +5068,7 @@ msgid "자동 판단"
 msgstr "자동 판단"
 
 #. Project permission mode `auto`
-#: app/entry/settings/pages/permission.tsx
+#: app/entry/settings/permission-mode-select.tsx
 msgid "자동 판단 (auto)"
 msgstr "자동 판단 (auto)"
 
@@ -5264,16 +5265,16 @@ msgid "전체 경로 복사"
 msgstr "전체 경로 복사"
 
 #. Project permission mode `full`
-#: app/entry/settings/pages/permission.tsx
+#: app/entry/settings/permission-mode-select.tsx
 msgid "전체 권한 (full)"
 msgstr "전체 권한 (full)"
 
 #. Dialog button that confirms switching the project to full permission
-#: app/entry/settings/pages/permission.tsx
+#: app/entry/settings/permission-mode-select.tsx
 msgid "전체 권한으로 바꾸기"
 msgstr "전체 권한으로 바꾸기"
 
-#: app/entry/settings/pages/permission.tsx
+#: app/entry/settings/permission-mode-select.tsx
 msgid "전체 권한으로 바꿀까요?"
 msgstr "전체 권한으로 바꿀까요?"
 
@@ -5785,8 +5786,8 @@ msgstr "충족"
 #: app/entry/navigation/sidebar.tsx
 #: app/entry/settings/pages/mcp-login.tsx
 #: app/entry/settings/pages/mcp.tsx
-#: app/entry/settings/pages/permission.tsx
 #: app/entry/settings/pages/web.tsx
+#: app/entry/settings/permission-mode-select.tsx
 msgid "취소"
 msgstr "취소"
 
