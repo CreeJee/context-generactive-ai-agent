@@ -49,6 +49,14 @@ describe("routine shell verdict", () => {
     ).toBeUndefined();
   });
 
+  it("pre-allows a routine run_command script, and leaves the rest to the reviewer", () => {
+    const command = (script: string, network?: readonly string[]) =>
+      routineShellVerdict("run_command", JSON.stringify({ script, access: "write", network }));
+    expect(command("pnpm test")).toMatchObject({ decision: "allow", decidedBy: "classifier" });
+    expect(command("pnpm i", ["registry.npmjs.org"])).toBeUndefined();
+    expect(command("rm -rf build")).toBeUndefined();
+  });
+
   it("only classifies the sh programs of save_code_skill", () => {
     expect(
       routineShellVerdict(

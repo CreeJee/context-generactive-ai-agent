@@ -23,6 +23,8 @@ export const builtinToolEffects = {
   delete_outside_file: "effectful",
   save_code_skill: "effectful",
   run_skill: "effectful",
+  // A script that only looks still starts a host process and may write temporary folders.
+  run_command: "effectful",
   find_skill: "read",
   read_skill: "read",
   // A program may call any of the run's effectful tools.

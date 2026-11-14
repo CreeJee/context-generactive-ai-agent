@@ -21,15 +21,18 @@ A skill is one of two kinds:
   `await external_read_file({ path })`. Use it for work that would otherwise take many tool calls:
   checking a set of files, changing several files the same way, combining sh skills and searches.
   It runs in a code sandbox that reaches nothing but those tools.
-- **sh**: a `/bin/sh` script, the only way to run a host command: builds, tests, linters, git,
-  package managers and project commands.
+- **sh**: a `/bin/sh` script for a host command you will run again with other arguments: builds,
+  tests, linters, package managers and project commands. It is approved once, and later runs
+  do not ask.
 
 ## Before saving
 
 - Look at the listed skills first. If one already does the job, run it; if one nearly does,
   replace it under the same name rather than adding a near-duplicate.
 - Save a skill for work you expect to repeat. Work of many calls that you do once goes in
-  `run_code` instead.
+  `run_code` instead, and a host command you run once goes in `run_command`: with access
+  "read" to look (git status, diff, log, show), which asks nothing, or with access "write".
+  A read-only git command is not a skill.
 - Try a ts program with `run_code` before saving it. Put a `const input = { … };` line on top to
   stand in for run_skill's input, and drop that line when you save the program.
 - Do not save a sh script that only wraps what built-in tools already do: listing, reading,
@@ -38,7 +41,7 @@ A skill is one of two kinds:
 
 ## Name and description
 
-- The name says the job in a few lowercase words: `test-failures`, `git-recent-changes`,
+- The name says the job in a few lowercase words: `test-failures`, `package-build`,
   `rename-export`.
 - The description is what decides whether the skill is ever used. Say what it does and when to
   use it, including the situations where it should be picked even if the request does not name

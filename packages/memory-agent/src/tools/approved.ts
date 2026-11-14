@@ -29,8 +29,14 @@ import {
   runCommand,
   type CommandResult,
 } from "../shell/run.ts";
-import { runSandboxed, sandboxPolicy, type SandboxUnavailable } from "../shell/sandbox.ts";
 import {
+  runSandboxed,
+  SandboxAccess,
+  sandboxPolicy,
+  type SandboxUnavailable,
+} from "../shell/sandbox.ts";
+import {
+  builtinCoverage,
   CodeSkillRejected,
   CodeSkills,
   SavedProgram,
@@ -38,10 +44,12 @@ import {
 } from "../skills/code-skills.ts";
 import {
   deleteOutsideFileSpec,
+  runCommandSpec,
   RunSkillInput,
   saveCodeSkillSpec,
   writeOutsideFileSpec,
   type DeleteOutsideFileInput,
+  type RunCommandInput,
   type SaveCodeSkillInput,
   type WriteOutsideFileInput,
 } from "./definitions.ts";
@@ -57,6 +65,76 @@ const runSkill = {
     "Run a project code skill. A skill runs only as it was approved when saved; an edited or unapproved one is refused until saved again with save_code_skill. A ts skill takes input, checked against its schema, and returns what its program returned, as run_code does; it always runs to the end within timeoutSeconds and never moves to the background. A sh skill takes args and runs sandboxed: what the sandbox blocked is listed in stderr under <sandbox_violations>; to reach a blocked host the job needs, save the skill again with that host in network. It returns the output and exit status, or a taskId if still running after yieldMs; retrieve the final result with get_background_result. A running receipt does not prove success.",
   parameters: RunSkillInput,
 } as const;
+
+/** One script to run: a saved sh skill with its arguments, or a command written for this call. */
+interface ScriptRun {
+  readonly kind: keyof typeof scriptWording;
+  /** `$0` of the script. */
+  readonly name: string;
+  /** What the result and a background task call the run. */
+  readonly label: string;
+  readonly text: string;
+  readonly args: readonly string[];
+  readonly access: SandboxAccess;
+  readonly workdir?: string;
+  readonly timeoutSeconds?: number;
+  readonly yieldMs?: number;
+}
+
+/** How a note about a script's paths names the script, and what it asks for. */
+const scriptWording = {
+  skill: {
+    subject: "This skill's script",
+    relativePaths: "Save the skill again with paths relative to its working directory.",
+  },
+  command: {
+    subject: "This script",
+    relativePaths: "Run it again with paths relative to the working directory.",
+  },
+} as const;
+
+/** Why a run_command call does not run as given. */
+class CommandRejected extends Schema.TaggedError<
+  CommandRejected,
+  { readonly brand: unique symbol }
+>()("CommandRejected", {
+  reason: Schema.Literals(["builtin_overlap", "network_needs_write"]),
+  detail: Schema.String,
+}) {
+  override get message() {
+    return `${this.reason}: ${this.detail}`;
+  }
+}
+
+/** Why a command cannot run as given, if it cannot. */
+const commandRefusal = ({ script, access, network = [] }: typeof RunCommandInput.Type) =>
+  Option.orElse(
+    Option.map(builtinCoverage(script), (covered) =>
+      CommandRejected.make({
+        reason: "builtin_overlap",
+        detail: `${covered} Call those tools directly; run_command is for what no built-in tool does (git, builds, tests, package managers, project commands).`,
+      }),
+    ),
+    () =>
+      access === "read" && network.length > 0
+        ? Option.some(
+            CommandRejected.make({
+              reason: "network_needs_write",
+              detail:
+                'A script with access "read" has no network. Call again with access "write" to reach those hosts, or without network.',
+            }),
+          )
+        : Option.none(),
+  );
+
+/** A script's first line that says something, as the short name of its run. */
+const firstLine = (script: string) =>
+  Option.getOrElse(
+    Arr.findFirst(script.split("\n"), (line) =>
+      Option.liftPredicate(line.trim(), (trimmed) => trimmed !== "" && !trimmed.startsWith("#")),
+    ),
+    () => "sh",
+  );
 
 const ShellResult = Schema.Struct({
   workdir: Schema.String,
@@ -103,257 +181,315 @@ const make = Effect.gen(function* () {
       );
 
   /** The approved tools' calls for `project`, each failing with what the model reads. */
-  const callsFor = (project: Fenced<Project>, sessionId: string, binding?: BackgroundBinding) => ({
-    saveCodeSkill: ({ name, description, program, usage }: typeof SaveCodeSkillInput.Type) =>
-      guardedEffect(
-        name,
-        codeSkills.save(project, sessionId, { name, description, usage, program }),
-      ),
-
-    /** Interrupting the call stops the command. */
-    runSkill: (
-      { name, args = [], workdir, timeoutSeconds, yieldMs }: typeof RunSkillInput.Type,
+  const callsFor = (project: Fenced<Project>, sessionId: string, binding?: BackgroundBinding) => {
+    /**
+     * Runs one script in the sandbox its access asks for, and gives back its output or, when it is
+     * still running after `yieldMs`, a background task. Interrupting the call stops the command.
+     */
+    const runScript = (
+      { kind, name, label, text, args, access, workdir, timeoutSeconds, yieldMs }: ScriptRun,
       toolCallId: string,
     ) =>
-      guardedEffect(
-        name,
-        Effect.gen(function* () {
-          // A ts skill is run by `CodeTools`, which knows the run's tools; one reaches here
-          // only from a program, which runs sh skills alone.
-          const runnable = yield* SavedProgram.$match(
-            yield* codeSkills.runnable(project, sessionId, name),
-            {
-              ts: () =>
-                Effect.fail(
-                  CodeSkillRejected.make({
-                    reason: "ts_skill",
-                    detail: `${name} is a ts skill, which a program cannot run. Call run_skill for it yourself.`,
+      Effect.gen(function* () {
+        const directory = yield* resolveWorkingDirectory(
+          project,
+          storage.path,
+          workdir ?? ".",
+        ).pipe(Effect.provideContext(platform));
+        // In a card, a script that names the user's project folder runs with that folder written
+        // as the card's own copy, as the file tools read such a path (`path-policy.ts`), except
+        // where it names a file only the user's folder has (`.env`, `node_modules`), which it
+        // reads there. Only those paths of the approved text change. A copy whose path cannot
+        // take their place in a script runs the script as approved, with a warning.
+        const userFolder = (yield* folderMentions(project, text).pipe(
+          Effect.provideContext(platform),
+        )).filter(({ folder }) => folder === "user");
+        const spellings = Arr.dedupe(userFolder.map(({ spelling }) => spelling)).join(", ");
+        const named = Option.liftPredicate(userFolder, Arr.isReadonlyArrayNonEmpty);
+        const mapsFolder = Option.isSome(named) && isPlainPath(project.root);
+        const script = yield* mapsFolder
+          ? mapUserFolderMentions(project, text, userFolder, project.root).pipe(
+              Effect.provideContext(platform),
+            )
+          : Effect.succeed({ text, mapped: [], readInUserFolder: [] });
+        const command = skillCommand(name, script.text, args);
+        const { subject, relativePaths } = scriptWording[kind];
+        const scriptNotes = [
+          ...(Arr.isReadonlyArrayNonEmpty(script.mapped)
+            ? [
+                `${subject} names the user's project folder (${spellings}). This run works in a kanban card's own copy of the project, so the script ran with that folder as ${project.root}.`,
+              ]
+            : []),
+          ...(Arr.isReadonlyArrayNonEmpty(script.readInUserFolder)
+            ? [
+                `This card's copy of the project does not have these paths, because git does not track them (like .env or node_modules), so the script read them in the user's project folder, where it cannot write: ${script.readInUserFolder.join(", ")}.`,
+              ]
+            : []),
+        ];
+        const mapped = {
+          ...optionalProperty(
+            "pathMapped",
+            Option.getOrUndefined(
+              Option.map(
+                Option.liftPredicate(
+                  [...Option.toArray(directory.mappedNote), ...scriptNotes],
+                  Arr.isReadonlyArrayNonEmpty,
+                ),
+                (notes) => notes.join(" "),
+              ),
+            ),
+          ),
+          ...optionalProperty(
+            "pathWarning",
+            Option.getOrUndefined(
+              Option.map(
+                Option.filter(named, () => !mapsFolder),
+                () =>
+                  `${subject} names the user's project folder by its absolute path (${spellings}). This run works in a kanban card's own copy of the project, whose path cannot replace it in the script, so the script may read the user's folder instead of this copy, and the sandbox refuses writes there. ${relativePaths}`,
+              ),
+            ),
+          ),
+        };
+        const seconds = Math.min(
+          Math.max(1, timeoutSeconds ?? defaultTimeoutSeconds),
+          maxTimeoutSeconds,
+        );
+        const runLine = (line: string) =>
+          runCommand({
+            command: line,
+            cwd: directory.absolute,
+            timeoutSeconds: seconds,
+            env: process.env,
+          });
+        const setup = {
+          command,
+          commandId: toolCallId,
+          ...(yield* sandboxPolicy({
+            projectRoot: project.root,
+            ...optionalProperty("userRoot", project.toolFence?.userRoot),
+            storageRoot: storage.path,
+            access,
+          }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem))),
+        };
+        // Without an OS sandbox here, only `full` mode, which already runs unapproved scripts,
+        // falls back to running the script as it is.
+        type LineRun = ReturnType<typeof runLine>;
+        const execute = runSandboxed(setup, runLine).pipe(
+          Effect.catchTag(
+            "SandboxUnavailable",
+            (
+              unavailable,
+            ): Effect.Effect<
+              CommandResult,
+              SandboxUnavailable | Effect.Error<LineRun>,
+              Effect.Services<LineRun>
+            > => (project.permissionMode === "full" ? runLine(command) : Effect.fail(unavailable)),
+          ),
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        );
+        const inBackground = (bound: BackgroundBinding) =>
+          Effect.gen(function* () {
+            const receipt = yield* background.start(
+              bound,
+              toolCallId,
+              "shell",
+              label,
+              execute.pipe(
+                Effect.mapError((cause) => BackgroundOperationFailed.make({ cause })),
+                Effect.map((result) =>
+                  JSON.stringify({
+                    workdir: directory.relative,
+                    ...mapped,
+                    ...result,
+                    command: label,
                   }),
                 ),
-              sh: (saved) => Effect.succeed(saved),
-            },
-          );
-          const label = [name, ...args].join(" ");
-          const directory = yield* resolveWorkingDirectory(
-            project,
-            storage.path,
-            workdir ?? ".",
-          ).pipe(Effect.provideContext(platform));
-          // In a card, a script that names the user's project folder runs with that folder written
-          // as the card's own copy, as the file tools read such a path (`path-policy.ts`), except
-          // where it names a file only the user's folder has (`.env`, `node_modules`), which it
-          // reads there. Only those paths of the approved text change. A copy whose path cannot
-          // take their place in a script runs the script as approved, with a warning.
-          const userFolder = (yield* folderMentions(project, runnable.text).pipe(
-            Effect.provideContext(platform),
-          )).filter(({ folder }) => folder === "user");
-          const spellings = Arr.dedupe(userFolder.map(({ spelling }) => spelling)).join(", ");
-          const named = Option.liftPredicate(userFolder, Arr.isReadonlyArrayNonEmpty);
-          const mapsFolder = Option.isSome(named) && isPlainPath(project.root);
-          const script = yield* mapsFolder
-            ? mapUserFolderMentions(project, runnable.text, userFolder, project.root).pipe(
-                Effect.provideContext(platform),
-              )
-            : Effect.succeed({ text: runnable.text, mapped: [], readInUserFolder: [] });
-          const command = skillCommand(name, script.text, args);
-          const scriptNotes = [
-            ...(Arr.isReadonlyArrayNonEmpty(script.mapped)
-              ? [
-                  `This skill's script names the user's project folder (${spellings}). This run works in a kanban card's own copy of the project, so the script ran with that folder as ${project.root}.`,
-                ]
-              : []),
-            ...(Arr.isReadonlyArrayNonEmpty(script.readInUserFolder)
-              ? [
-                  `This card's copy of the project does not have these paths, because git does not track them (like .env or node_modules), so the script read them in the user's project folder, where it cannot write: ${script.readInUserFolder.join(", ")}.`,
-                ]
-              : []),
-          ];
-          const mapped = {
-            ...optionalProperty(
-              "pathMapped",
-              Option.getOrUndefined(
-                Option.map(
-                  Option.liftPredicate(
-                    [...Option.toArray(directory.mappedNote), ...scriptNotes],
-                    Arr.isReadonlyArrayNonEmpty,
+              ),
+            );
+            const saved = yield* background.waitResult(
+              bound.sessionId,
+              receipt.taskId,
+              yieldMs ?? 1000,
+            );
+            return yield* Option.match(Option.fromNullishOr(saved), {
+              onNone: () => Effect.succeed(receipt),
+              onSome: (result) =>
+                Match.value(result).pipe(
+                  Match.when({ status: "completed" }, ({ result: text }) =>
+                    Schema.decodeEffect(Schema.fromJsonString(ShellResult))(text),
                   ),
-                  (notes) => notes.join(" "),
+                  Match.orElse((running) => Effect.succeed({ taskId: receipt.taskId, ...running })),
                 ),
-              ),
-            ),
-            ...optionalProperty(
-              "pathWarning",
-              Option.getOrUndefined(
-                Option.map(
-                  Option.filter(named, () => !mapsFolder),
-                  () =>
-                    `This skill's script names the user's project folder by its absolute path (${spellings}). This run works in a kanban card's own copy of the project, whose path cannot replace it in the script, so the script may read the user's folder instead of this copy, and the sandbox refuses writes there. Save the skill again with paths relative to its working directory.`,
-                ),
-              ),
-            ),
-          };
-          const seconds = Math.min(
-            Math.max(1, timeoutSeconds ?? defaultTimeoutSeconds),
-            maxTimeoutSeconds,
-          );
-          const runLine = (line: string) =>
-            runCommand({
-              command: line,
-              cwd: directory.absolute,
-              timeoutSeconds: seconds,
-              env: process.env,
             });
-          const setup = {
-            command,
-            commandId: toolCallId,
-            ...(yield* sandboxPolicy({
-              projectRoot: project.root,
-              storageRoot: storage.path,
-              network: runnable.network,
-            }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem))),
-          };
-          // Without an OS sandbox here, only `full` mode, which already runs unapproved scripts,
-          // falls back to running the script as it is.
-          type LineRun = ReturnType<typeof runLine>;
-          const execute = runSandboxed(setup, runLine).pipe(
-            Effect.catchTag(
-              "SandboxUnavailable",
-              (
-                unavailable,
-              ): Effect.Effect<
-                CommandResult,
-                SandboxUnavailable | Effect.Error<LineRun>,
-                Effect.Services<LineRun>
-              > =>
-                project.permissionMode === "full" ? runLine(command) : Effect.fail(unavailable),
-            ),
-            Effect.provideService(FileSystem.FileSystem, fileSystem),
-            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          );
-          const inBackground = (bound: BackgroundBinding) =>
-            Effect.gen(function* () {
-              const receipt = yield* background.start(
-                bound,
-                toolCallId,
-                "shell",
-                label,
-                execute.pipe(
-                  Effect.mapError((cause) => BackgroundOperationFailed.make({ cause })),
-                  Effect.map((result) =>
-                    JSON.stringify({
-                      workdir: directory.relative,
-                      ...mapped,
-                      ...result,
-                      command: label,
+          });
+        const inline = Effect.map(execute, (result) => ({
+          workdir: directory.relative,
+          ...mapped,
+          ...result,
+          command: label,
+        }));
+        return yield* Option.match(Option.fromNullishOr(binding), {
+          onNone: () => inline,
+          onSome: inBackground,
+        });
+      });
+
+    return {
+      saveCodeSkill: ({ name, description, program, usage }: typeof SaveCodeSkillInput.Type) =>
+        guardedEffect(
+          name,
+          codeSkills.save(project, sessionId, { name, description, usage, program }),
+        ),
+
+      runSkill: (
+        { name, args = [], workdir, timeoutSeconds, yieldMs }: typeof RunSkillInput.Type,
+        toolCallId: string,
+      ) =>
+        guardedEffect(
+          name,
+          Effect.gen(function* () {
+            // A ts skill is run by `CodeTools`, which knows the run's tools; one reaches here
+            // only from a program, which runs sh skills alone.
+            const runnable = yield* SavedProgram.$match(
+              yield* codeSkills.runnable(project, sessionId, name),
+              {
+                ts: () =>
+                  Effect.fail(
+                    CodeSkillRejected.make({
+                      reason: "ts_skill",
+                      detail: `${name} is a ts skill, which a program cannot run. Call run_skill for it yourself.`,
                     }),
                   ),
+                sh: (saved) => Effect.succeed(saved),
+              },
+            );
+            return yield* runScript(
+              {
+                kind: "skill",
+                name,
+                label: [name, ...args].join(" "),
+                text: runnable.text,
+                args,
+                access: SandboxAccess.Write({ network: runnable.network }),
+                ...optionalProperty("workdir", workdir),
+                ...optionalProperty("timeoutSeconds", timeoutSeconds),
+                ...optionalProperty("yieldMs", yieldMs),
+              },
+              toolCallId,
+            );
+          }),
+        ),
+
+      /**
+       * A script run once and not saved. A call that only looks was not approved (`toolsFor`), so
+       * what it may do is decided here from its own arguments.
+       */
+      runCommand: (input: typeof RunCommandInput.Type, toolCallId: string) =>
+        guardedEffect(
+          runCommandSpec.name,
+          Effect.gen(function* () {
+            const { script, access, network = [], workdir, timeoutSeconds, yieldMs } = input;
+            yield* Option.match(commandRefusal(input), {
+              onNone: () => Effect.void,
+              onSome: Effect.fail,
+            });
+            return yield* runScript(
+              {
+                kind: "command",
+                name: runCommandSpec.name,
+                label: firstLine(script),
+                text: script,
+                args: [],
+                access: Match.value(access).pipe(
+                  Match.when("read", () => SandboxAccess.Read()),
+                  Match.when("write", () => SandboxAccess.Write({ network })),
+                  Match.exhaustive,
                 ),
+                ...optionalProperty("workdir", workdir),
+                ...optionalProperty("timeoutSeconds", timeoutSeconds),
+                ...optionalProperty("yieldMs", yieldMs),
+              },
+              toolCallId,
+            );
+          }),
+        ),
+
+      /**
+       * A path in the project is written as write_file writes it; its call needed no approval
+       * (`projectChange`). One outside the project was approved for this exact path.
+       */
+      writeOutsideFile: ({ path, content, expectedSha256 }: typeof WriteOutsideFileInput.Type) =>
+        byPathPlace(
+          project,
+          path,
+          "write_file",
+          files
+            .callsFor(project)
+            .writeFile({ path, content, ...optionalProperty("expectedSha256", expectedSha256) }),
+          guardedChange(
+            path,
+            Effect.gen(function* () {
+              const target = yield* resolveOutsideToolPath(
+                project,
+                storage.path,
+                path,
+                "new-or-file",
               );
-              const saved = yield* background.waitResult(
-                bound.sessionId,
-                receipt.taskId,
-                yieldMs ?? 1000,
-              );
-              return yield* Option.match(Option.fromNullishOr(saved), {
-                onNone: () => Effect.succeed(receipt),
-                onSome: (result) =>
-                  Match.value(result).pipe(
-                    Match.when({ status: "completed" }, ({ result: text }) =>
-                      Schema.decodeEffect(Schema.fromJsonString(ShellResult))(text),
+              // Without a hash the file must be new; with one it replaces the file it names.
+              return yield* Option.match(Option.fromNullishOr(expectedSha256), {
+                onNone: () =>
+                  Effect.map(
+                    createTextFileEffect({ absolute: target.absolute, path, text: content }),
+                    (created) => ({ path: target.absolute, created: true, ...created }),
+                  ),
+                onSome: (expected) =>
+                  Effect.succeed(target).pipe(
+                    Effect.filterOrFail(
+                      (existing) => existing.stats !== undefined,
+                      () => PathRejected.make({ path, reason: "not_found" }),
                     ),
-                    Match.orElse((running) =>
-                      Effect.succeed({ taskId: receipt.taskId, ...running }),
+                    Effect.andThen(
+                      replaceTextFileEffect({
+                        absolute: target.absolute,
+                        path,
+                        expectedSha256: expected,
+                        text: content,
+                      }),
                     ),
+                    Effect.map((replaced) => ({
+                      path: target.absolute,
+                      created: false,
+                      ...replaced,
+                    })),
                   ),
               });
-            });
-          const inline = Effect.map(execute, (result) => ({
-            workdir: directory.relative,
-            ...mapped,
-            ...result,
-            command: label,
-          }));
-          return yield* Option.match(Option.fromNullishOr(binding), {
-            onNone: () => inline,
-            onSome: inBackground,
-          });
-        }),
-      ),
+            }).pipe(Effect.provideContext(platform)),
+          ),
+        ).pipe(Effect.provideContext(platform)),
 
-    /**
-     * A path in the project is written as write_file writes it; its call needed no approval
-     * (`projectChange`). One outside the project was approved for this exact path.
-     */
-    writeOutsideFile: ({ path, content, expectedSha256 }: typeof WriteOutsideFileInput.Type) =>
-      byPathPlace(
-        project,
-        path,
-        "write_file",
-        files
-          .callsFor(project)
-          .writeFile({ path, content, ...optionalProperty("expectedSha256", expectedSha256) }),
-        guardedChange(
+      /** A path in the project is deleted as delete_file deletes it, like {@link writeOutsideFile}. */
+      deleteOutsideFile: ({ path, expectedSha256 }: typeof DeleteOutsideFileInput.Type) =>
+        byPathPlace(
+          project,
           path,
-          Effect.gen(function* () {
-            const target = yield* resolveOutsideToolPath(
-              project,
-              storage.path,
-              path,
-              "new-or-file",
-            );
-            // Without a hash the file must be new; with one it replaces the file it names.
-            return yield* Option.match(Option.fromNullishOr(expectedSha256), {
-              onNone: () =>
-                Effect.map(
-                  createTextFileEffect({ absolute: target.absolute, path, text: content }),
-                  (created) => ({ path: target.absolute, created: true, ...created }),
-                ),
-              onSome: (expected) =>
-                Effect.succeed(target).pipe(
-                  Effect.filterOrFail(
-                    (existing) => existing.stats !== undefined,
-                    () => PathRejected.make({ path, reason: "not_found" }),
-                  ),
-                  Effect.andThen(
-                    replaceTextFileEffect({
-                      absolute: target.absolute,
-                      path,
-                      expectedSha256: expected,
-                      text: content,
-                    }),
-                  ),
-                  Effect.map((replaced) => ({
-                    path: target.absolute,
-                    created: false,
-                    ...replaced,
-                  })),
-                ),
-            });
-          }).pipe(Effect.provideContext(platform)),
-        ),
-      ).pipe(Effect.provideContext(platform)),
-
-    /** A path in the project is deleted as delete_file deletes it, like {@link writeOutsideFile}. */
-    deleteOutsideFile: ({ path, expectedSha256 }: typeof DeleteOutsideFileInput.Type) =>
-      byPathPlace(
-        project,
-        path,
-        "delete_file",
-        files.callsFor(project).deleteFile({ path, expectedSha256 }),
-        guardedChange(
-          path,
-          Effect.gen(function* () {
-            const target = yield* resolveOutsideToolPath(project, storage.path, path, "file");
-            const removed = yield* deleteTextFileEffect({
-              absolute: target.absolute,
-              path,
-              expectedSha256,
-            });
-            return { path: target.absolute, deleted: true, ...removed };
-          }).pipe(Effect.provideContext(platform)),
-        ),
-      ).pipe(Effect.provideContext(platform)),
-  });
+          "delete_file",
+          files.callsFor(project).deleteFile({ path, expectedSha256 }),
+          guardedChange(
+            path,
+            Effect.gen(function* () {
+              const target = yield* resolveOutsideToolPath(project, storage.path, path, "file");
+              const removed = yield* deleteTextFileEffect({
+                absolute: target.absolute,
+                path,
+                expectedSha256,
+              });
+              return { path: target.absolute, deleted: true, ...removed };
+            }).pipe(Effect.provideContext(platform)),
+          ),
+        ).pipe(Effect.provideContext(platform)),
+    };
+  };
 
   return {
     /**
@@ -392,6 +528,19 @@ const make = Effect.gen(function* () {
         runTool({
           ...runSkill,
           handler: (input, call) => calls.runSkill(input, call.toolCallId),
+        }),
+        runTool({
+          ...runCommandSpec,
+          needsApproval,
+          // A script that only looks runs in a sandbox that lets it change nothing, so no one is
+          // asked about it.
+          plan: (input) =>
+            Effect.succeed(
+              input.access === "read"
+                ? CallPlan.Ungated({ params: input })
+                : CallPlan.AsGiven<typeof input>(),
+            ),
+          handler: (input, call) => calls.runCommand(input, call.toolCallId),
         }),
         runTool({
           ...writeOutsideFileSpec,

@@ -61,7 +61,7 @@ import { boardRunId } from "./board-run.ts";
 const cardInstructions = [
   "You carry out one card of a kanban board. Your file tools and code skills are rooted at the folder this card works in.",
   "- Do the card's work in that folder and nowhere else. Other cards may run at the same time in folders of their own.",
-  "- Leave your changes in the files and do not commit, branch, merge or otherwise change git state; the owner handles that after you finish. Read-only git commands (git status, git diff, git log, git show) are fine as a sh code skill.",
+  '- Leave your changes in the files and do not commit, branch, merge or otherwise change git state; the owner handles that after you finish. Read-only git commands (git status, git diff, git log, git show) are fine with run_command and access "read".',
   "- When a check the card needs (tests, a build, a lint) has no code skill yet, save one with save_code_skill and run it: the card's verifier cannot save skills and runs the one you saved.",
   "- Follow the workflow rules listed with the card, and gather the evidence each one asks for.",
   "- When the card is done, reply with a short report of what you changed and how you checked it against the acceptance criteria.",
@@ -90,7 +90,7 @@ const conflictResolverInstructions = [
   "You resolve merge conflicts on the Goal branch of a kanban board. The user's branch was merged into the Goal branch in the folder your tools are rooted at, and git stopped on conflicts in the listed files.",
   "- Resolve every conflict block (the lines between <<<<<<<, ======= and >>>>>>>) so the Goal's work and the user's branch's changes both stay. When they cannot both stay, keep what the user's branch does and adapt the Goal's change to it.",
   "- Remove every conflict marker, and change only what the resolution needs.",
-  "- Do not commit, abort the merge or otherwise change git state; the owner commits the merge after you finish. Read-only git commands (git status, git diff, git log, git show) are fine as a sh code skill.",
+  '- Do not commit, abort the merge or otherwise change git state; the owner commits the merge after you finish. Read-only git commands (git status, git diff, git log, git show) are fine with run_command and access "read".',
   "- When the project's checks (tests, a build, a lint) have code skills that cover the files you changed, run them.",
   "- Reply with a short report of how you resolved each file. If you cannot resolve one, say why; do not claim it is resolved.",
 ].join("\n");

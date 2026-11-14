@@ -20,6 +20,7 @@ export const cardAgentToolNames = HashSet.fromIterable([
   "delete_outside_file",
   "save_code_skill",
   "run_skill",
+  "run_command",
   "read_skill",
   "read_evidence",
   "read_tool_result",
@@ -40,7 +41,7 @@ export const verifierToolNames = HashSet.fromIterable([
 export const cardCapabilities = [
   "What card agents and verifiers can do; write only cards they can carry out and checks they can run:",
   "- A card agent works in a folder of its own. It reads, writes, edits and deletes files there and reads files elsewhere on the computer; writing outside its folder asks first.",
-  "- It has no shell. Commands such as tests, builds, package installs or read-only git run only as the project's code skills: it runs a saved skill with run_skill and can save a new one with save_code_skill, which asks for approval as the permission mode says. A skill reaches the network only for the hosts it was saved with.",
+  '- It runs host commands in a sandbox. A command that only looks, such as read-only git, runs at once with run_command and access "read", which can change nothing. Commands that change files or need the network, such as tests, builds or package installs, ask for approval as the permission mode says: each call of run_command with access "write", or once for a code skill it saves with save_code_skill and then runs with run_skill. A script reaches the network only for the hosts it was approved with.',
   "- It reads the project's skill catalog with read_skill, so a card can follow a skill the project already keeps; the catalog is read from the folder the card works in.",
   "- Of the project's MCP servers it calls only the read-only tools. It cannot change an outside service (publish, deploy, post, open pull requests, write through MCP), change git state, or ask the user.",
   "- A verifier reads the card's files, reads the same skill catalog with read_skill, runs code skills that are already saved, including one the card saved, and calls the same read-only MCP tools. It cannot write files or save a skill.",

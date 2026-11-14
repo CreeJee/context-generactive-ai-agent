@@ -108,14 +108,58 @@ const credentialFileNames = HashSet.fromIterable([
 
 /** `.env` and `.env.production`, but not the committed `.env.example` family. */
 const envFile = /^\.env(\.(?!example$|sample$|template$)[^/]*)?$/i;
-const credentialExtension = /\.(pem|key|p12|pfx|jks|keystore|kdbx|asc|gpg|ppk)$/i;
+const credentialExtensions = [
+  "pem",
+  "key",
+  "p12",
+  "pfx",
+  "jks",
+  "keystore",
+  "kdbx",
+  "asc",
+  "gpg",
+  "ppk",
+] as const;
+const credentialExtension = new RegExp(`\\.(${credentialExtensions.join("|")})$`, "i");
+/** The secret words a name may end in, each with its plural. */
+const credentialWords = [
+  "secret",
+  "credential",
+  "password",
+  "apikey",
+  "api-key",
+  "api_key",
+  "privatekey",
+  "private-key",
+  "private_key",
+].flatMap((word) => [word, `${word}s`]);
 /**
  * A segment whose name ends in a secret word, like `secrets/`, `aws-credentials.txt` or
  * `private_key.json`. The word must end the name so `password-reset.tsx` stays ordinary code, and
  * `tokens` is absent because lexer and design-token files are common.
  */
-const credentialWord =
-  /^([a-z0-9]+[_.-])*(secrets?|credentials?|passwords?|api[-_]?keys?|private[-_]?keys?)(\.[a-z0-9]+)*$/i;
+const credentialWord = new RegExp(
+  `^([a-z0-9]+[_.-])*(${credentialWords.join("|")})(\\.[a-z0-9]+)*$`,
+  "i",
+);
+
+/** A name with each letter in both cases, since a glob compares case as written. */
+const inEitherCase = (name: string) =>
+  name.replace(/[a-z]/g, (letter) => `[${letter}${letter.toUpperCase()}]`);
+
+/**
+ * The names {@link isCredentialPath} refuses, as globs for a rule that cannot call it (a sandbox's
+ * read rules). Each is relative to a folder and matches at any depth below it. They cover a little
+ * more than the function does: `.env.example`, and any text before a secret word's separator.
+ */
+export const credentialNameGlobs: ReadonlyArray<string> = [
+  ...credentialDirectories.map((directory) => directory.join("/")),
+  ...credentialFileNames,
+  ".env",
+  ".env.*",
+  ...credentialExtensions.map((extension) => `*.${extension}`),
+  ...credentialWords.flatMap((word) => [word, `${word}.*`, `*[_.-]${word}`, `*[_.-]${word}.*`]),
+].map((name) => `**/${inEitherCase(name)}`);
 
 /**
  * True when a path looks like credential material. A name-based guard, not a classifier:

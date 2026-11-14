@@ -33,7 +33,8 @@
 - `CodeSkillRejected` — `Schema.TaggedError`. reason은 builtin_overlap, not_code_skill, network_line, input_line, input_schema, not_found, not_approved, ts_skill, absolute_path 중 하나다. 필드는 `detail`이다
 - `SkillRuntime` — `"ts" | "sh"`
 - `codeSkillDirectory(name)` — 문자열 `.agents/skills/<name>`
-- `builtinOverlap(script)` — sh 스크립트의 모든 선두 프로그램이 내장 도구(ls, cat, grep, rm 등)로 대체 가능하면 `Option.some(CodeSkillRejected)`를 돌려준다
+- `builtinCoverage(script)` — sh 스크립트의 모든 선두 프로그램이 내장 도구(ls, cat, grep, rm 등)로 대체 가능하면, 그 프로그램과 대신 쓸 도구를 적은 문장을 `Option.some`으로 돌려준다. `run_command`도 이것으로 거부한다
+- `builtinOverlap(script)` — `builtinCoverage`가 문장을 주면 그 문장으로 `Option.some(CodeSkillRejected)`를 돌려준다
 - `scriptNetwork(text)` — 첫 줄 `# run_skill network:`에서 `NetworkHost` 스키마를 통과한 호스트 목록을 읽는다
 - `InputSchema` — ts 스킬 입력 JSON Schema(`Record<string, unknown>`)의 스키마와 타입
 - `inputSignature(schema)` — 입력 스키마를 짧은 TS 비슷한 타입 문자열로 만든다. 스키마가 없으면 "none"이다. 300자를 넘으면 안내 문구로 바꾼다

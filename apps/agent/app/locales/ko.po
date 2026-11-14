@@ -2539,6 +2539,10 @@ msgstr "메인 대화와 이 프로젝트의 기억을 읽고 근거를 찾아 �
 msgid "명령"
 msgstr "명령"
 
+#: app/entry/chat/message.tsx
+msgid "명령 실행"
+msgstr "명령 실행"
+
 #: app/entry/chat/chat-panel.tsx
 msgid "명령을 실행하지 못했습니다."
 msgstr "명령을 실행하지 못했습니다."
@@ -4631,6 +4635,10 @@ msgstr "이 대화에서 진행 중인 카드 작업과 하위 에이전트를 �
 msgid "이 메시지를 보내지 못했습니다. 보내기를 누르면 다시 보냅니다."
 msgstr "이 메시지를 보내지 못했습니다. 보내기를 누르면 다시 보냅니다."
 
+#: app/entry/chat/approval.tsx
+msgid "이 명령을 실행할까요?"
+msgstr "이 명령을 실행할까요?"
+
 #: app/entry/settings/pages/kanban.tsx
 #: app/entry/settings/pages/skills.tsx
 msgid "이 모델을 쓸 수 없습니다. 그 제공자 로그인 상태와 모델, 추론 단계가 맞는지 확인해 주십시오."
@@ -5228,6 +5236,10 @@ msgstr "저장하면 다음 실행부터 적용됩니다."
 #: app/entry/chat/board/card-peek.tsx
 msgid "저장하면 보드에 바로 반영되고 작성자가 사용자로 남습니다."
 msgstr "저장하면 보드에 바로 반영되고 작성자가 사용자로 남습니다."
+
+#: app/entry/chat/approval.tsx
+msgid "저장하지 않고 샌드박스 안에서 한 번 실행합니다. 프로젝트·임시 폴더·패키지 캐시 밖에는 쓰지 못하고 자격증명 폴더는 읽지 못합니다."
+msgstr "저장하지 않고 샌드박스 안에서 한 번 실행합니다. 프로젝트·임시 폴더·패키지 캐시 밖에는 쓰지 못하고 자격증명 폴더는 읽지 못합니다."
 
 #: app/entry/navigation/compatible-accounts.tsx
 msgid "저장한 API 키도 함께 지웁니다."

@@ -160,6 +160,11 @@ msgstr "로그인하지 못했습니다. 앱에서 이유를 확인해 주십시
 msgid "로그인했습니다. 이 창을 닫고 앱으로 돌아가 주십시오."
 msgstr "로그인했습니다. 이 창을 닫고 앱으로 돌아가 주십시오."
 
+#. Tool call title in the editor
+#: src/acp/tool-view.ts
+msgid "명령 실행"
+msgstr "명령 실행"
+
 #: src/runtime/shown-failure.ts
 msgid "모델이 결과가 바뀌지 않는 같은 도구 호출을 계속 되풀이해서 실행을 멈췄습니다. 요청을 바꿔서 다시 보내 주십시오."
 msgstr "모델이 결과가 바뀌지 않는 같은 도구 호출을 계속 되풀이해서 실행을 멈췄습니다. 요청을 바꿔서 다시 보내 주십시오."

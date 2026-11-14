@@ -130,19 +130,28 @@ const leadingPrograms = (script: string) =>
     },
   );
 
-/** Refuses a script that only wraps what built-in tools do. */
-export const builtinOverlap = (script: string): Option.Option<CodeSkillRejected> => {
+/**
+ * A script that only wraps what built-in tools do, as the start of what its refusal says: the
+ * programs its steps begin with and the tools that cover them.
+ */
+export const builtinCoverage = (script: string): Option.Option<string> => {
   const programs = leadingPrograms(script);
   const tools = programs.map(coveredTool);
   return programs.length > 0 && tools.every(isTruthy)
     ? Option.some(
-        CodeSkillRejected.make({
-          reason: "builtin_overlap",
-          detail: `${EffectArray.dedupe(programs).join(", ")} ${programs.length === 1 ? "is" : "are"} covered by ${EffectArray.dedupe(tools).join(", ")}. Call those tools directly, or combine them in a ts skill; save a sh skill only for what no built-in tool does (builds, tests, git, package managers, project commands).`,
-        }),
+        `${EffectArray.dedupe(programs).join(", ")} ${programs.length === 1 ? "is" : "are"} covered by ${EffectArray.dedupe(tools).join(", ")}.`,
       )
     : Option.none();
 };
+
+/** Refuses a script that only wraps what built-in tools do. */
+export const builtinOverlap = (script: string): Option.Option<CodeSkillRejected> =>
+  Option.map(builtinCoverage(script), (covered) =>
+    CodeSkillRejected.make({
+      reason: "builtin_overlap",
+      detail: `${covered} Call those tools directly, or combine them in a ts skill; save a sh skill only for what no built-in tool does (builds, tests, git, package managers, project commands).`,
+    }),
+  );
 
 /**
  * First line of a script that may use the network, naming its hosts. It is part of the approved

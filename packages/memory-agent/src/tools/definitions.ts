@@ -94,7 +94,7 @@ export const TsSkillProgram = Schema.Struct({
   ),
 });
 
-/** A sh skill: a script, the only way a host command runs. */
+/** A sh skill: a script that runs a host command again and again, approved once. */
 export const ShSkillProgram = Schema.Struct({
   runtime: Schema.Literal("sh"),
   script: Schema.NonEmptyString.annotate({
@@ -163,6 +163,45 @@ export const RunSkillInput = Schema.Struct({
   ),
 });
 
+export const RunCommandInput = Schema.Struct({
+  script: Schema.NonEmptyString.annotate({
+    description:
+      "POSIX sh script, run once exactly as written in the working directory. Name project files by paths relative to it.",
+  }),
+  access: Schema.Literals(["read", "write"]).annotate({
+    description:
+      '"read": the script only looks. It runs without asking, writes nothing outside temporary folders, has no network and cannot read credential-named files. "write": the script may change project files and reach the hosts in network; the call is approved first.',
+  }),
+  network: Schema.optionalKey(
+    Schema.Array(NetworkHost).check(Schema.isMaxLength(32)).annotate({
+      description:
+        'With access "write" only: the only hosts the script may connect to, exactly as it needs them (e.g. "registry.npmjs.org", "*.github.com"). Omit for no network; localhost only if listed.',
+    }),
+  ),
+  workdir: Schema.optionalKey(
+    Schema.String.annotate({
+      description:
+        'The directory to run in: relative to the project, absolute inside it, or absolute below a temporary folder such as /tmp. Defaults to the project root (".").',
+    }),
+  ),
+  timeoutSeconds: Schema.optionalKey(
+    Schema.Int.annotate({
+      description: "Stop the script after this long. 120 by default, at most 1800.",
+    }),
+  ),
+  yieldMs: Schema.optionalKey(
+    Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 0, maximum: 30_000 }))).annotate({
+      description:
+        "Return a background taskId if the script is unfinished after this many milliseconds (default 1000; 0 dispatches at once). Separate from timeoutSeconds.",
+    }),
+  ),
+  reason: Schema.optionalKey(
+    Schema.String.annotate({
+      description: 'With access "write": one sentence on why, shown to the user when asking.',
+    }),
+  ),
+});
+
 export const WriteOutsideFileInput = Schema.Struct({
   path: Schema.String.annotate({ description: "Absolute path outside the project." }),
   content: Schema.String.annotate({ description: "The complete new file content." }),
@@ -194,8 +233,15 @@ export const DeleteOutsideFileInput = Schema.Struct({
 export const saveCodeSkillSpec = {
   name: "save_code_skill",
   description:
-    "Save a code skill (SKILL.md with scripts/run.ts or scripts/run.sh) for run_skill to run. The app keeps it for this conversation: its runs, and the cards and verifiers of its Goal, can run it; a review later decides whether the project's other conversations get it. Make each skill one purpose-specific job, reuse a listed skill when one fits, and do not wrap a single tool call. A ts skill is a program that calls your tools as functions, as in run_code, with the input it declares. A sh skill is a script, the only way to run host commands: it runs sandboxed, writes only inside the project, temp folders and package caches, cannot read credential folders or the app's storage, and reaches only the hosts in network. Saving asks for approval of the exact program and host list; later runs of the unchanged program, with any input or arguments, do not ask. Saving under an existing skill's name replaces it for this conversation. Read the code-skill-writing skill before the first save in a conversation.",
+    "Save a code skill (SKILL.md with scripts/run.ts or scripts/run.sh) for run_skill to run. The app keeps it for this conversation: its runs, and the cards and verifiers of its Goal, can run it; a review later decides whether the project's other conversations get it. Make each skill one purpose-specific job, reuse a listed skill when one fits, and do not wrap a single tool call. A ts skill is a program that calls your tools as functions, as in run_code, with the input it declares. A sh skill is a script for a host command you will run again with other arguments (tests, builds, installs); a command you run once goes to run_command instead. It runs sandboxed, writes only inside the project, temp folders and package caches, cannot read credential folders or the app's storage, and reaches only the hosts in network. Saving asks for approval of the exact program and host list; later runs of the unchanged program, with any input or arguments, do not ask. Saving under an existing skill's name replaces it for this conversation. Read the code-skill-writing skill before the first save in a conversation.",
   parameters: SaveCodeSkillInput,
+} as const;
+
+export const runCommandSpec = {
+  name: "run_command",
+  description:
+    'Run a sh script once on the host, in a sandbox, without saving it. access "read" is for looking: git status, diff, log and show, tool versions, anything that changes no file. It runs without asking; its sandbox writes nothing outside temporary folders, has no network and cannot read credential-named files. access "write" is for a script that changes project files or needs the network (the hosts in network): each call is approved first, so a command you will run again with other arguments belongs in a code skill (save_code_skill, then run_skill), which is approved once. A script made only of what your file tools do (ls, cat, grep, find, rm, …) is refused: call those tools. What the sandbox blocked is listed in stderr under <sandbox_violations>; a "read" script that was blocked from writing needs access "write". It returns the output and exit status, or a taskId if still running after yieldMs; retrieve the final result with get_background_result. A running receipt does not prove success.',
+  parameters: RunCommandInput,
 } as const;
 
 export const writeOutsideFileSpec = {
@@ -212,9 +258,13 @@ export const deleteOutsideFileSpec = {
   parameters: DeleteOutsideFileInput,
 } as const;
 
-/** Names of the tools that never run without an approval, in either permission mode. */
+/**
+ * Names of the tools that never run without an approval, in either permission mode. A run_command
+ * call that only looks (access "read") is the exception its call plan makes (`approved.ts`).
+ */
 export const gatedToolNames = HashSet.fromIterable([
   saveCodeSkillSpec.name,
+  runCommandSpec.name,
   writeOutsideFileSpec.name,
   deleteOutsideFileSpec.name,
 ]);

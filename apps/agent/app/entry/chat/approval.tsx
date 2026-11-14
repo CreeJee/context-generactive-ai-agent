@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import {
   DeleteOutsideFileInput,
+  RunCommandInput,
   SaveCodeSkillInput,
   WriteOutsideFileInput,
 } from "memory-agent/definitions";
@@ -30,6 +31,7 @@ import { PendingApproval } from "./pending-approval";
 /** A gated call's arguments, decoded once by tool name into a union the card can switch on. */
 type GatedCall =
   | { readonly tool: "save_code_skill"; readonly input: typeof SaveCodeSkillInput.Type }
+  | { readonly tool: "run_command"; readonly input: typeof RunCommandInput.Type }
   | { readonly tool: "write_outside_file"; readonly input: typeof WriteOutsideFileInput.Type }
   | { readonly tool: "delete_outside_file"; readonly input: typeof DeleteOutsideFileInput.Type }
   | { readonly tool: "delegate_to_agent"; readonly agent: string; readonly task: string }
@@ -42,6 +44,7 @@ type GatedCall =
   | { readonly tool: "unrecognized"; readonly name: string; readonly argumentsJson: string };
 
 const decodeCodeSkill = Schema.decodeUnknownOption(Schema.fromJsonString(SaveCodeSkillInput));
+const decodeCommand = Schema.decodeUnknownOption(Schema.fromJsonString(RunCommandInput));
 const decodeWrite = Schema.decodeUnknownOption(Schema.fromJsonString(WriteOutsideFileInput));
 const decodeDelete = Schema.decodeUnknownOption(Schema.fromJsonString(DeleteOutsideFileInput));
 const decodeDelegation = Schema.decodeUnknownOption(
@@ -56,6 +59,9 @@ function decodeCall(toolName: string, argumentsJson: string): GatedCall {
     Match.withReturnType<GatedCall>(),
     Match.when("save_code_skill", () =>
       decoded(decodeCodeSkill(argumentsJson), (input) => ({ tool: "save_code_skill", input })),
+    ),
+    Match.when("run_command", () =>
+      decoded(decodeCommand(argumentsJson), (input) => ({ tool: "run_command", input })),
     ),
     Match.when("write_outside_file", () =>
       decoded(decodeWrite(argumentsJson), (input) => ({ tool: "write_outside_file", input })),
@@ -97,7 +103,7 @@ function preview(content: string): React.ReactNode {
 
 const codeBlock = "overflow-auto rounded bg-muted p-2 font-mono whitespace-pre-wrap break-all";
 
-/** The exact hosts a sh skill may reach, so approving it is a decision about named hosts. */
+/** The exact hosts a script may reach, so approving it is a decision about named hosts. */
 function ShellSkillNetwork({ hosts }: { readonly hosts: readonly string[] }) {
   if (hosts.length === 0)
     return (
@@ -220,6 +226,23 @@ const describe = (call: GatedCall): CallView =>
   Match.value(call).pipe(
     Match.discriminatorsExhaustive("tool")({
       save_code_skill: ({ input }) => codeSkillView(input),
+      run_command: ({ input }) => ({
+        title: msg`이 명령을 실행할까요?`,
+        modelReason: input.reason,
+        icon: TerminalIcon,
+        body: (
+          <div className="flex flex-col gap-2">
+            <pre className={`max-h-60 ${codeBlock}`}>{input.script}</pre>
+            <ShellSkillNetwork hosts={input.network ?? []} />
+            <div className="text-muted-foreground">
+              <Trans>
+                저장하지 않고 샌드박스 안에서 한 번 실행합니다. 프로젝트·임시 폴더·패키지 캐시
+                밖에는 쓰지 못하고 자격증명 폴더는 읽지 못합니다.
+              </Trans>
+            </div>
+          </div>
+        ),
+      }),
       write_outside_file: ({ input }) => ({
         title: msg`프로젝트 밖 파일을 쓸까요?`,
         modelReason: input.reason,

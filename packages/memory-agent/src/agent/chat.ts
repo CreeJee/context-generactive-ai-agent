@@ -80,8 +80,9 @@ import { Sessions } from "../sessions/sessions.ts";
 import { SessionDispatches } from "../sessions/dispatches.ts";
 import { ApprovedTools } from "../tools/approved.ts";
 import { CodeTools } from "../tools/code.ts";
-import { gatedToolNames } from "../tools/definitions.ts";
+import { gatedToolNames, runCommandSpec } from "../tools/definitions.ts";
 import { FileTools } from "../tools/files.ts";
+import type { RunTool } from "../tools/run-tool.ts";
 import { DrawingPreviews } from "../attachments/previews.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { KagiTools, kagiInstructions } from "../tools/kagi.ts";
@@ -284,22 +285,22 @@ const workspaceInstructionsBody = Effect.fn("workspaceInstructions")(function* (
   const today = dayjs(now ?? DateTime.toDateUtc(yield* DateTime.now)).format("YYYY-MM-DD");
   const shell = yield* hostShell(process.env);
   return `The current project is "${project.name}" at ${project.root}.
-- Today is ${today} (${timeZone}). Scripts of sh skills run with /bin/sh on ${process.platform} (the user's shell is ${shell}).
+- Today is ${today} (${timeZone}). Scripts of run_command and of sh skills run with /bin/sh on ${process.platform} (the user's shell is ${shell}).
 - File tools take paths relative to that root. Read a file before changing it and pass its sha256, so newer edits by the user are never overwritten.
 - Prefer edit_file for small changes and write_file for new files or full rewrites.
 - Files outside the project can be listed, read and searched with the *_outside_* tools and absolute paths.
 - ${
     project.permissionMode === "full"
-      ? "Full permission mode is enabled: save_code_skill, run_skill, write_outside_file and delete_outside_file run without approval. Path, credential and .git restrictions still apply. Give a short reason for host operations."
+      ? "Full permission mode is enabled: save_code_skill, run_skill, run_command, write_outside_file and delete_outside_file run without approval. Path, credential and .git restrictions still apply. Give a short reason for host operations."
       : project.permissionMode === "auto"
-        ? "save_code_skill, write_outside_file and delete_outside_file are reviewed before each call: routine requested work runs, uncertain calls wait for the user, harmful ones are blocked. Give a short reason. A blocked or declined call must not be retried in another form; ask the user or choose a different approach."
-        : "save_code_skill, write_outside_file and delete_outside_file wait for the user's approval of each call. Give a short reason. If the user declines, do not retry the same thing; ask or choose another way."
+        ? 'save_code_skill, run_command with access "write", write_outside_file and delete_outside_file are reviewed before each call: routine requested work runs, uncertain calls wait for the user, harmful ones are blocked. Give a short reason. A blocked or declined call must not be retried in another form; ask the user or choose a different approach.'
+        : 'save_code_skill, run_command with access "write", write_outside_file and delete_outside_file wait for the user\'s approval of each call. Give a short reason. If the user declines, do not retry the same thing; ask or choose another way.'
   }
 - Use the tool made for the question first: a listed skill or an MCP tool whose description fits, such as a code graph for where code is and what calls what, before generic file searches and reads. search_files is for exact text (tool names, SQL, test values, prose); read_file is for a known file or range. When a fitting tool misses, ask it again with narrower terms, such as the names it did return, before switching tools.
-- Host commands run only as sh code skills, and work you will repeat with your tools can be a ts code skill: run a listed one with run_skill, or save a purpose-specific one with save_code_skill. run_code batches calls you do once: it runs the tools you would pick anyway and is never a reason to pick a different one. Never print secrets.
+- Host commands run in a sandbox. To look at something no file tool shows (git status, diff, log and show, a tool's version), call run_command with access "read": it runs at once and can change nothing. A command that changes files or needs the network is run_command with access "write" when you run it once, and a sh code skill when you will run it again with other arguments (tests, builds, installs): run a listed one with run_skill, or save a purpose-specific one with save_code_skill. Reading, listing and searching files stay with the file tools; a script made only of those is refused. Work you will repeat with your tools can be a ts code skill. run_code batches calls you do once: it runs the tools you would pick anyway and is never a reason to pick a different one. Never print secrets.
 - Credential files and .git internals are off limits to the file tools; no approval changes that.
 - Report what you actually changed and verified. Do not claim a change or check that did not happen.
-- This app (context-agent) keeps its own settings, the account login and the memory database in ${places.storageRoot}. Neither the file tools nor sh skill scripts open that folder: for a file there, show the user the exact change to make. Read the app-settings skill before adding or changing external agents, MCP servers, skills or app settings.`;
+- This app (context-agent) keeps its own settings, the account login and the memory database in ${places.storageRoot}. Neither the file tools nor host scripts open that folder: for a file there, show the user the exact change to make. Read the app-settings skill before adding or changing external agents, MCP servers, skills or app settings.`;
 });
 
 export const workspaceInstructions: {
@@ -2061,14 +2062,17 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ? kanbanTools.toolsFor(sessionId, runId)
             : [];
         // A program calls the run's tools as the model would, except the ones that ask first. Its
-        // run_skill runs a sh skill to the end: a program has no way to wait on a background task.
+        // run_skill and run_command run a script to the end: a program has no way to wait on a
+        // background task.
+        const runsScript = ({ tool }: RunTool) =>
+          tool.name === "run_skill" || tool.name === runCommandSpec.name;
         const programs = codeTools.forRunTools(
           [
             ...sharedTools,
             ...boardTools,
             ...redactor.withHiddenResults([
-              ...phaseApprovedTools.filter(({ tool }) => tool.name !== "run_skill"),
-              ...phaseApproved().filter(({ tool }) => tool.name === "run_skill"),
+              ...phaseApprovedTools.filter(Predicate.not(runsScript)),
+              ...phaseApproved().filter(runsScript),
             ]),
           ],
           project.permissionMode === "full" ? HashSet.empty() : gated,

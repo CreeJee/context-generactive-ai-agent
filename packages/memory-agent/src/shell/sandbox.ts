@@ -1,10 +1,19 @@
 // Native host boundary: worker threads and a scratch folder for the sandbox runtime's sockets.
 import { NodeWorker } from "@effect/platform-node";
 import { Worker } from "node:worker_threads";
-import { Duration, Effect, FileSystem, Function as EffectFunction, Layer, Option } from "effect";
+import {
+  Data,
+  Duration,
+  Effect,
+  FileSystem,
+  Function as EffectFunction,
+  Layer,
+  Option,
+} from "effect";
 import { RpcClient } from "effect/rpc";
 import { failureAnnotations } from "../runtime/logged-failures.ts";
 import { writableRoots } from "../files/path-policy.ts";
+import { credentialNameGlobs } from "../files/paths.ts";
 import { homeDirectory } from "../runtime/host-system.ts";
 import { path } from "../runtime/synchronous-path.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../runtime/resources.ts";
@@ -72,19 +81,41 @@ const cacheHomePaths = [
   ".vite-plus",
 ] as const;
 
+/** How much a sandboxed script may do. */
+export type SandboxAccess = Data.TaggedEnum<{
+  /**
+   * Only look: no file outside the temporary folders changes and no host is reached, so nothing the
+   * script does outlasts it. It needs no approval, which is why it also cannot read the project's
+   * credential-named files, as the file tools cannot.
+   */
+  Read: {};
+  /** Change the run's root and reach `network`: what an approved script does. */
+  Write: { readonly network: readonly string[] };
+}>;
+export const SandboxAccess = Data.taggedEnum<SandboxAccess>();
+
 /**
- * What a sh skill's script may touch. Writes: the run's root (a card's worktree in a kanban card)
- * and the temporary folders, as the path policy names them (`writableRoots`), and caches, but not
- * the project's skills, which change only through `save_code_skill`. Reads: everything except
- * credential stores and the app's own storage. Network: only the script's approved hosts.
+ * What a sandboxed script may touch, by its {@link SandboxAccess}.
+ *
+ * `Write`: writes reach the run's root (a card's worktree in a kanban card) and the temporary
+ * folders, as the path policy names them (`writableRoots`), and caches, but not the project's
+ * skills, which change only through `save_code_skill`. Network: only the script's approved hosts.
  * Loopback ports (local test and dev servers) only when the hosts include `localhost`, because that
- * also reaches every local service, this app's own server included. The sandbox runtime adds its
- * own write protection (shell profiles, `.git/hooks`, `.git/config`, …).
+ * also reaches every local service, this app's own server included.
+ *
+ * `Read`: writes reach the temporary folders alone, never the run's folders even when those lie
+ * below a temporary folder, and no host. Caches are left out too: a package cache written now is
+ * code that runs later outside the sandbox.
+ *
+ * Reads, for both: everything except credential stores and the app's own storage. The sandbox
+ * runtime adds its own write protection (shell profiles, `.git/hooks`, `.git/config`, …).
  */
 export const sandboxPolicy = Effect.fnUntraced(function* (input: {
   readonly projectRoot: string;
+  /** The user's project folder, when the run works in a copy of it (a kanban card). */
+  readonly userRoot?: string;
   readonly storageRoot: string;
-  readonly network: readonly string[];
+  readonly access: SandboxAccess;
 }) {
   const home = yield* homeDirectory;
   const fs = yield* FileSystem.FileSystem;
@@ -94,17 +125,33 @@ export const sandboxPolicy = Effect.fnUntraced(function* (input: {
   const real = (paths: readonly string[]) =>
     Effect.forEach(paths, (entry) => fs.realPath(entry).pipe(Effect.orElseSucceed(() => entry)));
   const writable = yield* writableRoots(input.projectRoot);
-  return {
-    network: input.network,
-    allowLocalBinding: input.network.includes("localhost"),
-    allowWrite: [
-      writable.root,
-      ...writable.temporary,
-      ...(yield* real(cacheHomePaths.map((entry) => path.join(home, entry)))),
-    ],
-    denyRead: [...credentialHomePaths.map((entry) => path.join(home, entry)), input.storageRoot],
-    denyWrite: [path.join(writable.root, ".agents", "skills")],
-  };
+  const stores = [...credentialHomePaths.map((entry) => path.join(home, entry)), input.storageRoot];
+  return yield* SandboxAccess.$match(input.access, {
+    Read: () =>
+      Effect.map(real(Option.toArray(Option.fromNullishOr(input.userRoot))), (userRoots) => {
+        const folders = [writable.root, ...userRoots];
+        return {
+          network: [],
+          allowLocalBinding: false,
+          allowWrite: writable.temporary,
+          denyRead: [
+            ...stores,
+            ...folders.flatMap((folder) =>
+              credentialNameGlobs.map((glob) => path.join(folder, glob)),
+            ),
+          ],
+          denyWrite: folders,
+        };
+      }),
+    Write: ({ network }) =>
+      Effect.map(real(cacheHomePaths.map((entry) => path.join(home, entry))), (caches) => ({
+        network,
+        allowLocalBinding: network.includes("localhost"),
+        allowWrite: [writable.root, ...writable.temporary, ...caches],
+        denyRead: stores,
+        denyWrite: [path.join(writable.root, ".agents", "skills")],
+      })),
+  });
 });
 
 /** How long the worker gets to report what it blocked once the command has exited. */

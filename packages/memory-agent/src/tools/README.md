@@ -18,12 +18,13 @@
 - `guardedEffect` / `guardedChange` — SDK 경계에서 실패를 `ToolFailed`(`Cause.UnknownError` 안)로 바꾼다. `guardedChange`는 검사 단계 거부를 `refused: true`로 표시
 - `toolParametersJsonSchema` — Effect Schema를 draft-07 닫힌 객체 JSON Schema로 바꾸고 bound/annotation만 가진 `allOf`를 노드에 접는다
 - `builtinToolEffects` / `readOnlyToolNames` — 내장 도구별 `read`/`effectful` 명시 계약과 읽기 전용 도구 이름 집합(은퇴 도구 포함)
-- `gatedToolNames` — 어떤 권한 모드에서도 승인 없이 실행되지 않는 도구(`save_code_skill`, `write_outside_file`, `delete_outside_file`)
+- `gatedToolNames` — 어떤 권한 모드에서도 승인 없이 실행되지 않는 도구(`save_code_skill`, `run_command`, `write_outside_file`, `delete_outside_file`). `run_command`의 읽기 접근 호출만 예외다
 - `saveCodeSkillSpec` / `writeOutsideFileSpec` / `deleteOutsideFileSpec` — 게이트 도구의 이름·설명·파라미터 스펙
 - `SaveCodeSkillInput` / `RunSkillInput` / `WriteOutsideFileInput` / `DeleteOutsideFileInput` / `TsSkillProgram` / `ShSkillProgram` / `NetworkHost` — 코드 스킬·외부 파일 도구 입력 스키마
 - `PermissionReviewPayload` / `PermissionReviewResponse` — 권한 검토 요청(`askedBy: review | every_call`)과 응답 계약
 - `definitions.ts` 재수출 묶음 — run-state, report(diagnosis/bundle/delivery), uncertain-runs, lease, shown-failure, subagent, loop-health, provider-retry, approvals, queue, improve 계약을 채팅 UI와 공유
-- `ApprovedTools` — 코드 스킬 저장·`run_skill`(sh 스킬 샌드박스 실행)·외부 파일 쓰기/삭제를 제공하는 서비스(`ApprovedTools.layer`)
+- `ApprovedTools` — 코드 스킬 저장·`run_skill`(sh 스킬 샌드박스 실행)·`run_command`(저장하지 않는 스크립트의 샌드박스 실행)·외부 파일 쓰기/삭제를 제공하는 서비스(`ApprovedTools.layer`)
+- `RunCommandInput` / `runCommandSpec` — `run_command`의 입력(`script`, `access`: `read`|`write`, `network`, `workdir`, `timeoutSeconds`, `yieldMs`, `reason`)과 이름·설명. `definitions.ts`에 있어 승인 카드가 함께 쓴다
 - `BackgroundTasks` / `BackgroundBinding` / `BackgroundResult` / `BackgroundEnd` / `BackgroundOperationFailed` / `BackgroundStoreFailed` / `BackgroundTaskNotFound` — 백그라운드 작업(sh 스킬 실행, 외부 에이전트 턴) 서비스와 그 바인딩(`sessionId`, `runId`, `abortSignal`), 끝난 작업의 결과, 세션에 아직 알리지 않은 끝, 오류. 서비스는 작업 시작·결과 대기(`start`, `waitResult`), 끝 알림의 소비·반환(`consume`, `release`, `untold`), 실행 중 목록(`running`)을 맡는다
 - `FileTools` / `fileToolNames` / `listPageSize` — 프로젝트 파일 도구 서비스(`SecretRedactor.layer` 제공), 목록 페이지 크기 500
 - `OutsideTools` / `outsideReadToolNames` — 프로젝트 밖 파일 읽기 전용 도구(자격 증명 제외). 프로젝트 안 경로는 `FileTools`의 호출로 돈다
@@ -43,6 +44,7 @@
 - 새 내장 도구를 추가하면 `builtinToolEffects`에 `read`/`effectful`을 명시해야 한다. 소스 등록 커버리지 테스트가 이를 요구하고, 계약을 바꿀 때는 구현을 확인해야 한다. 알 수 없는/커스텀/MCP 도구는 effectful로 취급된다.
 - 대체된 도구 이름(`get_subagent_report`, `save_shell_skill`, `wait_subagents`, `read_subagent_tool_result`)은 기록된 run·history에 남아 있으므로 `retiredToolEffects`에서 지우면 안 된다.
 - `definitions.ts`는 브라우저에서 import해도 안전해야 한다. 서버 구현은 `approved.ts`에 둔다.
+- `run_command`는 스크립트를 저장하지 않고 한 번 실행한다(decisions.md "호스트 명령은 접근 수준을 정해 `run_command`로 실행한다 (2026-11-14)"). `access: "read"` 호출은 `plan`이 `Ungated`로 정해 승인과 권한 gate가 묻지 않는다. 그 대신 읽기 접근 샌드박스(`shell/sandbox.ts`)에서 돌아 임시 폴더 밖에 쓰지 못하고, 네트워크가 없고, 자격 증명 이름을 가진 프로젝트 파일을 읽지 못한다. `access: "write"` 호출은 `save_code_skill`처럼 호출마다 승인이나 검토를 거치고, sh 스킬과 같은 샌드박스에서 돈다. 스크립트의 모든 단계가 내장 도구로 대체되는 프로그램으로 시작하면 `builtin_overlap`으로, 읽기 접근에 `network`를 주면 `network_needs_write`로 거부한다. 결과 형태와 백그라운드 전환은 `run_skill`의 sh 스킬과 같고, 결과의 `command`는 스크립트의 첫 줄이다
 - `gatedToolNames`의 도구는 어떤 권한 모드에서도 승인 없이 실행되지 않는다. `run_skill`은 호출마다 게이트하지 않고, 저장 시 승인된 프로그램만 실행한다(수정되었거나 승인 안 된 스킬은 다시 저장할 때까지 거부).
 - 루프는 게이트보다 먼저 인수를 디코드한다. 스키마에 맞지 않는 호출은 게이트에 닿지 않는다. 호출 준비는 `prepareRepaired`를 거쳐 TanStack이 수리한 인수도 받는다.
 - 인터럽트(취소)된 호출은 `ToolFailed`로 바꾸지 않고 인터럽트로 유지한다. Error가 아닌 throw 값은 모델에 아무것도 보이지 않도록 `new Error("unknown")`로 바꾼다.

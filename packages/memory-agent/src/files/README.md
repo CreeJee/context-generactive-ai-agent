@@ -8,6 +8,7 @@
 
 - `PathRejected` — 경로 거부 TaggedError, reason은 `invalid_path`/`credential`/`git_internal`/`inside_project`/`outside_project`/`outside_tool_root`/`symlink`/`hard_link`/`not_found`/`not_file`/`not_directory`. `target`은 file tool이 대신 받을 프로젝트 상대 경로다. `symlink`이면 링크가 이끄는 곳, `inside_project`이면 절대 경로가 프로젝트에서 가리키는 곳이다
 - `isCredentialPath` — 자격증명 디렉터리·파일명·`.env`·확장자·secret 단어 세그먼트로 비밀 경로인지 판정하는 이름 기반 가드
+- `credentialNameGlobs` — `isCredentialPath`가 거부하는 이름을 같은 목록에서 만든 glob 배열. 폴더 기준 상대 패턴(`**/…`)이고 글자마다 대소문자를 모두 받는다. 함수를 부를 수 없는 규칙(샌드박스의 읽기 금지)이 쓴다. 함수보다 조금 넓다: `.env.example`과, secret 단어의 구분자 앞에 오는 어떤 글자든 포함한다
 - `pathsOverlap` — 두 절대 경로가 같거나 한쪽이 다른 쪽을 포함하는지 철자로 비교(dual)
 - `relativeBelow` — 정규 경로가 디렉터리 아래 어디인지 dev+inode로 찾아 `/` 구분 상대 경로(Option)로 돌려준다. 디렉터리가 없으면 철자로 비교한다
 - `hasControlCharacter` — 경로에 제어 문자가 있는지

@@ -14,7 +14,7 @@ import {
   type ToolRoots,
 } from "../src/files/path-policy.ts";
 import type { PathRejected } from "../src/files/paths.ts";
-import { sandboxPolicy } from "../src/shell/sandbox.ts";
+import { SandboxAccess, sandboxPolicy } from "../src/shell/sandbox.ts";
 import { withTestPlatform } from "./support/platform.ts";
 
 /** A user's project, a card worktree copy of it, a folder outside both, and the storage root. */
@@ -200,7 +200,7 @@ describe("sh skill sandbox", () => {
         const policy = yield* sandboxPolicy({
           projectRoot: spelled,
           storageRoot: storage,
-          network: [],
+          access: SandboxAccess.Write({ network: [] }),
         });
         expect(policy.allowWrite).toEqual(
           expect.arrayContaining([card, yield* fs.realPath(tmpdir()), yield* fs.realPath("/tmp")]),
@@ -208,6 +208,37 @@ describe("sh skill sandbox", () => {
         expect(policy.allowWrite).not.toContain(user);
         expect(policy.allowWrite).not.toContain(spelled);
         expect(policy.denyWrite).toEqual([path.join(card, ".agents", "skills")]);
+      }).pipe(withTestPlatform),
+  );
+
+  it.live(
+    "with read access writes only the temporary folders and cannot read credential-named files",
+    () =>
+      Effect.gen(function* () {
+        const { user, card, storage, fs, path } = yield* layout();
+        const policy = yield* sandboxPolicy({
+          projectRoot: card,
+          userRoot: user,
+          storageRoot: storage,
+          access: SandboxAccess.Read(),
+        });
+        expect(policy.network).toEqual([]);
+        expect(policy.allowLocalBinding).toBe(false);
+        expect(policy.allowWrite).toEqual(
+          expect.arrayContaining([yield* fs.realPath(tmpdir()), yield* fs.realPath("/tmp")]),
+        );
+        expect(policy.allowWrite).not.toContain(card);
+        // The test's folders lie below a temporary folder; the deny keeps them unwritable.
+        expect(policy.denyWrite).toEqual([card, user]);
+        expect(policy.denyRead).toEqual(
+          expect.arrayContaining([
+            storage,
+            path.join(card, "**", ".[eE][nN][vV]"),
+            path.join(user, "**", ".[eE][nN][vV]"),
+            path.join(card, "**", "*.[pP][eE][mM]"),
+            path.join(card, "**", "*[_.-][cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS].*"),
+          ]),
+        );
       }).pipe(withTestPlatform),
   );
 });
