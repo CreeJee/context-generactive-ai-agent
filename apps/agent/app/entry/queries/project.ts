@@ -172,6 +172,43 @@ export function useAllWorkingSessions(
   });
 }
 
+/** One project's cards waiting for a person: decisions to answer and added cards to approve. */
+export type ProjectWaiting = {
+  readonly projectId: string;
+  readonly name: string;
+  readonly decisions: Awaited<ReturnType<typeof api.decisionInbox>>;
+  readonly boards: Awaited<ReturnType<typeof api.projectBoards>>;
+};
+
+/**
+ * Cards waiting for a person, across every listed project. The reads keep each project's own
+ * `decisions` and `boards` keys, so events still refresh only the project they touched.
+ */
+export function useAllWaitingDecisions(
+  projects: ReadonlyArray<{ readonly id: string; readonly name: string }>,
+) {
+  const decisions = useQueries({
+    queries: projects.map((project) => projectQueries.decisions(project.id)),
+  });
+  const boards = useQueries({
+    queries: projects.map((project) => projectQueries.boards(project.id)),
+  });
+  return {
+    waiting: projects.map((project, index): ProjectWaiting => ({
+      projectId: project.id,
+      name: project.name,
+      decisions: decisions[index]?.data ?? [],
+      boards: boards[index]?.data ?? [],
+    })),
+    /** Some read failed: a list that did not load is not an empty one. */
+    failed: decisions.some((read) => read.isError) || boards.some((read) => read.isError),
+    refetch: () => {
+      decisions.forEach((read) => void read.refetch());
+      boards.forEach((read) => void read.refetch());
+    },
+  };
+}
+
 export const useAgentsQuery = (projectId: string | null) =>
   useQuery({ ...projectQueries.agents(projectId ?? ""), enabled: projectId !== null });
 const useSkillsQueryBody = (projectId: string, enabled: boolean) =>
