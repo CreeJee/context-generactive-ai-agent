@@ -46,6 +46,7 @@ const base = {
   group: null,
   changePending: false,
   projectId: "project-1",
+  sessionId: "session-a",
   holder: "page-1",
   disabled: false,
   closed: false,

@@ -42,6 +42,7 @@ import {
   type HumanDecisionRequest,
   type KanbanView,
 } from "../../api";
+import { useCardFolderQuery } from "../../queries/session";
 import { koreanLocalTime } from "../../shared/local-time";
 import { DecisionPrompt } from "../decision-prompt";
 import { canTransfer, cardStatusLabels } from "./board-moves";
@@ -74,6 +75,14 @@ const riskItems = [
   { value: "medium", label: riskLabels.medium },
   { value: "high", label: riskLabels.high },
 ] as const;
+
+/** Only a card that started and has not finished can have a folder of its own. */
+const folderStatuses: readonly CardStatus[] = [
+  "in_progress",
+  "verify",
+  "human_decision",
+  "blocked",
+];
 
 /** The text without its surrounding spaces, unless nothing is left. */
 const trimmed = (text: string) => {
@@ -128,6 +137,7 @@ export function CardPeek({
   group,
   changePending,
   projectId,
+  sessionId,
   holder,
   disabled,
   closed,
@@ -156,6 +166,8 @@ export function CardPeek({
   readonly group: string | null;
   readonly changePending: boolean;
   readonly projectId: string;
+  /** The conversation the panel's card belongs to. */
+  readonly sessionId: string;
   readonly holder: string;
   readonly disabled: boolean;
   readonly closed: boolean;
@@ -180,6 +192,16 @@ export function CardPeek({
   const { t } = useLingui();
   const [transferTo, setTransferTo] = useState<string | null>(null);
   const [rejectError, setRejectError] = useState<string | null>(null);
+  const openCardId = Peek.$is("Card")(peek) ? peek.cardId : null;
+  const folder = useCardFolderQuery(
+    projectId,
+    sessionId,
+    openCardId ?? "",
+    kanbanActive &&
+      openCardId !== null &&
+      entry !== null &&
+      folderStatuses.includes(entry.card.status),
+  ).data;
   const hold = loopCard?.reason ?? null;
   const holdNote = hold === null ? null : holdReasonNote(hold);
   // The running board takes any blocked card back: a dead-lettered one continues its delivery,
@@ -373,6 +395,7 @@ export function CardPeek({
                   outcomeOf={outcomeOf}
                   lastChange={lastChange}
                   loopCard={loopCard}
+                  folder={folder ?? null}
                 />
               )}
               {!editing && transferTargets.length > 0 && canTransfer(card) && (
@@ -519,6 +542,7 @@ function CardDetails({
   outcomeOf,
   lastChange,
   loopCard,
+  folder,
 }: {
   readonly card: PlanStep;
   readonly titleOf: (cardId: string) => string;
@@ -526,6 +550,8 @@ function CardDetails({
   readonly lastChange: BoardCard["lastChange"];
   /** What the kanban loop counted for the card; null while no loop runs the board. */
   readonly loopCard: LoopCard | null;
+  /** Where the card's work is on disk; null when it has no folder now or it was not read. */
+  readonly folder: { readonly folder: string; readonly branch: string | null } | null;
 }) {
   const { t } = useLingui();
   const none = (
@@ -643,6 +669,20 @@ function CardDetails({
               {ph({ replans: attempts.replans })} · 충돌 해결{" "}
               {ph({ conflicts: attempts.conflictRounds })}
             </Trans>
+          </DataListItem>
+        )}
+        {folder !== null && (
+          <DataListItem
+            term={<Trans comment="Card field: the folder the card's work is in">작업 폴더</Trans>}
+          >
+            <code className="font-mono break-all select-all">{folder.folder}</code>
+          </DataListItem>
+        )}
+        {folder !== null && folder.branch !== null && (
+          <DataListItem
+            term={<Trans comment="Card field: the git branch the card's work is on">브랜치</Trans>}
+          >
+            <code className="font-mono break-all select-all">{folder.branch}</code>
           </DataListItem>
         )}
         <DataListItem

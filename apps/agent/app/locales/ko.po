@@ -3126,6 +3126,11 @@ msgstr "브라우저에서 로그인"
 msgid "브라우저에서 로그인 중"
 msgstr "브라우저에서 로그인 중"
 
+#. Card field: the git branch the card's work is on
+#: app/entry/chat/board/card-peek.tsx
+msgid "브랜치"
+msgstr "브랜치"
+
 #: app/entry/settings/shared.tsx
 msgid "비밀정보 확인에 실패해 명령줄을 숨겼습니다."
 msgstr "비밀정보 확인에 실패해 명령줄을 숨겼습니다."
@@ -5214,6 +5219,11 @@ msgstr "작업 트리"
 #: app/entry/chat/board/goal-merge.tsx
 msgid "작업 트리에 커밋하지 않은 변경이 있어 기다리는 중 ({worktree})"
 msgstr "작업 트리에 커밋하지 않은 변경이 있어 기다리는 중 ({worktree})"
+
+#. Card field: the folder the card's work is in
+#: app/entry/chat/board/card-peek.tsx
+msgid "작업 폴더"
+msgstr "작업 폴더"
 
 #: app/entry/chat/chat-panel.tsx
 msgid "작업을 보관하지 못했습니다."

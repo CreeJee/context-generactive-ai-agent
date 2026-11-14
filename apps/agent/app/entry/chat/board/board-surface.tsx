@@ -468,6 +468,7 @@ export function BoardSurface({
             group={peekBoard?.label ?? null}
             changePending={peek !== null && changePending(peek)}
             projectId={projectId}
+            sessionId={peekSession}
             holder={holder}
             disabled={disabled}
             closed={peekBoard === null || closedIn(peekBoard)}
