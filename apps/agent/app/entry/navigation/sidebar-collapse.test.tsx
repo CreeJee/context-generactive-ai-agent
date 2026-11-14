@@ -99,6 +99,7 @@ type Group = {
   readonly name: string;
   readonly sessions: ReadonlyArray<Session>;
   readonly archived: ReadonlyArray<Session>;
+  readonly folderMissing: boolean;
 };
 
 const group = (projectId: string, name: string, sessions: Session[], archived = []): Group => ({
@@ -106,6 +107,7 @@ const group = (projectId: string, name: string, sessions: Session[], archived = 
   name,
   sessions,
   archived,
+  folderMissing: false,
 });
 
 /** No conversation of any project is at work; tests that need one name their own. */
@@ -198,7 +200,8 @@ describe("SessionSection collapsible groups (jsdom)", () => {
             onArchive={() => {}}
             onDelete={() => {}}
             onRestore={() => {}}
-            agents={[]}
+            header={null}
+            projectActions={() => null}
           />
         </div>,
       );
@@ -235,7 +238,8 @@ describe("SessionSection collapsible groups (jsdom)", () => {
             onArchive={() => {}}
             onDelete={() => {}}
             onRestore={() => {}}
-            agents={[]}
+            header={null}
+            projectActions={() => null}
           />
         </div>,
       );
@@ -277,7 +281,8 @@ describe("SessionSection collapsible groups (jsdom)", () => {
               onArchive={() => {}}
               onDelete={() => {}}
               onRestore={() => {}}
-              agents={[]}
+              header={null}
+              projectActions={() => null}
             />
           </div>,
         );
@@ -302,6 +307,74 @@ describe("SessionSection collapsible groups (jsdom)", () => {
       }),
   );
 
+  it.live("the + button on a project header starts a conversation in that project", () =>
+    Effect.gen(function* () {
+      const created: string[] = [];
+      const { container } = yield* renderSection(
+        <div className="w-72">
+          <SessionSection
+            groups={[
+              group("alpha", "Alpha", [sessionOf("alpha", "a1", "알파 대화")]),
+              group("beta", "Beta", [sessionOf("beta", "b1", "베타 대화")]),
+            ]}
+            working={idle}
+            loading={false}
+            projectId="alpha"
+            sessionId="a1"
+            archiveError={null}
+            onCreate={(projectId) => {
+              created.push(projectId);
+            }}
+            onArchive={() => {}}
+            onDelete={() => {}}
+            onRestore={() => {}}
+            header={null}
+            projectActions={() => null}
+          />
+        </div>,
+      );
+
+      // The open conversation is alpha's; the second project's button still names the second one.
+      const plus = container.querySelector('button[aria-label*="Beta"]');
+      expect(plus).not.toBeNull();
+      yield* acting(() => {
+        plus!.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+      });
+      expect(created).toEqual(["beta"]);
+    }),
+  );
+
+  it.live("a project without conversations is a group while it is not the open project", () =>
+    Effect.gen(function* () {
+      const { container } = yield* renderSection(
+        <div className="w-72">
+          <SessionSection
+            groups={[
+              group("alpha", "Alpha", [sessionOf("alpha", "a1", "알파 대화")]),
+              group("gamma", "Gamma", []),
+            ]}
+            working={idle}
+            loading={false}
+            projectId="alpha"
+            sessionId="a1"
+            archiveError={null}
+            onCreate={() => {}}
+            onArchive={() => {}}
+            onDelete={() => {}}
+            onRestore={() => {}}
+            header={null}
+            projectActions={() => null}
+          />
+        </div>,
+      );
+
+      const gamma = [...container.querySelectorAll("button")].find((button) =>
+        (button.textContent ?? "").startsWith("Gamma"),
+      );
+      expect(gamma).toBeDefined();
+    }),
+  );
+
   it.live("a group without conversations at work shows no badge", () =>
     Effect.gen(function* () {
       const { container } = yield* renderSection(
@@ -321,7 +394,8 @@ describe("SessionSection collapsible groups (jsdom)", () => {
             onArchive={() => {}}
             onDelete={() => {}}
             onRestore={() => {}}
-            agents={[]}
+            header={null}
+            projectActions={() => null}
           />
         </div>,
       );

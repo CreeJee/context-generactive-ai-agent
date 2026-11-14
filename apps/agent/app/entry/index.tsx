@@ -20,8 +20,6 @@ import {
 } from "./queries/mutations/global";
 import {
   useCreateSessionMutation,
-  useCrossRecallMutation,
-  useHideProjectMutation,
   usePermissionModeMutation,
   useRestoreProjectMutation,
   SessionLifecycleChange,
@@ -72,7 +70,6 @@ import {
   archiveErrorMessage,
   projectErrorMessage,
   refusalOf,
-  type ApiError,
   type ModelSelection,
   type PendingLifecycle,
   type ProviderId,
@@ -82,15 +79,14 @@ import { AppEventsProvider, SessionEventsProvider } from "./events/providers";
 import { ThemeSelect } from "./shared/theme";
 import { pageHolder } from "./session/session-lease";
 import { openSettingsOverlay } from "./settings/open-settings";
-import { errorMessage } from "./settings/shared";
 import {
+  ArchivedProjects,
   ModelSection,
   OpenFolderButton,
-  ProjectSection,
   SessionSection,
 } from "./navigation/sidebar";
 import { DecisionInbox } from "./navigation/decision-inbox";
-import { ProjectBoardButton } from "./navigation/project-board-button";
+import { ProjectMenu } from "./navigation/project-menu";
 import { boardCardKey, parseBoardCardKey } from "./chat/board/board-moves";
 import { ProjectBoard } from "./chat/board/project-board";
 import { AccountModelPanel } from "./navigation/account-model-panel";
@@ -197,8 +193,6 @@ export function App() {
   const [accountsOpen, setAccountsOpen] = useState(false);
   const [switchError, setSwitchError] = useState<string | null>(null);
   const permissionMutation = usePermissionModeMutation(projectId ?? "");
-  const crossRecallMutation = useCrossRecallMutation(projectId ?? "");
-  const hideProjectMutation = useHideProjectMutation();
   const restoreProjectMutation = useRestoreProjectMutation();
   const createSessionMutation = useCreateSessionMutation();
   const lifecycleMutation = useSessionLifecycleMutation(pageHolder);
@@ -225,13 +219,12 @@ export function App() {
     void projectsQuery.refetch();
   };
   const [archiveError, setArchiveError] = useState<string | null>(null);
-  const [projectError, setProjectError] = useState<string | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
-  const projectBusy =
-    permissionMutation.isPending ||
-    crossRecallMutation.isPending ||
-    hideProjectMutation.isPending ||
-    restoreProjectMutation.isPending;
+  /** The groups the list draws: each carries whether its project's folder is gone. */
+  const listed = groups.map((group) => ({
+    ...group,
+    folderMissing: projects.find((item) => item.id === group.projectId)?.folderMissing === true,
+  }));
   const agentsQuery = useAgentsQuery(projectId);
   const skillsQuery = useSkillsQuery(projectId ?? "", projectId !== null);
   const slashAgents = isTruthy(agentsQuery.data) ? usableAgents(agentsQuery.data) : [];
@@ -325,7 +318,6 @@ export function App() {
     void setLocation({ ...leaveProject, project: id }, { history: "push" });
   useEffect(() => {
     setArchiveError(null);
-    setProjectError(null);
   }, [projectId]);
 
   const refreshPendingLifecycle = (pending: PendingLifecycle) => {
@@ -434,20 +426,17 @@ export function App() {
     );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  /** Runs one project change from the sidebar; a refusal shows under the project controls. */
-  const changeProject = <A,>(input: {
-    readonly change: () => Promise<A>;
-    readonly failed: (refusal: ApiError | null) => string;
-    readonly done?: () => void;
-  }) =>
+  /** Releases an archived project back into the list; a refusal shows above the list. */
+  const restoreProject = (id: string) =>
     runUiEffect(
-      Effect.gen(function* () {
-        setProjectError(null);
-        yield* uiPromise(input.change);
-        input.done?.();
-      }).pipe(
-        Effect.catchTag("UnknownError", (failure) =>
-          Effect.sync(() => setProjectError(input.failed(refusalOf(failure.cause)))),
+      uiPromise(() => restoreProjectMutation.mutateAsync(id)).pipe(
+        Effect.flatMap(() => Effect.sync(() => setArchiveError(null))),
+        Effect.catchTag("UnknownError", () =>
+          Effect.sync(() =>
+            setArchiveError(
+              t`프로젝트를 보관에서 꺼내지 못했습니다. 잠시 뒤 다시 시도해 주십시오.`,
+            ),
+          ),
         ),
       ),
     );
@@ -670,7 +659,7 @@ export function App() {
       <Placeholder
         icon={<FolderIcon />}
         title={t`새 대화를 시작해 주십시오`}
-        description={t`왼쪽의 새 대화 버튼을 눌러 주십시오.`}
+        description={t`왼쪽에서 프로젝트 이름 옆의 + 버튼을 눌러 주십시오.`}
       />
     ))
     .exhaustive();
@@ -735,40 +724,6 @@ export function App() {
                   </div>
                 )}
               </AccountModelPanel>
-              <ProjectSection
-                projects={projects}
-                hiddenProjects={hiddenProjects}
-                projectId={projectId}
-                onSelect={selectProject}
-                onAdd={addProject}
-                onPickFolder={api.pickFolder}
-                busy={projectBusy}
-                error={projectError}
-                onRestore={(restoredId) =>
-                  void changeProject({
-                    change: () => restoreProjectMutation.mutateAsync(restoredId),
-                    failed: () =>
-                      t`프로젝트를 보관에서 꺼내지 못했습니다. 잠시 뒤 다시 시도해 주십시오.`,
-                    done: () => selectProject(restoredId),
-                  })
-                }
-                onCrossRecall={(allowed) =>
-                  void changeProject({
-                    change: () => crossRecallMutation.mutateAsync(!allowed),
-                    failed: errorMessage,
-                  })
-                }
-                onHide={(hiddenId) =>
-                  void changeProject({
-                    change: () => hideProjectMutation.mutateAsync(hiddenId),
-                    failed: () => t`프로젝트를 보관하지 못했습니다. 잠시 뒤 다시 시도해 주십시오.`,
-                    done: () => {
-                      const left = projects.filter((project) => project.id !== hiddenId);
-                      void setLocation({ ...leaveProject, project: left.at(0)?.id ?? null });
-                    },
-                  })
-                }
-              />
             </div>
             <SidebarSeparator />
             {projectId && (
@@ -781,30 +736,63 @@ export function App() {
                       void setLocation({ ...leaveProjectBoard, session, card }, { history: "push" })
                     }
                   />
-                  <ProjectBoardButton
-                    projectId={projectId}
-                    onOpen={() => void setLocation({ boards: true }, { history: "push" })}
-                  />
                 </SidebarMenu>
               </SidebarGroup>
             )}
-            {projectId && (
-              <SessionSection
-                groups={groups}
-                working={working}
-                loading={sessionsLoading}
-                failed={sessionsFailed}
-                onRetry={retrySessions}
-                projectId={projectId}
-                sessionId={sessionId}
-                archiveError={archiveError}
-                onCreate={(agent) => void createSession(projectId, agent)}
-                onArchive={archiveSession}
-                onDelete={deleteSession}
-                onRestore={restoreSession}
-                agents={slashAgents}
-              />
-            )}
+            <SessionSection
+              groups={listed}
+              working={working}
+              loading={sessionsLoading}
+              failed={sessionsFailed}
+              onRetry={retrySessions}
+              projectId={projectId}
+              sessionId={sessionId}
+              archiveError={archiveError}
+              onCreate={(target) => void createSession(target)}
+              onArchive={archiveSession}
+              onDelete={deleteSession}
+              onRestore={restoreSession}
+              header={
+                <OpenFolderButton
+                  projects={projects}
+                  onAdd={addProject}
+                  onSelect={selectProject}
+                  onPickFolder={api.pickFolder}
+                  label={t({
+                    message: "프로젝트 추가",
+                    comment: "Button that adds a project from a folder",
+                  })}
+                />
+              }
+              projectActions={(id) => {
+                const project = projects.find((item) => item.id === id);
+                return project === undefined ? null : (
+                  <ProjectMenu
+                    project={project}
+                    onOpenBoard={() =>
+                      void setLocation(
+                        { ...leaveProject, project: id, boards: true },
+                        { history: "push" },
+                      )
+                    }
+                    onOpenSettings={() =>
+                      openSettingsOverlay({ projectId: id, initialPage: "permission" })
+                    }
+                    onHidden={() => {
+                      if (id !== projectId) return;
+                      const left = projects.filter((item) => item.id !== id);
+                      void setLocation({ ...leaveProject, project: left.at(0)?.id ?? null });
+                    }}
+                    onProblem={setArchiveError}
+                  />
+                );
+              }}
+            />
+            <ArchivedProjects
+              projects={hiddenProjects}
+              onRestore={(restoredId) => void restoreProject(restoredId)}
+            />
+
             <SidebarSeparator />
             <SidebarFooter>
               <ModelDownloadList className="px-2 pb-2" />

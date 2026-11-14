@@ -202,6 +202,7 @@ msgid "{contextWindow} / 출력 {output} · 도구 {tools}"
 msgstr "{contextWindow} / 출력 {output} · 도구 {tools}"
 
 #. Badge next to the Skills page title; {count} is how many skills there are
+#. How many archived projects the section holds
 #. How many conversations the section holds
 #: app/entry/navigation/sidebar.tsx
 #: app/entry/settings/pages/skills.tsx
@@ -344,9 +345,24 @@ msgstr "{modelId} 수정"
 msgid "{modelId} 연결을 확인했습니다."
 msgstr "{modelId} 연결을 확인했습니다."
 
+#. Button that opens a project's menu; name is the project's name
+#: app/entry/navigation/project-menu.tsx
+msgid "{name} 메뉴"
+msgstr "{name} 메뉴"
+
+#. Button that releases an archived project; name is the project's name
+#: app/entry/navigation/sidebar.tsx
+msgid "{name} 보관 해제"
+msgstr "{name} 보관 해제"
+
 #: app/entry/chat/approval.tsx
 msgid "{name} 실행을 승인할까요?"
 msgstr "{name} 실행을 승인할까요?"
+
+#. Button on a project's header that starts a conversation in it
+#: app/entry/navigation/sidebar.tsx
+msgid "{name}에 새 대화"
+msgstr "{name}에 새 대화"
 
 #: app/entry/chat/images.tsx
 msgid "{path} 크게 보기"
@@ -1659,8 +1675,6 @@ msgid "기본값으로"
 msgstr "기본값으로"
 
 #. Settings tab group: pages about the app's stored conversation memory
-#. Sidebar field label: the project's memory
-#: app/entry/navigation/sidebar.tsx
 #: app/entry/settings/settings-dialog.tsx
 msgid "기억"
 msgstr "기억"
@@ -1873,8 +1887,8 @@ msgstr "다른 탭에서 쓰고 있는 대화입니다. 그 탭을 닫은 뒤 �
 msgid "다른 프로젝트 기억도 찾기"
 msgstr "다른 프로젝트 기억도 찾기"
 
-#. Switch: conversations in other projects may recall this project's memory
-#: app/entry/navigation/sidebar.tsx
+#. Menu item: conversations in other projects may recall this project's memory
+#: app/entry/navigation/project-menu.tsx
 msgid "다른 프로젝트가 이 기억을 찾도록 허용"
 msgstr "다른 프로젝트가 이 기억을 찾도록 허용"
 
@@ -2211,10 +2225,6 @@ msgstr "대화 목록을 불러오지 못했습니다."
 msgid "대화 밖에서 쓰는 도구와 연결을 관리합니다."
 msgstr "대화 밖에서 쓰는 도구와 연결을 관리합니다."
 
-#: app/entry/navigation/sidebar.tsx
-msgid "대화 상대 고르기"
-msgstr "대화 상대 고르기"
-
 #. Placeholder of the conversation picker
 #: app/entry/chat/board/card-peek.tsx
 msgid "대화 선택"
@@ -2340,10 +2350,6 @@ msgstr "동시에 실행할 카드 수"
 #: app/entry/navigation/compatible-accounts.tsx
 msgid "등록된 키 유지"
 msgstr "등록된 키 유지"
-
-#: app/entry/navigation/sidebar.tsx
-msgid "등록된 프로젝트가 없습니다."
-msgstr "등록된 프로젝트가 없습니다."
 
 #: app/entry/navigation/compatible-accounts.tsx
 msgid "등록한 모델이 없습니다. 모델을 추가해야 이 엔드포인트로 대화할 수 있습니다."
@@ -2472,10 +2478,6 @@ msgstr "막힘은 오케스트레이터가 표시합니다."
 #: app/entry/chat/chat-panel.tsx
 msgid "만들기"
 msgstr "만들기"
-
-#: app/entry/navigation/sidebar.tsx
-msgid "맞는 프로젝트가 없습니다."
-msgstr "맞는 프로젝트가 없습니다."
 
 #: app/entry/chat/message.tsx
 msgid "맞을 수 있는 skill: {skillNames}"
@@ -2730,11 +2732,6 @@ msgstr "모든 작업 위치"
 msgid "모르는 명령입니다: /{word}"
 msgstr "모르는 명령입니다: /{word}"
 
-#. Sidebar field label: the project's place in the project list
-#: app/entry/navigation/sidebar.tsx
-msgid "목록"
-msgstr "목록"
-
 #: app/entry/navigation/sidebar.tsx
 msgid "목록에서만 뺀 대화입니다. 기억 검색에는 계속 나옵니다."
 msgstr "목록에서만 뺀 대화입니다. 기억 검색에는 계속 나옵니다."
@@ -2900,11 +2897,7 @@ msgstr "보관 재시도"
 msgid "보관 중"
 msgstr "보관 중"
 
-#. Hint on an archived project: choosing it unarchives it
-#: app/entry/navigation/sidebar.tsx
-msgid "보관 해제"
-msgstr "보관 해제"
-
+#. Sidebar section heading: the archived projects
 #: app/entry/navigation/sidebar.tsx
 msgid "보관된 프로젝트"
 msgstr "보관된 프로젝트"
@@ -2916,7 +2909,6 @@ msgstr "보관된 프로젝트"
 msgid "보관됨"
 msgstr "보관됨"
 
-#. Button that archives the project
 #. Button that archives the project
 #. Menu item that archives the conversation
 #: app/entry/navigation/sidebar.tsx
@@ -3155,7 +3147,6 @@ msgstr "사용 안 함"
 #. Badge: image generation is switched on
 #: app/entry/navigation/account-profiles.tsx
 #: app/entry/navigation/compatible-accounts.tsx
-#: app/entry/navigation/sidebar.tsx
 #: app/entry/settings/pages/image.tsx
 msgid "사용 중"
 msgstr "사용 중"
@@ -3277,18 +3268,10 @@ msgstr "새 계정 로그인을 완료하지 못했습니다. 다시 시도해 �
 msgid "새 계정 이름"
 msgstr "새 계정 이름"
 
-#. Button that starts a conversation
-#. Group of buttons that start a conversation
 #. Title of an empty conversation
 #: app/entry/chat/chat-history.tsx
-#: app/entry/navigation/sidebar.tsx
 msgid "새 대화"
 msgstr "새 대화"
-
-#. Menu heading: who the new conversation talks to
-#: app/entry/navigation/sidebar.tsx
-msgid "새 대화 상대"
-msgstr "새 대화 상대"
 
 #: app/entry/index.tsx
 msgid "새 대화를 만들지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
@@ -3540,10 +3523,6 @@ msgstr "설정된 MCP 서버가 없습니다."
 #: app/entry/settings/pages/agents.tsx
 msgid "설정된 에이전트가 없습니다."
 msgstr "설정된 에이전트가 없습니다."
-
-#: app/entry/navigation/sidebar.tsx
-msgid "설정에서 신뢰한 에이전트가 없습니다"
-msgstr "설정에서 신뢰한 에이전트가 없습니다"
 
 #: app/entry/chat/chat-composer.tsx
 msgid "설정에서 이미지 생성을 먼저 켜 주십시오"
@@ -4396,10 +4375,6 @@ msgstr "외부 에이전트에게 맡기기"
 msgid "외부 에이전트와 새 대화"
 msgstr "외부 에이전트와 새 대화"
 
-#: app/entry/navigation/sidebar.tsx
-msgid "외부 에이전트와 직접"
-msgstr "외부 에이전트와 직접"
-
 #: app/entry/settings/pages/recall.tsx
 msgid "외부 에이전트와 직접 대화할 때, 메시지와 관련된 기억을 최대 5개까지 출처와 함께 메시지 앞에 붙여 보냅니다. 외부 프로세스로 나가는 내용이라 필요할 때만 켜 주십시오."
 msgstr "외부 에이전트와 직접 대화할 때, 메시지와 관련된 기억을 최대 5개까지 출처와 함께 메시지 앞에 붙여 보냅니다. 외부 프로세스로 나가는 내용이라 필요할 때만 켜 주십시오."
@@ -4414,8 +4389,8 @@ msgid "왼쪽에서 OpenAI 호환 공급자를 설정하거나 구독 계정에 
 msgstr "왼쪽에서 OpenAI 호환 공급자를 설정하거나 구독 계정에 로그인해 주십시오."
 
 #: app/entry/index.tsx
-msgid "왼쪽의 새 대화 버튼을 눌러 주십시오."
-msgstr "왼쪽의 새 대화 버튼을 눌러 주십시오."
+msgid "왼쪽에서 프로젝트 이름 옆의 + 버튼을 눌러 주십시오."
+msgstr "왼쪽에서 프로젝트 이름 옆의 + 버튼을 눌러 주십시오."
 
 #. Compaction stage: earlier turns were summarized
 #: app/entry/chat/context-meter.tsx
@@ -4684,11 +4659,6 @@ msgstr "이 스크립트가 접속할 수 있는 호스트(이 목록 밖으로�
 #: app/entry/navigation/account-profiles.tsx
 msgid "이 앱의 계정 목록에서도 지웁니다."
 msgstr "이 앱의 계정 목록에서도 지웁니다."
-
-#. Menu item: talk to this app's own model
-#: app/entry/navigation/sidebar.tsx
-msgid "이 앱의 모델"
-msgstr "이 앱의 모델"
 
 #: app/entry/chat/slash-commands.ts
 msgid "이 앱의 모델과 새 대화"
@@ -5952,10 +5922,10 @@ msgstr "카드마다 에이전트를 따로 두고 보드가 배정·검증·통
 msgid "칸반 동시 실행"
 msgstr "칸반 동시 실행"
 
-#. Sidebar menu item that opens the project's kanban board
+#. Menu item that opens the project's kanban board
 #: app/entry/chat/board-panel.tsx
 #: app/entry/chat/board/kanban-board.tsx
-#: app/entry/navigation/project-board-button.tsx
+#: app/entry/navigation/project-menu.tsx
 #: app/entry/report/report-bundle.tsx
 msgid "칸반 보드"
 msgstr "칸반 보드"
@@ -6264,11 +6234,6 @@ msgstr "폴더 경로"
 msgid "폴더 경로가 아닙니다."
 msgstr "폴더 경로가 아닙니다."
 
-#. Hint on a project whose folder no longer exists
-#: app/entry/navigation/sidebar.tsx
-msgid "폴더 없음"
-msgstr "폴더 없음"
-
 #. Button that adds a project from a folder
 #. Button that adds a project from a folder
 #: app/entry/navigation/sidebar.tsx
@@ -6294,28 +6259,15 @@ msgstr "표시 없음, 기본값: {shown}"
 
 #. Label of the settings dialog's project picker
 #. Scope badge: set in this project's config
-#. Sidebar section of project settings
-#. Sidebar section of project settings
-#: app/entry/navigation/sidebar.tsx
 #: app/entry/settings/settings-dialog.tsx
 #: app/entry/settings/shared.tsx
 msgid "프로젝트"
 msgstr "프로젝트"
 
-#. Project section button; name is the selected project's name
-#: app/entry/navigation/sidebar.tsx
-msgid "프로젝트 {name}"
-msgstr "프로젝트 {name}"
-
 #. Settings page name: finding repeated corrections in project history
 #: app/entry/settings/shared.tsx
 msgid "프로젝트 개선"
 msgstr "프로젝트 개선"
-
-#. Placeholder of the project search box
-#: app/entry/navigation/sidebar.tsx
-msgid "프로젝트 검색"
-msgstr "프로젝트 검색"
 
 #. Placeholder of the settings dialog's project picker
 #: app/entry/settings/settings-dialog.tsx
@@ -6362,8 +6314,8 @@ msgstr "프로젝트 밖 파일을 삭제할까요?"
 msgid "프로젝트 밖 파일을 쓸까요?"
 msgstr "프로젝트 밖 파일을 쓸까요?"
 
-#. Tooltip: archiving takes the project out of the list
-#: app/entry/navigation/sidebar.tsx
+#. Menu item that archives the project
+#: app/entry/navigation/project-menu.tsx
 msgid "프로젝트 보관"
 msgstr "프로젝트 보관"
 
@@ -6371,9 +6323,10 @@ msgstr "프로젝트 보관"
 msgid "프로젝트 사용 기록을 읽지 못했습니다."
 msgstr "프로젝트 사용 기록을 읽지 못했습니다."
 
-#: app/entry/navigation/sidebar.tsx
-msgid "프로젝트 선택"
-msgstr "프로젝트 선택"
+#. Menu item that opens the project's settings
+#: app/entry/navigation/project-menu.tsx
+msgid "프로젝트 설정"
+msgstr "프로젝트 설정"
 
 #. Badge on a user-wide entry that a project entry of the same name replaces
 #: app/entry/settings/shared.tsx
@@ -6386,6 +6339,7 @@ msgstr "프로젝트 설정으로 대체됨"
 msgid "프로젝트 순서"
 msgstr "프로젝트 순서"
 
+#. Button that adds a project from a folder
 #. Button that adds a project from a folder
 #: app/entry/index.tsx
 #: app/entry/navigation/sidebar.tsx
@@ -6400,6 +6354,10 @@ msgstr "프로젝트 칸반 보드"
 msgid "프로젝트 폴더({root})가 없습니다. 옮기거나 지웠다면 이 프로젝트를 보관해 주십시오. 대화와 기억은 남습니다."
 msgstr "프로젝트 폴더({root})가 없습니다. 옮기거나 지웠다면 이 프로젝트를 보관해 주십시오. 대화와 기억은 남습니다."
 
+#: app/entry/navigation/sidebar.tsx
+msgid "프로젝트 폴더가 없습니다"
+msgstr "프로젝트 폴더가 없습니다"
+
 #: app/entry/chat/chat-composer.tsx
 msgid "프로젝트를 변경하지 않은 채 Plan을 만듭니다. 승인하면 보드에서 실행합니다"
 msgstr "프로젝트를 변경하지 않은 채 Plan을 만듭니다. 승인하면 보드에서 실행합니다"
@@ -6408,7 +6366,7 @@ msgstr "프로젝트를 변경하지 않은 채 Plan을 만듭니다. 승인하�
 msgid "프로젝트를 보관에서 꺼내지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
 msgstr "프로젝트를 보관에서 꺼내지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
 
-#: app/entry/index.tsx
+#: app/entry/navigation/project-menu.tsx
 #: app/entry/settings/settings-dialog.tsx
 msgid "프로젝트를 보관하지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
 msgstr "프로젝트를 보관하지 못했습니다. 잠시 뒤 다시 시도해 주십시오."

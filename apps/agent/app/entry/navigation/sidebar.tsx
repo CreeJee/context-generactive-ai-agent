@@ -33,7 +33,6 @@ import {
 } from "~/components/ui/alert-dialog";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
-import { ButtonGroup } from "~/components/ui/button-group";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
 import {
   Dialog,
@@ -45,17 +44,6 @@ import {
   DialogTitle,
 } from "~/components/ui/dialog";
 import {
-  Combobox,
-  ComboboxCollection,
-  ComboboxContent,
-  ComboboxEmpty,
-  ComboboxGroup,
-  ComboboxInput,
-  ComboboxItem,
-  ComboboxLabel,
-  ComboboxList,
-} from "~/components/ui/combobox";
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
@@ -63,7 +51,6 @@ import {
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu";
 import { Field, FieldError, FieldLabel } from "~/components/ui/field";
@@ -86,7 +73,6 @@ import {
 } from "~/components/ui/sidebar";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Spinner } from "~/components/ui/spinner";
-import { Switch } from "~/components/ui/switch";
 import { dayAndTime } from "~/lib/dates";
 import { useHydrated } from "../shared/use-hydrated";
 import {
@@ -98,7 +84,6 @@ import {
 } from "../api";
 import { DataList, DataListItem } from "~/components/ui/data-list";
 import type { ProjectWorking } from "../queries/project";
-import { SidebarDisclosureTrigger } from "./sidebar-disclosure-trigger";
 import { LoadFailed } from "../shared/load-failed";
 import { effortChoices } from "./providers";
 
@@ -197,162 +182,15 @@ export function ModelSection({
   );
 }
 
-const projectSectionOpenAtom = atomWithStorage("context-agent-project-section-open-v2", false);
-
 /**
- * How each project's conversation group sits in the list: folded or open, kept per browser like
- * the project section above. The server renders and hydrates with the empty default and the
- * stored folds are read once the browser takes over, so the first paint never disagrees with the
- * server's HTML.
+ * How each project's conversation group sits in the list: folded or open, kept per browser. The
+ * server renders and hydrates with the empty default and the stored folds are read once the
+ * browser takes over, so the first paint never disagrees with the server's HTML.
  */
 const sessionGroupsOpenAtom = atomWithStorage<Readonly<Record<string, boolean>>>(
   "context-agent-session-groups-open-v1",
   {},
 );
-
-export function ProjectSection({
-  projects,
-  hiddenProjects,
-  projectId,
-  onSelect,
-  onAdd,
-  onPickFolder,
-  onCrossRecall,
-  onHide,
-  onRestore,
-  busy = false,
-  error = null,
-}: {
-  projects: ReadonlyArray<ListedProject>;
-  /** Archived projects; choosing one releases it from the archive. */
-  hiddenProjects: ReadonlyArray<ListedProject>;
-  projectId: string | null;
-  onSelect: (projectId: string) => void;
-  onAdd: (root: string) => Promise<string | null>;
-  /** The host's folder dialog. */
-  onPickFolder: () => Promise<FolderPick>;
-  /** Whether conversations in other projects may recall this project's memory (R08). */
-  onCrossRecall: (allowed: boolean) => void;
-  /** Archives the project: out of this list; its conversations and memory stay. */
-  onHide: (projectId: string) => void;
-  /** Releases an archived project back into the list. */
-  onRestore: (projectId: string) => void;
-  /** A project change is being saved; its controls wait for it. */
-  busy?: boolean;
-  /** Why the last project change failed. */
-  error?: string | null;
-}) {
-  const { t } = useLingui();
-  const current = projects.find((project) => project.id === projectId);
-  const [open, setOpen] = useAtom(projectSectionOpenAtom);
-  const sectionLabel = t({ message: "프로젝트", comment: "Sidebar section of project settings" });
-
-  return (
-    <section>
-      <Collapsible open={open} onOpenChange={setOpen}>
-        {/* Collapsed, a selected project shows only its name; the label keeps the context. */}
-        <SidebarDisclosureTrigger
-          aria-label={
-            current !== undefined
-              ? t({
-                  message: `프로젝트 ${ph({ name: current.name })}`,
-                  comment: "Project section button; name is the selected project's name",
-                })
-              : sectionLabel
-          }
-        >
-          {current !== undefined ? (
-            <span className="font-medium">{current.name}</span>
-          ) : (
-            <span className="font-medium">
-              <Trans>프로젝트 선택</Trans>
-            </span>
-          )}
-        </SidebarDisclosureTrigger>
-        <CollapsibleContent className="px-4 pb-2">
-          <DataList className="grid-cols-[3.5rem_minmax(0,1fr)]">
-            <DataListItem term={sectionLabel}>
-              <div className="flex min-w-0 items-center gap-2">
-                {projects.length > 0 || hiddenProjects.length > 0 ? (
-                  <ProjectCombobox
-                    projects={projects}
-                    hiddenProjects={hiddenProjects}
-                    current={current ?? null}
-                    onSelect={onSelect}
-                    onRestore={onRestore}
-                  />
-                ) : (
-                  <p className="min-w-0 flex-1 text-xs text-muted-foreground">
-                    <Trans>등록된 프로젝트가 없습니다.</Trans>
-                  </p>
-                )}
-                <OpenFolderButton
-                  projects={projects}
-                  onAdd={onAdd}
-                  onSelect={onSelect}
-                  onPickFolder={onPickFolder}
-                />
-              </div>
-            </DataListItem>
-            {current && (
-              <>
-                <DataListItem
-                  term={t({
-                    message: "기억",
-                    comment: "Sidebar field label: the project's memory",
-                  })}
-                >
-                  <label className="flex min-h-8 cursor-pointer items-center justify-between gap-2">
-                    <span className="text-xs">
-                      <Trans comment="Switch: conversations in other projects may recall this project's memory">
-                        다른 프로젝트가 이 기억을 찾도록 허용
-                      </Trans>
-                    </span>
-                    <Switch
-                      checked={!current.crossRecallExcluded}
-                      disabled={busy}
-                      onCheckedChange={(checked) => onCrossRecall(checked)}
-                    />
-                  </label>
-                </DataListItem>
-                <DataListItem
-                  term={t({
-                    message: "목록",
-                    comment: "Sidebar field label: the project's place in the project list",
-                  })}
-                >
-                  <Button
-                    variant="ghost-muted"
-                    size="sm"
-                    title={t({
-                      message: "프로젝트 보관",
-                      comment: "Tooltip: archiving takes the project out of the list",
-                    })}
-                    disabled={busy}
-                    onClick={() => onHide(current.id)}
-                  >
-                    <ArchiveIcon />{" "}
-                    <Trans comment="Button that archives the project">보관하기</Trans>
-                  </Button>
-                </DataListItem>
-                {current.folderMissing && (
-                  <p className="col-span-2 text-2xs text-destructive">
-                    <MissingFolderNotice root={current.root} />
-                  </p>
-                )}
-              </>
-            )}
-          </DataList>
-          {error && (
-            <Alert variant="destructive" className="mt-2">
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-        </CollapsibleContent>
-      </Collapsible>
-    </section>
-  );
-}
 
 /** What a project whose folder is gone says, where it can be archived. */
 export function MissingFolderNotice({ root }: { root: string }) {
@@ -361,90 +199,6 @@ export function MissingFolderNotice({ root }: { root: string }) {
       프로젝트 폴더({root})가 없습니다. 옮기거나 지웠다면 이 프로젝트를 보관해 주십시오. 대화와
       기억은 남습니다.
     </Trans>
-  );
-}
-
-/** Picks among the projects by name; archived ones sit in their own group and come back when chosen. */
-function ProjectCombobox({
-  projects,
-  hiddenProjects,
-  current,
-  onSelect,
-  onRestore,
-}: {
-  projects: ReadonlyArray<ListedProject>;
-  hiddenProjects: ReadonlyArray<ListedProject>;
-  current: ListedProject | null;
-  onSelect: (projectId: string) => void;
-  onRestore: (projectId: string) => void;
-}) {
-  const { t } = useLingui();
-  const groups = [
-    {
-      value: "listed",
-      label: t({ message: "프로젝트", comment: "Sidebar section of project settings" }),
-      items: projects,
-    },
-    ...(hiddenProjects.length > 0
-      ? [{ value: "archived", label: t`보관된 프로젝트`, items: hiddenProjects }]
-      : []),
-  ];
-  return (
-    <Combobox
-      items={groups}
-      value={current}
-      itemToStringLabel={(project: ListedProject) => project.name}
-      isItemEqualToValue={(item: ListedProject, value: ListedProject) => item.id === value.id}
-      onValueChange={(project: ListedProject | null) => {
-        if (project === null) return;
-        if (project.hiddenAt !== null) onRestore(project.id);
-        else onSelect(project.id);
-      }}
-    >
-      <ComboboxInput
-        className="h-6 min-w-0 flex-1"
-        placeholder={t({
-          message: "프로젝트 검색",
-          comment: "Placeholder of the project search box",
-        })}
-        aria-label={t`프로젝트 선택`}
-      />
-      <ComboboxContent>
-        <ComboboxEmpty>
-          <Trans>맞는 프로젝트가 없습니다.</Trans>
-        </ComboboxEmpty>
-        <ComboboxList>
-          {(group: (typeof groups)[number]) => (
-            <ComboboxGroup key={group.value} items={group.items}>
-              {groups.length > 1 && <ComboboxLabel>{group.label}</ComboboxLabel>}
-              <ComboboxCollection>
-                {(project: ListedProject) => (
-                  <ComboboxItem key={project.id} value={project} title={project.root}>
-                    <span className="min-w-0 flex-1 truncate">{project.name}</span>
-                    {project.folderMissing && (
-                      <span className="flex shrink-0 items-center gap-1 text-destructive">
-                        <FolderXIcon />{" "}
-                        <Trans comment="Hint on a project whose folder no longer exists">
-                          폴더 없음
-                        </Trans>
-                      </span>
-                    )}
-                    {project.hiddenAt !== null && (
-                      <span className="flex shrink-0 items-center gap-1 pr-5 text-muted-foreground">
-                        <ArchiveRestoreIcon />{" "}
-                        <Trans comment="Hint on an archived project: choosing it unarchives it">
-                          보관 해제
-                        </Trans>
-                      </span>
-                    )}
-                  </ComboboxItem>
-                )}
-              </ComboboxCollection>
-            </ComboboxGroup>
-          )}
-        </ComboboxList>
-      </ComboboxContent>
-    </Combobox>
   );
 }
 
@@ -672,27 +426,32 @@ const shownIn = (filter: PlaceFilter) => (session: Session) =>
 const atWork = (session: Session, working: ProjectWorking) =>
   working.answering.has(session.id) || working.boardRunning.has(session.id);
 
-/**
- * One project's part of the conversation list: its header, place filter, groups and archive.
- * The caller only mounts it for projects worth showing: with conversations, or selected.
- */
+/** One listed project and what the list shows of it: its conversations and archived ones. */
+interface ProjectGroup {
+  readonly projectId: string;
+  readonly name: string;
+  readonly sessions: ReadonlyArray<Session>;
+  readonly archived: ReadonlyArray<Session>;
+  /** The project's folder is gone from disk. */
+  readonly folderMissing: boolean;
+}
+
+/** One project's part of the conversation list: its header, place filter, groups and archive. */
 function ProjectSessionGroup({
   group,
   selected,
   working,
   label,
   row,
+  actions,
   onRestore,
   onDeleteAsk,
 }: {
-  group: {
-    readonly projectId: string;
-    readonly name: string;
-    readonly sessions: ReadonlyArray<Session>;
-    readonly archived: ReadonlyArray<Session>;
-  };
-  /** The project whose page is open; its group is the one open, and the only one without rows. */
+  group: ProjectGroup;
+  /** The project of the open conversation; its group starts open when no fold was stored. */
   readonly selected: boolean;
+  /** The buttons on the header row: start a conversation, the project's menu. */
+  readonly actions: React.ReactNode;
   /** The project's conversations at work now, which lead the group and fill the badge. */
   readonly working: ProjectWorking;
   readonly label: (session: Session) => string;
@@ -740,39 +499,49 @@ function ProjectSessionGroup({
             like the section headings below it. It sits above them (z-20 over their z-10, h-8
             offset) so a scrolling section heading passes under the project's name instead of
             covering it. The count stays readable when the group is folded, as its only content. */}
-        <CollapsibleTrigger
-          className="group sticky top-0 z-20 flex h-8 w-full items-center gap-1 rounded-md bg-sidebar px-2 text-xs font-semibold text-foreground outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
-          title={group.name}
-        >
-          <ChevronRightIcon className="size-3.5 shrink-0 transition-transform group-data-panel-open:rotate-90" />
-          <span className="min-w-0 flex-1 truncate text-left">{group.name}</span>
-          {/* Readable while the group is folded too, when it is the only context. */}
-          {!open && (
-            <span
-              className="shrink-0 tabular-nums text-2xs font-medium text-muted-foreground"
-              aria-label={t({
-                message: `대화 ${ph({ count: group.sessions.length })}개`,
-                comment: "How many conversations the project's group header shows",
-              })}
-            >
-              {group.sessions.length}
-            </span>
-          )}
-          {/* How many conversations of this project are at work now; none is the usual state. */}
-          {leading.length > 0 && (
-            <Badge
-              variant="default"
-              aria-label={t({
-                message: `진행 중 ${ph({ count: leading.length })}개`,
-                comment: "How many conversations the project has at work now",
-              })}
-            >
-              <Spinner className="size-2.5" aria-hidden />
-              {leading.length}
-            </Badge>
-          )}
-          {selected && <Badge variant="secondary">{t`사용 중`}</Badge>}
-        </CollapsibleTrigger>
+        {/* The header row is a sibling of the folding trigger: a button cannot hold the project's
+            action buttons. The row carries the pinning, the trigger the folding. */}
+        <div className="sticky top-0 z-20 flex h-8 items-center gap-0.5 rounded-md bg-sidebar pr-1">
+          <CollapsibleTrigger
+            className="group flex h-8 min-w-0 flex-1 items-center gap-1 rounded-md px-2 text-xs font-semibold text-foreground outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+            title={group.name}
+          >
+            <ChevronRightIcon className="size-3.5 shrink-0 transition-transform group-data-panel-open:rotate-90" />
+            <span className="min-w-0 truncate text-left">{group.name}</span>
+            {group.folderMissing && (
+              <span className="flex shrink-0 text-destructive" title={t`프로젝트 폴더가 없습니다`}>
+                <FolderXIcon className="size-3.5" aria-hidden />
+              </span>
+            )}
+            <span className="flex-1" />
+            {/* Readable while the group is folded too, when it is the only context. */}
+            {!open && (
+              <span
+                className="shrink-0 tabular-nums text-2xs font-medium text-muted-foreground"
+                aria-label={t({
+                  message: `대화 ${ph({ count: group.sessions.length })}개`,
+                  comment: "How many conversations the project's group header shows",
+                })}
+              >
+                {group.sessions.length}
+              </span>
+            )}
+            {/* How many conversations of this project are at work now; none is the usual state. */}
+            {leading.length > 0 && (
+              <Badge
+                variant="default"
+                aria-label={t({
+                  message: `진행 중 ${ph({ count: leading.length })}개`,
+                  comment: "How many conversations the project has at work now",
+                })}
+              >
+                <Spinner className="size-2.5" aria-hidden />
+                {leading.length}
+              </Badge>
+            )}
+          </CollapsibleTrigger>
+          {actions}
+        </div>
         <CollapsibleContent className="flex flex-col gap-0.5">
           {group.sessions.length === 0 ? (
             <p className="px-4 py-2 text-xs text-muted-foreground">
@@ -927,6 +696,65 @@ function ProjectSessionGroup({
   );
 }
 
+/** Archived projects, folded below the list; each can be released back into it. */
+export function ArchivedProjects({
+  projects,
+  onRestore,
+}: {
+  projects: ReadonlyArray<ListedProject>;
+  /** Releases an archived project back into the list. */
+  onRestore: (projectId: string) => void;
+}) {
+  const { t } = useLingui();
+  return projects.length === 0 ? null : (
+    <SidebarGroup>
+      <Collapsible>
+        <CollapsibleTrigger className="group flex h-8 w-full items-center gap-1 rounded-md px-2 text-xs font-semibold text-foreground outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring">
+          <ChevronRightIcon className="size-3.5 shrink-0 transition-transform group-data-panel-open:rotate-90" />
+          <span className="min-w-0 flex-1 truncate text-left">
+            <Trans comment="Sidebar section heading: the archived projects">보관된 프로젝트</Trans>
+          </span>
+          <span
+            className="tabular-nums text-2xs font-medium text-muted-foreground"
+            aria-label={t({
+              message: `${ph({ count: projects.length })}개`,
+              comment: "How many archived projects the section holds",
+            })}
+          >
+            {projects.length}
+          </span>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <SidebarMenu>
+            {projects.map((project) => {
+              const restoreLabel = t({
+                message: `${ph({ name: project.name })} 보관 해제`,
+                comment: "Button that releases an archived project; name is the project's name",
+              });
+              return (
+                <SidebarMenuItem key={project.id}>
+                  <div className="flex h-8 items-center gap-1 px-2 text-xs" title={project.root}>
+                    <span className="min-w-0 flex-1 truncate">{project.name}</span>
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={restoreLabel}
+                      title={restoreLabel}
+                      onClick={() => onRestore(project.id)}
+                    >
+                      <ArchiveRestoreIcon />
+                    </Button>
+                  </div>
+                </SidebarMenuItem>
+              );
+            })}
+          </SidebarMenu>
+        </CollapsibleContent>
+      </Collapsible>
+    </SidebarGroup>
+  );
+}
+
 /** One section of the conversation list: a heading that folds it, with how many it holds. */
 function SessionGroup({
   title,
@@ -967,9 +795,9 @@ function SessionGroup({
 }
 
 /**
- * The sidebar lists every project's conversations as one collapsible group per project. A
- * project with conversations is a group; one without is only visible while it is the selected
- * project, so a fresh project keeps its new-conversation button and its empty message.
+ * The sidebar lists every project's conversations as one collapsible group per project. Every
+ * listed project is a group, with or without conversations; its header starts a conversation in
+ * it and opens its menu.
  */
 export function SessionSection({
   groups,
@@ -984,15 +812,11 @@ export function SessionSection({
   onArchive,
   onDelete,
   onRestore,
-  agents,
+  header,
+  projectActions,
 }: {
-  /** One group per project worth showing: its name, and its conversations and archived ones. */
-  groups: ReadonlyArray<{
-    readonly projectId: string;
-    readonly name: string;
-    readonly sessions: ReadonlyArray<Session>;
-    readonly archived: ReadonlyArray<Session>;
-  }>;
+  /** One group per listed project: its name, and its conversations and archived ones. */
+  groups: ReadonlyArray<ProjectGroup>;
   /** One entry per listed project: its conversations at work now, which lead its group. */
   working: ReadonlyArray<ProjectWorking>;
   /** No group's list has arrived yet, so an empty one says nothing. */
@@ -1001,17 +825,20 @@ export function SessionSection({
   failed?: boolean;
   /** Reads the failed lists again. */
   onRetry?: () => void;
-  projectId: string;
+  /** The project of the open conversation, if one is open. */
+  projectId: string | null;
   sessionId: string | null;
-  /** Why the last archive or restore was refused, if it was. */
+  /** Why the last archive, restore or project change was refused, if it was. */
   archiveError: string | null;
-  /** Without an agent the conversation uses the app's model. */
-  onCreate: (agent?: string) => void;
+  /** Starts a conversation in the project, on the app's model. */
+  onCreate: (projectId: string) => void;
   onArchive: (projectId: string, sessionId: string) => void;
   onDelete: (projectId: string, sessionId: string) => void;
   onRestore: (projectId: string, sessionId: string) => void;
-  /** Trusted external agents a conversation can talk to directly. */
-  agents: readonly string[];
+  /** The list's top row: what adds a project. */
+  header: React.ReactNode;
+  /** The project's menu, drawn next to its new-conversation button. */
+  projectActions: (projectId: string) => React.ReactNode;
 }) {
   const { t } = useLingui();
   const label = sessionLabel(useHydrated());
@@ -1031,6 +858,11 @@ export function SessionSection({
     t({
       message: `${ph({ title: label(session) })} 메뉴`,
       comment: "Button that opens a conversation's menu; title is the conversation's title",
+    });
+  const newLabel = (name: string) =>
+    t({
+      message: `${ph({ name })}에 새 대화`,
+      comment: "Button on a project's header that starts a conversation in it",
     });
   const deleteTitle = deleteAsk === null ? null : label(deleteAsk.session);
   const row = (session: Session) => {
@@ -1115,64 +947,7 @@ export function SessionSection({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* The list's actions come first, then its sections; no title row competes with them. */}
-      <div className="flex px-2 pt-3 pb-1">
-        <div className="flex min-w-0 flex-1">
-          <ButtonGroup
-            aria-label={t({
-              message: "새 대화",
-              comment: "Group of buttons that start a conversation",
-            })}
-            className="w-full"
-          >
-            <Button
-              variant="outline"
-              size="sm"
-              className="flex-1 justify-start"
-              onClick={() => onCreate()}
-            >
-              <PlusIcon /> <Trans comment="Button that starts a conversation">새 대화</Trans>
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <Button variant="outline" size="icon-sm" aria-label={t`대화 상대 고르기`} />
-                }
-              >
-                <ChevronDownIcon />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel>
-                    <Trans comment="Menu heading: who the new conversation talks to">
-                      새 대화 상대
-                    </Trans>
-                  </DropdownMenuLabel>
-                  <DropdownMenuItem onClick={() => onCreate()}>
-                    <Trans comment="Menu item: talk to this app's own model">이 앱의 모델</Trans>
-                  </DropdownMenuItem>
-                </DropdownMenuGroup>
-                <DropdownMenuSeparator />
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel>
-                    <Trans>외부 에이전트와 직접</Trans>
-                  </DropdownMenuLabel>
-                  {agents.length === 0 ? (
-                    <DropdownMenuItem disabled>
-                      <Trans>설정에서 신뢰한 에이전트가 없습니다</Trans>
-                    </DropdownMenuItem>
-                  ) : (
-                    agents.map((agent) => (
-                      <DropdownMenuItem key={agent} onClick={() => onCreate(agent)}>
-                        <BotIcon /> {agent}
-                      </DropdownMenuItem>
-                    ))
-                  )}
-                </DropdownMenuGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </ButtonGroup>
-        </div>
-      </div>
+      <div className="flex px-2 pt-3 pb-1">{header}</div>
       {archiveError && (
         <Alert variant="destructive" className="mx-2 mb-2 w-auto">
           <AlertDescription>{archiveError}</AlertDescription>
@@ -1193,22 +968,33 @@ export function SessionSection({
           </LoadFailed>
         )}
         {/* One project group after another: same heading shape, that project's conversations.
-            A project without conversations is only worth a group while it is the selected one,
-            so a fresh project keeps its new-conversation button and other empty ones stay out. */}
-        {groups
-          .filter((group) => group.sessions.length > 0 || group.projectId === projectId)
-          .map((group) => (
-            <ProjectSessionGroup
-              key={group.projectId}
-              group={group}
-              selected={group.projectId === projectId}
-              working={workingOf(group.projectId)}
-              label={label}
-              row={row}
-              onRestore={onRestore}
-              onDeleteAsk={setDeleteAsk}
-            />
-          ))}
+            A project without conversations is a group too: its header starts the first one. */}
+        {groups.map((group) => (
+          <ProjectSessionGroup
+            key={group.projectId}
+            group={group}
+            selected={group.projectId === projectId}
+            working={workingOf(group.projectId)}
+            label={label}
+            row={row}
+            actions={
+              <>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label={newLabel(group.name)}
+                  title={newLabel(group.name)}
+                  onClick={() => onCreate(group.projectId)}
+                >
+                  <PlusIcon />
+                </Button>
+                {projectActions(group.projectId)}
+              </>
+            }
+            onRestore={onRestore}
+            onDeleteAsk={setDeleteAsk}
+          />
+        ))}
         {!loading && !failed && groups.length === 0 && (
           <p className="px-4 py-2 text-xs text-muted-foreground">
             <Trans>아직 대화가 없습니다.</Trans>
