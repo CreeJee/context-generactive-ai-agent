@@ -2,18 +2,18 @@
 
 ## Overview
 
-`apps/agent/app/entry/navigation`은 에이전트 웹앱(React) 왼쪽 사이드바의 UI 모듈 모음이다. 모델·추론 강도 선택, 프로젝트 선택·추가·권한, 세션 목록, 판단 대기함, 칸반 보드 버튼을 맡는다. 구독(ChatGPT·Claude) 계정 전환기와 계정 관리자(한도 게이지, 이름 변경, 로그아웃)도 이 디렉터리에 있다. `compatible-client.ts`는 OpenAI 호환 엔드포인트 계정을 `/api/accounts`로 조회·변경하는 Effect 기반 클라이언트다. 이 컴포넌트들은 `apps/agent/app/entry/index.tsx`의 `App`이 렌더링한다.
+`apps/agent/app/entry/navigation`은 에이전트 웹앱(React) 왼쪽 사이드바의 UI 모듈 모음이다. 모델·추론 강도 선택, 프로젝트 추가, 프로젝트 헤더의 새 대화·메뉴, 세션 목록, 판단 대기함을 맡는다. 구독(ChatGPT·Claude) 계정 전환기와 계정 관리자(한도 게이지, 이름 변경, 로그아웃)도 이 디렉터리에 있다. `compatible-client.ts`는 OpenAI 호환 엔드포인트 계정을 `/api/accounts`로 조회·변경하는 Effect 기반 클라이언트다. 이 컴포넌트들은 `apps/agent/app/entry/index.tsx`의 `App`이 렌더링한다.
 
 ## Interface
 
 - `ModelSection` — 모델 Select와, 선택한 모델이 허용하는 추론 강도 Select를 그리는 사이드바 섹션 (sidebar.tsx)
-- `ProjectSection` — 접히는 프로젝트 섹션. 이름으로 찾는 프로젝트 Combobox(보관한 프로젝트는 따로 묶음), 폴더 열기 버튼, 다른 프로젝트 기억 검색 토글(R08), 보관하기를 담는다. 권한 모드(ask/auto/full)는 설정 대화상자의 권한 페이지로 옮겨졌다 (sidebar.tsx)
-- `SessionSection` — 모든 표시 프로젝트의 세션·보관 세션 목록. 프로젝트별로 접히는 그룹(`ProjectSessionGroup`, 헤더에 프로젝트 이름, 현재 프로젝트는 `사용 중` 배지와 펼침, 진행 중 대화가 있으면 그 개수 배지)을 두고, 그 안에 `SessionGroup`으로 접는 섹션 세 개를 둔다: "진행 중"(답변 중이거나 보드가 도는 대화, Spinner를 단다), "대화"(나머지), "보관함"(처음엔 접힘, 행을 누르면 복원·원본 삭제 메뉴). 진행 중 여부는 `ProjectWorking`(`answering`·`boardRunning` 집합)으로 행과 배지에 같이 판정한다. 프로젝트 헤더는 목록 스크롤 맨 위에 붙고(sticky, `z-20`), 그 아래 섹션 머리줄(`top-8`, `z-10`)이 지나가며 가리지 않는다. 접힘 상태는 jotai `atomWithStorage("context-agent-session-groups-open-v1")`에 프로젝트별로 저장해 다음 방문에도 유지한다(서버 렌더와 첫 렌더는 빈 기본값, 저장된 값은 마운트 뒤 적용). 접힌 그룹 헤더는 대화 수를 함께 보인다. 세션이 없는 프로젝트는 현재 선택 프로젝트일 때만 그룹으로 보인다. 각 프로젝트 안의 "대화" 머리줄은 위치 필터 메뉴(`sessionPlace`·`placeFilterOf`·`shownIn`)로 나눠 보여 준다. 행은 `SidebarMenuButton`이고 `Session.projectId`를 반영해 `?project=…&session=…` 링크로 다른 프로젝트 대화도 바로 연다. 보관·원본 삭제는 행에 올리거나 포커스하면 나타나는 `SidebarMenuAction` 메뉴에 있고, 프로젝트와 세션을 함께 이름으로 넘긴다(`onArchive`·`onDelete`·`onRestore`). 원본 삭제는 `AlertDialog`로 확인받는다. 목록을 불러오는 동안(`loading`)은 Skeleton을, 어떤 프로젝트 목록이 실패하면(`failed`) 다시 시도를 보인다. 제목 없는 대화는 시작 시각(`dayAndTime`, 브라우저 시간대)으로 부르고, 서버 HTML과 hydration 동안에는 `제목 없는 대화`로 부른다 (sidebar.tsx, `App`이 렌더)
+- `ProjectMenu` — 한 프로젝트의 `…` 메뉴(`project-menu.tsx`). 프로젝트 설정(설정 창을 그 프로젝트로 연다), 칸반 보드(보드 수 배지, 실행 중인 보드가 있으면 강조), 다른 프로젝트 기억 검색 허용 체크 항목(R08), 프로젝트 보관을 담는다. 자기 프로젝트의 mutation 훅을 직접 부르고, 거부된 변경은 `onProblem`으로 목록 위에 알린다. 권한 모드(ask/auto/full)는 설정 창의 권한 페이지에 있다
+- `ArchivedProjects` — 목록 아래에 접히는 "보관된 프로젝트" 구역. 프로젝트마다 "보관 해제" 버튼이 `onRestore`를 부른다 (sidebar.tsx)
+- `SessionSection` — 모든 표시 프로젝트의 세션·보관 세션 목록. 프로젝트별로 접히는 그룹(`ProjectSessionGroup`, 헤더 한 줄에 접는 트리거(프로젝트 이름, 폴더가 없으면 `FolderXIcon`, 진행 중 대화가 있으면 그 개수 배지)와 그 형제인 `+`(`onCreate(projectId)`로 그 프로젝트에 새 대화)·`projectActions`의 `…` 메뉴를 둔다. 열린 대화의 프로젝트는 저장된 접힘이 없을 때만 펼치고 행의 `isActive`에 쓴다)을 두고, 그 안에 `SessionGroup`으로 접는 섹션 세 개를 둔다: "진행 중"(답변 중이거나 보드가 도는 대화, Spinner를 단다), "대화"(나머지), "보관함"(처음엔 접힘, 행을 누르면 복원·원본 삭제 메뉴). 진행 중 여부는 `ProjectWorking`(`answering`·`boardRunning` 집합)으로 행과 배지에 같이 판정한다. 프로젝트 헤더 줄(`div`)은 목록 스크롤 맨 위에 붙고(sticky, `z-20`), 그 아래 섹션 머리줄(`top-8`, `z-10`)이 지나가며 가리지 않는다. 접힘 상태는 jotai `atomWithStorage("context-agent-session-groups-open-v1")`에 프로젝트별로 저장해 다음 방문에도 유지한다(서버 렌더와 첫 렌더는 빈 기본값, 저장된 값은 마운트 뒤 적용). 접힌 그룹 헤더는 대화 수를 함께 보인다. 세션이 없는 프로젝트도 그룹이고, 헤더의 `+`가 첫 대화를 만든다. 목록 맨 위 줄은 `header`(프로젝트 추가 버튼)가 채운다. 각 프로젝트 안의 "대화" 머리줄은 위치 필터 메뉴(`sessionPlace`·`placeFilterOf`·`shownIn`)로 나눠 보여 준다. 행은 `SidebarMenuButton`이고 `Session.projectId`를 반영해 `?project=…&session=…` 링크로 다른 프로젝트 대화도 바로 연다. 보관·원본 삭제는 행에 올리거나 포커스하면 나타나는 `SidebarMenuAction` 메뉴에 있고, 프로젝트와 세션을 함께 이름으로 넘긴다(`onArchive`·`onDelete`·`onRestore`). 원본 삭제는 `AlertDialog`로 확인받는다. 목록을 불러오는 동안(`loading`)은 Skeleton을, 어떤 프로젝트 목록이 실패하면(`failed`) 다시 시도를 보인다. 제목 없는 대화는 시작 시각(`dayAndTime`, 브라우저 시간대)으로 부르고, 서버 HTML과 hydration 동안에는 `제목 없는 대화`로 부른다 (sidebar.tsx, `App`이 렌더)
 - `Separator` — sidebar.tsx가 `~/components/ui/separator`에서 다시 내보내는 구분선
 - `SidebarDisclosureTrigger` — `CollapsibleTrigger` 래퍼. `leading` 슬롯, 말줄임 본문, 회전하는 chevron을 그린다
 - `AccountModelPanel` / `accountSummary` — 공급자 인증 상태와 선택 모델을 한 줄로 요약하고 설정을 접어 두는 패널. `accountSummary`는 `{status, model, hasError}`를 돌려주는 dual 함수다
 - `DecisionInbox` — 프로젝트 전체에서 사람의 판단을 기다리는 카드 수를 `SidebarMenuBadge`로 보여 준다(0이면 배지 없음). `SidebarMenuItem`을 돌려주므로 `SidebarMenu` 안에 둔다. Sheet에서 `DecisionPrompt`로 답하거나 `onOpenCard(sessionId, cardId)`로 보드를 연다
-- `ProjectBoardButton` — 프로젝트 칸반 보드를 여는 `SidebarMenuItem`. 배지는 보드 수를 보이고 실행 중(`kanbanActive`)인 보드가 있으면 강조된다
 - `providerLabels` — `ProviderId`별 표시 이름(ChatGPT/Claude/OpenAI 호환) Lingui 메시지. `satisfies Record<ProviderId, MessageDescriptor>`라서 화면에서 `t(…)`로 푼다
 - 문구 — 쓰이는 자리에 Lingui 메시지로 쓴다. `app/locales/ko.po`로 추출되고 `lint/wording`이 검사한다
 - `effortChoices` / `EffortChoice` — `(selection, model)` dual 함수. 사이드바와 `/effort`가 쓰는 추론 강도 선택지를 만든다
@@ -48,9 +48,9 @@
 - 폴더 등록은 파일 도구가 접근할 수 있는 범위를 넓힌다. 폴더 열기는 `onPickFolder`(서버 기기의 폴더 선택 창)의 답을 `FolderPick.match`로 나눈다. `cancelled`는 아무것도 하지 않는다. `picked`는 그 경로를 `onAdd`로 등록하고, 서버가 거부하면 그 경로와 사유를 채운 경로 입력 다이얼로그(`AddProjectDialog`)를 연다. `unavailable`이나 호출 실패는 빈 다이얼로그를 연다.
 - 경로 입력 다이얼로그는 앞뒤 공백을 자르고, 빈 값은 무시한다. `onAdd`가 오류 문자열을 돌려주면 다이얼로그를 닫지 않는다.
 - 이미 목록에 있는 폴더를 고르면 다시 등록하지 않고 그 프로젝트를 선택한다(`onSelect`). 다시 등록하면 `already_registered`로 거부되기 때문이다.
-- `ProjectSection`의 `onHide`는 프로젝트를 목록에서만 뺀다(보관). 대화와 기억은 남는다(주석). Combobox에서 보관한 프로젝트를 고르면 `onRestore`로 보관을 푼다.
+- `ProjectMenu`의 보관은 프로젝트를 목록에서만 뺀다. 대화와 기억은 남는다. 열려 있던 대화가 그 프로젝트의 것이면 `onHidden`이 다른 프로젝트로 옮긴다. 보관된 프로젝트는 `ArchivedProjects`의 버튼으로 보관을 푼다.
 - UI의 Effect 실행은 `runUiEffect`/`uiPromise` 경계를 거친다. 도메인 Effect는 호출자 런타임에서 실행된다(주석).
-- `SidebarMenuButton`을 쓰는 `SessionSection`·`DecisionInbox`·`ProjectBoardButton`은 `SidebarProvider` 안에서만 렌더할 수 있다(`useSidebar`가 밖에서는 throw한다). `App`이 왼쪽 패널 전체를 `SidebarProvider`로 감싼다.
+- `SidebarMenuButton`을 쓰는 `SessionSection`·`DecisionInbox`는 `SidebarProvider` 안에서만 렌더할 수 있다(`useSidebar`가 밖에서는 throw한다). `App`이 왼쪽 패널 전체를 `SidebarProvider`로 감싼다.
 
 ## Side Effects
 
