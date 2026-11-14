@@ -34,7 +34,7 @@
 - `reportText` — 사용자 설명, AI 진단, 증거 묶음 요약을 합쳐 마크다운 제보 문안 문자열을 만든다.
 - `shareableText` — dual이다. 문안 뒤에 증거 묶음 JSON 전체를 붙여 복사·저장용 텍스트를 만든다.
 - `ReportDraft` — React 컴포넌트다. 사용자 설명 textarea 3개와 편집 가능한 최종 문안 textarea를 제공한다.
-- `reportHref` / `ReportLink` — `/report?project&session` 링크를 만드는 dual 함수와 깃발 아이콘 링크 컴포넌트다.
+- `reportHref` — `/report?project&session` 링크를 만드는 dual 함수다.
 - 하위 디렉터리 없음
 
 ## Invariants
