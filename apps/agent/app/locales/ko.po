@@ -3849,6 +3849,11 @@ msgstr "실행 {chatRunId}"
 msgid "실행 결과를 받지 못함"
 msgstr "실행 결과를 받지 못함"
 
+#. Card field: how often the card failed, was replanned and met conflicts
+#: app/entry/chat/board/card-peek.tsx
+msgid "실행 기록"
+msgstr "실행 기록"
+
 #: app/entry/chat/board/hold-reason.ts
 msgid "실행 기회를 모두 써서 멈췄습니다. 다시 대기열에 넣을 수 있습니다"
 msgstr "실행 기회를 모두 써서 멈췄습니다. 다시 대기열에 넣을 수 있습니다"
@@ -4239,6 +4244,11 @@ msgstr "연결하지 못했습니다. 다시 시도해 주십시오."
 #: app/entry/report/report-bundle.tsx
 msgid "연동·루프·결함"
 msgstr "연동·루프·결함"
+
+#. failures: failures in a row; replans: Plan rewrites; conflicts: conflict rounds
+#: app/entry/chat/board/card-peek.tsx
+msgid "연속 실패 {failures} · Plan 재작성 {replans} · 충돌 해결 {conflicts}"
+msgstr "연속 실패 {failures} · Plan 재작성 {replans} · 충돌 해결 {conflicts}"
 
 #: app/entry/chat/workflow-panel.tsx
 msgid "열린 질문 {count}"

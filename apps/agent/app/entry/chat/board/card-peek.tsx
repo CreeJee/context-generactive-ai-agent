@@ -366,6 +366,7 @@ export function CardPeek({
                   titleOf={titleOf}
                   outcomeOf={outcomeOf}
                   lastChange={lastChange}
+                  loopCard={loopCard}
                 />
               )}
               {!editing && transferTargets.length > 0 && canTransfer(card) && (
@@ -496,11 +497,14 @@ function CardDetails({
   titleOf,
   outcomeOf,
   lastChange,
+  loopCard,
 }: {
   readonly card: PlanStep;
   readonly titleOf: (cardId: string) => string;
   readonly outcomeOf: (outcomeId: string) => string | null;
   readonly lastChange: BoardCard["lastChange"];
+  /** What the kanban loop counted for the card; null while no loop runs the board. */
+  readonly loopCard: LoopCard | null;
 }) {
   const { t } = useLingui();
   const none = (
@@ -518,6 +522,10 @@ function CardDetails({
     ) : (
       none
     );
+  const attempts =
+    loopCard !== null && loopCard.failures + loopCard.replans + loopCard.conflictRounds > 0
+      ? loopCard
+      : null;
   return (
     <div className="space-y-4">
       {card.description.trim().length > 0 && (
@@ -599,6 +607,21 @@ function CardDetails({
             }
           >
             {card.humanDecision}
+          </DataListItem>
+        )}
+        {attempts !== null && (
+          <DataListItem
+            term={
+              <Trans comment="Card field: how often the card failed, was replanned and met conflicts">
+                실행 기록
+              </Trans>
+            }
+          >
+            <Trans comment="failures: failures in a row; replans: Plan rewrites; conflicts: conflict rounds">
+              연속 실패 {ph({ failures: attempts.failures })} · Plan 재작성{" "}
+              {ph({ replans: attempts.replans })} · 충돌 해결{" "}
+              {ph({ conflicts: attempts.conflictRounds })}
+            </Trans>
           </DataListItem>
         )}
         <DataListItem
