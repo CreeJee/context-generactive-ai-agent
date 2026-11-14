@@ -26,7 +26,7 @@
 - `Interpretations` / `Interpretation` / `InterpretedKind` / `InterpretationStoreFailed` — LLM 해석 결론 저장소(`record`, `targeting(targetIds, status)`). 상태는 applied·unconfirmed
 - `Interpreter` / `InterpretationFailed` — llm-interpret 서비스(`Interpreter.layer(automatic = true)`). 저장된 발화를 topic·correction·relation edge로 바꾼다. 실패 reason은 `model_call_failed` 또는 `unreadable_answer`
 - `interpretInstructions` / `normalizeTopic` — 해석 모델의 시스템 지시문, topic 라벨 정규화(한 줄, 앞뒤 공백 제거, 최대 60자)
-- `Recorder` / `makeRecordingHook` / `RunBinding` — 채팅 run을 메모리 노드로 바꾸는 서비스(`Recorder.layer`)와 Effect AI run의 `RunHook`을 만드는 함수(`Nodes`·`PermissionReviews` 필요). `RunBinding.replyTo`는 run이 답하는 node다. 메인 대화는 사용자 턴, 하위 에이전트 세션은 지시가 나온 부모 쪽 node이고, 없으면 assistant node에 `reply` edge를 달지 않는다. `RunBinding.reviewOf`는 호출의 권한 판정이 run의 세션에 call id로 있지 않을 때 그 위치다(하위 에이전트의 판정은 부모 세션에 `<thread id>:<call id>`로 남는다)
+- `Recorder` / `makeRecordingHook` / `RunBinding` — 채팅 run을 메모리 노드로 바꾸는 서비스(`Recorder.layer`)와 Effect AI run의 `RunHook`을 만드는 함수(`Attachments`·`Nodes`·`PermissionReviews`·`SecretRedactor`·`SqlClient` 필요). 결과 node를 적은 뒤 결과의 `preview.attachmentId`가 가리키는 그림을 그 node에 묶어(`Attachments.linkStored`) 첨부 정리가 지우지 않게 한다. `RunBinding.replyTo`는 run이 답하는 node다. 메인 대화는 사용자 턴, 하위 에이전트 세션은 지시가 나온 부모 쪽 node이고, 없으면 assistant node에 `reply` edge를 달지 않는다. `RunBinding.reviewOf`는 호출의 권한 판정이 run의 세션에 call id로 있지 않을 때 그 위치다(하위 에이전트의 판정은 부모 세션에 `<thread id>:<call id>`로 남는다)
 - `ProgressMemos` / `MemoKind` / `MemoEntry` / `MemoBinding` / `memoText` / `memoView` (`progress-memo.ts`) — 세션마다 에이전트가 남기는 진행 메모 서비스(`ProgressMemos.layer`). 항목은 found·done·tried·open 종류의 `note` node이고 근거 node에 `cites` edge를 잇는다. `current(sessionId)`는 지금 서 있는 항목, `toolFor(binding)`은 `update_memo` 도구(add·replace·remove), `hookFor(sessionId)`는 메모가 있으면 요청 끝에 user 메시지로 붙이는 `request` hook이다. `memoText`는 그 메시지, `memoView`는 도구 답과 하위 에이전트 보고서의 모양이다
 - `MemoryGraphMaintenance` / `MemoryGraphRepairFailed` — 이전 버전이 잘못 쓴 링크를 자동으로 고치는 로컬 수리 서비스(`MemoryGraphMaintenance.layer`)와 그 실패 오류
 - `latestResolver` / `ChainReads` / `LatestEvidence` / `LatestHead` / `BranchHead` / `AppliedChange` / `ChainSource` / `ChangeRelation` — owner 저장소 읽기를 통해 한 발화에 기록된 변경이 어디서 끝나는지 해석한다
@@ -67,7 +67,7 @@
 
 - SQLite 읽기: `nodes`, `edges`, `memory_graph_suppressed_nodes`, `interpretations`, `interpret_jobs`
 - SQLite 쓰기: `interpretations` INSERT와 applied 결론의 `edges` INSERT(llm origin), `interpret_jobs` 상태 갱신(running/done/failed/pending)과 시작 시 정리(UPDATE·DELETE), topic 노드 append(`nodes.append`)
-- SQLite 쓰기: `Nodes`의 append-only 노드와 구조 edge 기록, `Recorder`의 채팅 run 기록, `ProgressMemos`의 메모 `note` node와 cites·supersedes edge, `MemoryGraphMaintenance`의 링크 수리
+- SQLite 쓰기: `Nodes`의 append-only 노드와 구조 edge 기록, `Recorder`의 채팅 run 기록과 `node_attachments`(결과가 가리키는 그림 연결), `ProgressMemos`의 메모 `note` node와 cites·supersedes edge, `MemoryGraphMaintenance`의 링크 수리
 - 네트워크: `Interpreter`가 `ActiveProvider`가 고른 provider의 가장 싼 effort 모델을 `singleAnswer`로 부르고, `recordUsage`로 API 사용량 ledger에 기록한다
 - 네이티브 검색: `MemorySearch`는 native-search owner worker를 거쳐 벡터·controlled 읽기를 하고, 실패한 읽기를 `SkippedRead`로 남긴다
 - 난수: `Interpreter`는 모델 호출 threadId에 `uuidV4`를 쓴다
