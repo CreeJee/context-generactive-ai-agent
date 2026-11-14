@@ -91,6 +91,32 @@ const boards = {
   },
 };
 
+/** session-a's loop as the server reports it once its planner stalled. */
+const stalledBoard = {
+  active: true,
+  goalInstanceId: "goal-a",
+  mode: "sequential",
+  goalChange: null,
+  cards: [],
+  schedule: null,
+  loop: { _tag: "Healthy" },
+  plannerStalled: true,
+  goalPaused: false,
+  unjudgedOutcomes: [],
+};
+
+/** What the stub serves beyond the fixed boards. */
+interface Served {
+  kanbanA: object;
+  decisions: readonly object[];
+}
+
+/** A test sets it and puts it back. */
+const served: Served = {
+  kanbanA: { active: false },
+  decisions: [],
+};
+
 const requests: string[] = [];
 /** The JSON bodies the page posted, as sent. */
 const sent: string[] = [];
@@ -110,9 +136,13 @@ const server = (input: RequestInfo | URL, init?: RequestInit): Promise<Response>
     });
   if (pathname === "/api/projects/project-1/boards")
     return Promise.resolve(Response.json([payments, logging, alerts]));
-  if (pathname === "/api/projects/project-1/decisions") return Promise.resolve(Response.json([]));
+  if (pathname === "/api/projects/project-1/decisions")
+    return Promise.resolve(Response.json(served.decisions));
   const session = /^\/api\/sessions\/(session-[abc])\/(board|kanban)$/.exec(pathname);
-  if (session?.[2] === "kanban") return Promise.resolve(Response.json({ active: false }));
+  if (session?.[2] === "kanban")
+    return Promise.resolve(
+      Response.json(session[1] === "session-a" ? served.kanbanA : { active: false }),
+    );
   if (session?.[1] === "session-a" || session?.[1] === "session-b" || session?.[1] === "session-c")
     return Promise.resolve(Response.json(boards[session[1]]));
   return Promise.resolve(Response.json({ error: "not_found" }, { status: 404 }));
@@ -212,6 +242,27 @@ it.live("project board shows the executing Plans in order, moves a Goal and move
     expect(bodies.find(BoardIntent.$is("Transfer"))).toEqual(
       BoardIntent.Transfer({ cardId: "b1", toSessionId: "session-a", at: null }),
     );
+    vi.unstubAllGlobals();
+  }),
+);
+
+it.live("project board unfolds the status panel when a conversation waits for the user", () =>
+  Effect.gen(function* () {
+    vi.stubGlobal("fetch", server);
+    served.kanbanA = stalledBoard;
+    const screen = yield* sdkCall(() => render(<Harness onOpenSession={() => {}} />));
+
+    // Nothing was clicked: the stalled planner shows because the panel opened by itself.
+    yield* sdkCall(() => expect.element(screen.getByText("자동 Plan 작성 멈춤")).toBeVisible());
+    yield* sdkCall(() => expect.element(screen.getByText("확인할 대화 1")).toBeVisible());
+
+    // The header's button names the conversation the new card goes to.
+    yield* sdkCall(() => screen.getByRole("button", { name: "카드 추가" }).click());
+    yield* sdkCall(() => screen.getByRole("menuitem", { name: "결제 모듈" }).click());
+    yield* sdkCall(() =>
+      expect.element(screen.getByRole("heading", { name: "카드 추가" })).toBeVisible(),
+    );
+    served.kanbanA = { active: false };
     vi.unstubAllGlobals();
   }),
 );
