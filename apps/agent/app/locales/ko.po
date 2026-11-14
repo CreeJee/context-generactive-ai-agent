@@ -2727,6 +2727,10 @@ msgstr "모든 대화"
 msgid "모든 작업 위치"
 msgstr "모든 작업 위치"
 
+#: app/entry/navigation/decision-inbox.tsx
+msgid "모든 프로젝트의 대화와 Goal에서 사람의 판단이나 승인을 기다리는 카드입니다. 여기서 답하거나 승인하고, 카드가 있는 보드로 이동합니다."
+msgstr "모든 프로젝트의 대화와 Goal에서 사람의 판단이나 승인을 기다리는 카드입니다. 여기서 답하거나 승인하고, 카드가 있는 보드로 이동합니다."
+
 #: app/entry/chat/slash-commands.ts
 msgid "모르는 명령입니다: /{word}"
 msgstr "모르는 명령입니다: /{word}"
@@ -4715,10 +4719,6 @@ msgstr "이 프로젝트의 대화가 도구를 부를 때 따르는 권한 모�
 #: app/entry/settings/pages/permission.tsx
 msgid "이 프로젝트의 대화가 셸 명령과 MCP 도구처럼 승인을 받던 도구를 묻지 않고 바로 실행합니다. 믿을 수 있는 프로젝트에서만 써 주십시오."
 msgstr "이 프로젝트의 대화가 셸 명령과 MCP 도구처럼 승인을 받던 도구를 묻지 않고 바로 실행합니다. 믿을 수 있는 프로젝트에서만 써 주십시오."
-
-#: app/entry/navigation/decision-inbox.tsx
-msgid "이 프로젝트의 모든 대화와 Goal에서 사람의 판단이나 승인을 기다리는 카드입니다. 여기서 답하거나 승인하고, 카드가 있는 보드로 이동합니다."
-msgstr "이 프로젝트의 모든 대화와 Goal에서 사람의 판단이나 승인을 기다리는 카드입니다. 여기서 답하거나 승인하고, 카드가 있는 보드로 이동합니다."
 
 #. Button that removes one item from the diagnosis list
 #: app/entry/report/report-diagnosis.tsx

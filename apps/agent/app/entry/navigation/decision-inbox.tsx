@@ -16,36 +16,34 @@ import { BoardIntent } from "../api";
 import { DecisionPrompt } from "../chat/decision-prompt";
 import { intentErrorText } from "../chat/board/board-surface";
 import { KanbanAction, useBoardsKanbanMutation } from "../queries/mutations/session";
-import { useDecisionInboxQuery, useProjectBoardsQuery } from "../queries/project";
+import { useAllWaitingDecisions } from "../queries/project";
+import type { ProjectWaiting } from "../queries/project";
 import { LoadFailed } from "../shared/load-failed";
 import { koreanLocalTime } from "../shared/local-time";
 
+/** How many cards of one project wait for a person: decisions to answer plus cards to approve. */
+const waitingCount = (waiting: ProjectWaiting) =>
+  waiting.decisions.length +
+  waiting.boards.reduce((total, board) => total + board.awaitingApproval.length, 0);
+
 /**
- * The project inbox: every card decision and every card awaiting approval, across conversations
- * and Goals. Each one can be answered or approved here, or opened on its board.
+ * The inbox: every card decision and every card awaiting approval, across conversations and Goals
+ * of every listed project. Each one can be answered or approved here, or opened on its board.
  */
 export function DecisionInbox({
-  projectId,
+  projects,
   holder,
   onOpenCard,
 }: {
-  readonly projectId: string;
+  /** Every listed project; the inbox gathers what waits in each. */
+  readonly projects: ReadonlyArray<{ readonly id: string; readonly name: string }>;
   readonly holder: string;
-  readonly onOpenCard: (sessionId: string, cardId: string) => void;
+  readonly onOpenCard: (projectId: string, sessionId: string, cardId: string) => void;
 }) {
-  const { t } = useLingui();
   const [open, setOpen] = useState(false);
-  const inbox = useDecisionInboxQuery(projectId);
-  const boards = useProjectBoardsQuery(projectId);
-  const items = inbox.data ?? [];
-  // A list that did not load is not an empty one.
-  const failed = inbox.isError || boards.isError;
-  const approvals = (boards.data ?? []).flatMap((board) =>
-    board.awaitingApproval.map((card) => ({ ...card, board })),
-  );
-  const approve = useBoardsKanbanMutation(holder)(projectId);
-  const [approveError, setApproveError] = useState<string | null>(null);
-  const count = items.length + approvals.length;
+  const { waiting, failed, refetch } = useAllWaitingDecisions(projects);
+  const visible = waiting.filter((project) => waitingCount(project) > 0);
+  const count = visible.reduce((total, project) => total + waitingCount(project), 0);
   return (
     <SidebarMenuItem>
       <SidebarMenuButton onClick={() => setOpen(true)}>
@@ -68,19 +66,15 @@ export function DecisionInbox({
             </SheetTitle>
             <SheetDescription>
               <Trans>
-                이 프로젝트의 모든 대화와 Goal에서 사람의 판단이나 승인을 기다리는 카드입니다.
-                여기서 답하거나 승인하고, 카드가 있는 보드로 이동합니다.
+                모든 프로젝트의 대화와 Goal에서 사람의 판단이나 승인을 기다리는 카드입니다. 여기서
+                답하거나 승인하고, 카드가 있는 보드로 이동합니다.
               </Trans>
             </SheetDescription>
           </SheetHeader>
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-4 text-xs text-muted-foreground">
+            {/* A list that did not load is not an empty one. */}
             {failed && (
-              <LoadFailed
-                onRetry={() => {
-                  void inbox.refetch();
-                  void boards.refetch();
-                }}
-              >
+              <LoadFailed onRetry={refetch}>
                 <Trans>판단을 기다리는 카드를 불러오지 못했습니다.</Trans>
               </LoadFailed>
             )}
@@ -89,103 +83,132 @@ export function DecisionInbox({
                 <Trans>판단을 기다리는 카드가 없습니다.</Trans>
               </p>
             )}
-            {items.map((item) => (
-              <section
-                key={item.requestId}
-                aria-label={t({
-                  message: `${ph({ cardTitle: item.cardTitle })} 판단`,
-                  comment: "Label of one waiting decision; cardTitle is its kanban card's title",
-                })}
-                className="space-y-1.5 rounded-md border p-2"
-              >
-                <div className="flex items-start gap-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate font-medium text-foreground">{item.cardTitle}</p>
-                    <p className="truncate">
-                      {item.sessionTitle ?? t`제목 없는 대화`} · {koreanLocalTime(item.createdAt)}
-                    </p>
-                  </div>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setOpen(false);
-                      onOpenCard(item.sessionId, item.cardId);
-                    }}
-                  >
-                    <Trans comment="Button that opens the decision's card on its board">
-                      카드 보기
-                    </Trans>
-                  </Button>
-                </div>
-                <DecisionPrompt
-                  projectId={projectId}
+            {visible.map((project) => (
+              <div key={project.projectId} className="space-y-1.5">
+                {visible.length > 1 && (
+                  <h4 className="text-xs font-medium text-foreground">{project.name}</h4>
+                )}
+                <ProjectWaitingList
+                  waiting={project}
                   holder={holder}
-                  request={item}
-                  disabled={false}
+                  onOpenCard={(sessionId, cardId) => {
+                    setOpen(false);
+                    onOpenCard(project.projectId, sessionId, cardId);
+                  }}
                 />
-              </section>
-            ))}
-            {approveError !== null && (
-              <p role="alert" className="text-destructive">
-                {approveError}
-              </p>
-            )}
-            {approvals.map(({ cardId, title, board }) => (
-              <section
-                key={`${board.sessionId}:${cardId}`}
-                aria-label={t({
-                  message: `${ph({ cardTitle: title })} 승인`,
-                  comment:
-                    "Label of one card awaiting approval; cardTitle is its kanban card's title",
-                })}
-                className="space-y-1.5 rounded-md border p-2"
-              >
-                <div className="flex items-start gap-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate font-medium text-foreground">{title}</p>
-                    <p className="truncate">
-                      {board.sessionTitle ?? t`제목 없는 대화`} ·{" "}
-                      <Trans comment="A card waiting for the user's approval">승인 대기</Trans>
-                    </p>
-                  </div>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setOpen(false);
-                      onOpenCard(board.sessionId, cardId);
-                    }}
-                  >
-                    <Trans comment="Button that opens the decision's card on its board">
-                      카드 보기
-                    </Trans>
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    disabled={approve.isPending}
-                    onClick={() => {
-                      setApproveError(null);
-                      approve.mutate(
-                        {
-                          sessionId: board.sessionId,
-                          action: KanbanAction.Intent({ intent: BoardIntent.Approve({ cardId }) }),
-                        },
-                        { onError: (error) => setApproveError(intentErrorText("Approve")(error)) },
-                      );
-                    }}
-                  >
-                    <Trans comment="Button that approves a card the planner added">승인</Trans>
-                  </Button>
-                </div>
-              </section>
+              </div>
             ))}
           </div>
         </SheetContent>
       </Sheet>
     </SidebarMenuItem>
+  );
+}
+
+/**
+ * One project's waiting cards. The approve mutation is bound to the project, so each project
+ * keeps its own component and the hook stays out of the project loop.
+ */
+function ProjectWaitingList({
+  waiting,
+  holder,
+  onOpenCard,
+}: {
+  readonly waiting: ProjectWaiting;
+  readonly holder: string;
+  readonly onOpenCard: (sessionId: string, cardId: string) => void;
+}) {
+  const { t } = useLingui();
+  const approve = useBoardsKanbanMutation(holder)(waiting.projectId);
+  const [approveError, setApproveError] = useState<string | null>(null);
+  const approvals = waiting.boards.flatMap((board) =>
+    board.awaitingApproval.map((card) => ({ ...card, board })),
+  );
+  return (
+    <div className="space-y-3">
+      {waiting.decisions.map((item) => (
+        <section
+          key={item.requestId}
+          aria-label={t({
+            message: `${ph({ cardTitle: item.cardTitle })} 판단`,
+            comment: "Label of one waiting decision; cardTitle is its kanban card's title",
+          })}
+          className="space-y-1.5 rounded-md border p-2"
+        >
+          <div className="flex items-start gap-2">
+            <div className="min-w-0 flex-1">
+              <p className="truncate font-medium text-foreground">{item.cardTitle}</p>
+              <p className="truncate">
+                {item.sessionTitle ?? t`제목 없는 대화`} · {koreanLocalTime(item.createdAt)}
+              </p>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => onOpenCard(item.sessionId, item.cardId)}
+            >
+              <Trans comment="Button that opens the decision's card on its board">카드 보기</Trans>
+            </Button>
+          </div>
+          <DecisionPrompt
+            projectId={waiting.projectId}
+            holder={holder}
+            request={item}
+            disabled={false}
+          />
+        </section>
+      ))}
+      {approveError !== null && (
+        <p role="alert" className="text-destructive">
+          {approveError}
+        </p>
+      )}
+      {approvals.map(({ cardId, title, board }) => (
+        <section
+          key={`${board.sessionId}:${cardId}`}
+          aria-label={t({
+            message: `${ph({ cardTitle: title })} 승인`,
+            comment: "Label of one card awaiting approval; cardTitle is its kanban card's title",
+          })}
+          className="space-y-1.5 rounded-md border p-2"
+        >
+          <div className="flex items-start gap-2">
+            <div className="min-w-0 flex-1">
+              <p className="truncate font-medium text-foreground">{title}</p>
+              <p className="truncate">
+                {board.sessionTitle ?? t`제목 없는 대화`} ·{" "}
+                <Trans comment="A card waiting for the user's approval">승인 대기</Trans>
+              </p>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => onOpenCard(board.sessionId, cardId)}
+            >
+              <Trans comment="Button that opens the decision's card on its board">카드 보기</Trans>
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={approve.isPending}
+              onClick={() => {
+                setApproveError(null);
+                approve.mutate(
+                  {
+                    sessionId: board.sessionId,
+                    action: KanbanAction.Intent({ intent: BoardIntent.Approve({ cardId }) }),
+                  },
+                  { onError: (error) => setApproveError(intentErrorText("Approve")(error)) },
+                );
+              }}
+            >
+              <Trans comment="Button that approves a card the planner added">승인</Trans>
+            </Button>
+          </div>
+        </section>
+      ))}
+    </div>
   );
 }

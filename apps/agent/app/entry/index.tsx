@@ -726,19 +726,20 @@ export function App() {
               </AccountModelPanel>
             </div>
             <SidebarSeparator />
-            {projectId && (
-              <SidebarGroup>
-                <SidebarMenu>
-                  <DecisionInbox
-                    projectId={projectId}
-                    holder={pageHolder()}
-                    onOpenCard={(session, card) =>
-                      void setLocation({ ...leaveProjectBoard, session, card }, { history: "push" })
-                    }
-                  />
-                </SidebarMenu>
-              </SidebarGroup>
-            )}
+            <SidebarGroup>
+              <SidebarMenu>
+                <DecisionInbox
+                  projects={projects.map((project) => ({ id: project.id, name: project.name }))}
+                  holder={pageHolder()}
+                  onOpenCard={(project, session, card) =>
+                    void setLocation(
+                      { ...leaveProject, project, session, card },
+                      { history: "push" },
+                    )
+                  }
+                />
+              </SidebarMenu>
+            </SidebarGroup>
             <SessionSection
               groups={listed}
               working={working}
