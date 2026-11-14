@@ -1164,11 +1164,6 @@ msgstr "개발자 웹훅 …{webhookIdSuffix}. 위 최종 문안이 메시지로
 msgid "개발자 웹훅 …{webhookIdSuffix}. 위 최종 문안이 메시지로, 증거 묶음 전체가 JSON 첨부 파일로 전송됩니다."
 msgstr "개발자 웹훅 …{webhookIdSuffix}. 위 최종 문안이 메시지로, 증거 묶음 전체가 JSON 첨부 파일로 전송됩니다."
 
-#. Settings tab group: project improvement reports
-#: app/entry/settings/settings-dialog.tsx
-msgid "개선"
-msgstr "개선"
-
 #: app/entry/settings/pages/improvements.tsx
 msgid "개선 문서를 쓰거나 읽지 못했습니다."
 msgstr "개선 문서를 쓰거나 읽지 못했습니다."
@@ -2275,6 +2270,11 @@ msgstr "더 줄일 내용이 없습니다. 최근 대화는 그대로 보냅니�
 #: app/entry/chat/approval.tsx
 msgid "덮어쓰기"
 msgstr "덮어쓰기"
+
+#. Settings tab group: web search and image generation
+#: app/entry/settings/settings-dialog.tsx
+msgid "도구"
+msgstr "도구"
 
 #. Badge on a connected MCP server; {count} is how many tools it offers
 #: app/entry/settings/pages/mcp.tsx
@@ -4150,9 +4150,7 @@ msgid "여기서는 읽기만 할 수 있습니다."
 msgstr "여기서는 읽기만 할 수 있습니다."
 
 #. Button that opens the endpoint's connection settings
-#. Settings tab group: web, image, MCP and agent pages
 #: app/entry/navigation/compatible-accounts.tsx
-#: app/entry/settings/settings-dialog.tsx
 msgid "연결"
 msgstr "연결"
 
@@ -4930,6 +4928,8 @@ msgid "인증 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 
 msgstr "인증 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주십시오."
 
 #. Settings page name: theme and problem reporting
+#. Settings tab group: pages about the app itself, not one project
+#: app/entry/settings/settings-dialog.tsx
 #: app/entry/settings/shared.tsx
 msgid "일반"
 msgstr "일반"
@@ -5525,11 +5525,6 @@ msgstr "지우기"
 #: app/entry/chat/board/card-peek.tsx
 msgid "지정 안 함"
 msgstr "지정 안 함"
-
-#. Settings tab group: skill instructions for the model
-#: app/entry/settings/settings-dialog.tsx
-msgid "지침"
-msgstr "지침"
 
 #: app/entry/settings/pages/improvements.tsx
 msgid "지침: {rule}"
@@ -6278,6 +6273,7 @@ msgstr "표시 없음, 기본값: {shown}"
 
 #. Label of the settings dialog's project picker
 #. Scope badge: set in this project's config
+#. Settings tab group: pages that apply to the project chosen above
 #: app/entry/settings/settings-dialog.tsx
 #: app/entry/settings/shared.tsx
 msgid "프로젝트"

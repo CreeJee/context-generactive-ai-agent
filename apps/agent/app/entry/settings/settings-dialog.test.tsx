@@ -145,7 +145,13 @@ describe("SettingsOverlay (jsdom)", () => {
         root.render(
           <I18nProvider i18n={i18n}>
             <QueryClientProvider client={client}>
-              <SettingsOverlay projectId="alpha" initialPage="permission" open onClose={() => {}} />
+              <SettingsOverlay
+                projectId="alpha"
+                initialPage="permission"
+                reportLink="/report"
+                open
+                onClose={() => {}}
+              />
             </QueryClientProvider>
           </I18nProvider>,
         ),

@@ -431,7 +431,8 @@ export function App() {
       ),
     );
 
-  const openSettings = () => openSettingsOverlay({ projectId });
+  const openSettings = () =>
+    openSettingsOverlay({ projectId, reportLink: reportHref(projectId, sessionId) });
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const selectModel = (model: string, effort?: string) =>
@@ -812,7 +813,11 @@ export function App() {
                       )
                     }
                     onOpenSettings={() =>
-                      openSettingsOverlay({ projectId: id, initialPage: "permission" })
+                      openSettingsOverlay({
+                        projectId: id,
+                        initialPage: "permission",
+                        reportLink: reportHref(projectId, sessionId),
+                      })
                     }
                     onHidden={() => {
                       if (id !== projectId) return;

@@ -11,8 +11,9 @@ import {
   MessagesSquareIcon,
   PlugIcon,
   ShieldCheckIcon,
+  SlidersHorizontalIcon,
   WaypointsIcon,
-  WrenchIcon,
+  type LucideIcon,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import {
@@ -48,20 +49,28 @@ import { McpSettings } from "./pages/mcp";
 import { AgentSettings } from "./pages/agents";
 import { PermissionSettings } from "./pages/permission";
 import { SkillSettings } from "./pages/skills";
-import { ImprovementSettings } from "./pages/improvements";
+import { GeneralSettings } from "./pages/general";
 import { KanbanSettings } from "./pages/kanban";
 import { pageTitles } from "./shared";
 
 const settingsGroups = [
   {
-    id: "connection",
-    label: msg({ message: "연결", comment: "Settings tab group: web, image, MCP and agent pages" }),
+    id: "general",
+    label: msg({
+      message: "일반",
+      comment: "Settings tab group: pages about the app itself, not one project",
+    }),
+    pages: [
+      { value: "general", icon: SlidersHorizontalIcon },
+      { value: "conversation", icon: MessagesSquareIcon },
+    ],
+  },
+  {
+    id: "tools",
+    label: msg({ message: "도구", comment: "Settings tab group: web search and image generation" }),
     pages: [
       { value: "web", icon: GlobeIcon },
       { value: "image", icon: ImageIcon },
-      { value: "mcp", icon: PlugIcon },
-      { value: "agents", icon: BotIcon },
-      { value: "permission", icon: ShieldCheckIcon },
     ],
   },
   {
@@ -71,10 +80,22 @@ const settingsGroups = [
       comment: "Settings tab group: pages about the app's stored conversation memory",
     }),
     pages: [
-      { value: "conversation", icon: MessagesSquareIcon },
       { value: "recall", icon: WaypointsIcon },
       { value: "imports", icon: HistoryIcon },
       { value: "embedding", icon: CpuIcon },
+    ],
+  },
+  {
+    id: "project",
+    label: msg({
+      message: "프로젝트",
+      comment: "Settings tab group: pages that apply to the project chosen above",
+    }),
+    pages: [
+      { value: "permission", icon: ShieldCheckIcon },
+      { value: "mcp", icon: PlugIcon },
+      { value: "agents", icon: BotIcon },
+      { value: "skills", icon: BookOpenIcon },
     ],
   },
   {
@@ -85,42 +106,54 @@ const settingsGroups = [
     }),
     pages: [{ value: "kanban", icon: KanbanIcon }],
   },
-  {
-    id: "improvement",
-    label: msg({ message: "개선", comment: "Settings tab group: project improvement reports" }),
-    pages: [{ value: "improvements", icon: WrenchIcon }],
-  },
-  {
-    id: "instructions",
-    label: msg({
-      message: "지침",
-      comment: "Settings tab group: skill instructions for the model",
-    }),
-    pages: [{ value: "skills", icon: BookOpenIcon }],
-  },
 ] as const;
 
 export type SettingsPage = (typeof settingsGroups)[number]["pages"][number]["value"];
 
 /** Each page's body; every page reads its own data, so each gets its own loading boundary. */
-const pageBodies: Record<SettingsPage, (project: Project | null) => ReactNode> = {
-  improvements: () => <ImprovementSettings />,
-  web: () => <KagiSettings />,
-  image: () => <ImageSettings />,
-  mcp: (project) => <McpSettings project={project} />,
-  agents: (project) => <AgentSettings project={project} />,
-  permission: (project) => <PermissionSettings project={project} />,
-  conversation: () => <ConversationSettings />,
-  recall: () => <RecallSettings />,
-  imports: () => <ImportSettings />,
-  embedding: () => <EmbeddingSettings />,
-  skills: (project) => <SkillSettings project={project} />,
-  kanban: (project) => <KanbanSettings project={project} />,
-};
+const pageBodies: Record<SettingsPage, (project: Project | null, reportLink: string) => ReactNode> =
+  {
+    general: (_project, reportLink) => <GeneralSettings reportLink={reportLink} />,
+    web: () => <KagiSettings />,
+    image: () => <ImageSettings />,
+    mcp: (project) => <McpSettings project={project} />,
+    agents: (project) => <AgentSettings project={project} />,
+    permission: (project) => <PermissionSettings project={project} />,
+    conversation: () => <ConversationSettings />,
+    recall: () => <RecallSettings />,
+    imports: () => <ImportSettings />,
+    embedding: () => <EmbeddingSettings />,
+    skills: (project) => <SkillSettings project={project} />,
+    kanban: (project) => <KanbanSettings project={project} />,
+  };
 
-function SettingsPageBody({ page, project }: { page: SettingsPage; project: Project | null }) {
-  return <QuerySection>{pageBodies[page](project)}</QuerySection>;
+function SettingsPageBody({
+  page,
+  project,
+  reportLink,
+}: {
+  page: SettingsPage;
+  project: Project | null;
+  reportLink: string;
+}) {
+  return <QuerySection>{pageBodies[page](project, reportLink)}</QuerySection>;
 }
+
+/** The pages that read the chosen project; the project picker shows only on these. */
+const projectPages: ReadonlyArray<SettingsPage> = [
+  "permission",
+  "mcp",
+  "agents",
+  "skills",
+  "kanban",
+];
+
+interface PageEntry {
+  readonly value: SettingsPage;
+  readonly icon: LucideIcon;
+}
+
+const allPages = settingsGroups.flatMap((group): ReadonlyArray<PageEntry> => group.pages);
 
 /** The selected project's folder is gone: say so above every page, and offer to archive it. */
 function MissingFolderAlert({ project, onArchived }: { project: Project; onArchived: () => void }) {
@@ -162,16 +195,21 @@ export function SettingsOverlay({
   projectId,
   open,
   onClose,
-  initialPage = "web",
+  initialPage = "general",
+  reportLink,
 }: {
   projectId: string | null;
   initialPage?: SettingsPage;
+  /** Where the general page's problem report link goes. */
+  reportLink: string;
   open: boolean;
   onClose: () => void;
 }) {
   const { t } = useLingui();
   const projects = useProjectsQuery().data ?? [];
   const [chosenId, setChosenId] = useState(projectId);
+  const [page, setPage] = useState<SettingsPage>(initialPage);
+  const showsProject = projectPages.includes(page);
   const project = projects.find((item) => item.id === chosenId) ?? null;
   const projectItems = projects.map((item) => ({ value: item.id, label: item.name }));
   return (
@@ -190,7 +228,7 @@ export function SettingsOverlay({
             <Trans>대화 밖에서 쓰는 도구와 연결을 관리합니다.</Trans>
           </DialogDescription>
         </DialogHeader>
-        {projects.length > 0 && (
+        {showsProject && projects.length > 0 && (
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center gap-3">
               <FieldLabel htmlFor="settings-project">
@@ -226,10 +264,18 @@ export function SettingsOverlay({
             </FieldDescription>
           </div>
         )}
-        {project?.folderMissing === true && (
+        {showsProject && project?.folderMissing === true && (
           <MissingFolderAlert project={project} onArchived={onClose} />
         )}
-        <Tabs defaultValue={initialPage} orientation="vertical" className="min-h-0 flex-1">
+        <Tabs
+          value={page}
+          onValueChange={(value) => {
+            const next = allPages.find((item) => item.value === value);
+            if (next !== undefined) setPage(next.value);
+          }}
+          orientation="vertical"
+          className="min-h-0 flex-1"
+        >
           <div className="mr-2 w-40 shrink-0 border-r pr-3">
             <TabsList variant="nav" className="w-full items-stretch justify-start">
               {settingsGroups.map((group) => (
@@ -255,7 +301,7 @@ export function SettingsOverlay({
                 className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto data-ending-style:hidden"
               >
                 <div className="pr-2">
-                  <SettingsPageBody page={page.value} project={project} />
+                  <SettingsPageBody page={page.value} project={project} reportLink={reportLink} />
                 </div>
               </TabsContent>
             )),
