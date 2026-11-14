@@ -2562,8 +2562,10 @@ msgstr "명령을 실행하지 못했습니다."
 
 #. Author of a chat message in the evidence preview: the AI model
 #. Label before the selected provider and AI model
+#. Select in the model picker: which model the conversation runs on
 #. Sidebar field label: the chat model
 #. Sidebar section of model settings
+#: app/entry/chat/model-picker.tsx
 #: app/entry/navigation/sidebar.tsx
 #: app/entry/report/report-bundle.tsx
 msgid "모델"
@@ -2574,7 +2576,10 @@ msgstr "모델"
 msgid "모델 ID"
 msgstr "모델 ID"
 
+#. Composer button text while the conversation has no model
 #. Placeholder of the model select before one is picked
+#. Placeholder of the model select before one is picked
+#: app/entry/chat/model-picker.tsx
 #: app/entry/settings/model-selection-field.tsx
 msgid "모델 고르기"
 msgstr "모델 고르기"
@@ -2592,6 +2597,7 @@ msgstr "모델 등록"
 msgid "모델 목록 불러오기"
 msgstr "모델 목록 불러오기"
 
+#: app/entry/chat/model-picker.tsx
 #: app/entry/settings/model-selection-field.tsx
 msgid "모델 목록을 읽지 못했습니다. 그 제공자에 로그인했는지 확인해 주십시오."
 msgstr "모델 목록을 읽지 못했습니다. 그 제공자에 로그인했는지 확인해 주십시오."
@@ -2640,6 +2646,11 @@ msgstr "모델 저장"
 msgid "모델 추가"
 msgstr "모델 추가"
 
+#. Select in the model picker: which provider or endpoint the model comes from
+#: app/entry/chat/model-picker.tsx
+msgid "모델 출처"
+msgstr "모델 출처"
+
 #: app/entry/settings/pages/conversation.tsx
 msgid "모델 컨텍스트가 이만큼 찰 때까지는 원문 그대로 보냅니다. 낮추면 일찍 요약해 짧게 보냅니다. 높이면 원문을 오래 보냅니다. 0이면 처음부터 요약합니다. 최대 {maximumPercent}%입니다. 다음 응답부터 적용됩니다. 이미 요약을 쓰기 시작한 대화는 계속 요약을 씁니다."
 msgstr "모델 컨텍스트가 이만큼 찰 때까지는 원문 그대로 보냅니다. 낮추면 일찍 요약해 짧게 보냅니다. 높이면 원문을 오래 보냅니다. 0이면 처음부터 요약합니다. 최대 {maximumPercent}%입니다. 다음 응답부터 적용됩니다. 이미 요약을 쓰기 시작한 대화는 계속 요약을 씁니다."
@@ -2665,6 +2676,7 @@ msgstr "모델은 처음 임베딩할 때 불러옵니다."
 msgid "모델을 골라 주십시오."
 msgstr "모델을 골라 주십시오."
 
+#: app/entry/chat/model-picker.tsx
 #: app/entry/index.tsx
 msgid "모델을 바꾸지 못했습니다. 연결 상태를 확인한 뒤 다시 시도해 주십시오."
 msgstr "모델을 바꾸지 못했습니다. 연결 상태를 확인한 뒤 다시 시도해 주십시오."
@@ -4627,6 +4639,12 @@ msgstr "이 대화를 쓸 수 있는지 확인하지 못했습니다"
 msgid "이 대화에서 진행 중인 카드 작업과 하위 에이전트를 확인합니다."
 msgstr "이 대화에서 진행 중인 카드 작업과 하위 에이전트를 확인합니다."
 
+#. Composer button that opens this conversation's model picker
+#. Hover text of the composer button that opens the model picker
+#: app/entry/chat/model-picker.tsx
+msgid "이 대화의 모델"
+msgstr "이 대화의 모델"
+
 #: app/entry/chat/queue-panel.tsx
 msgid "이 메시지를 보내지 못했습니다. 보내기를 누르면 다시 보냅니다."
 msgstr "이 메시지를 보내지 못했습니다. 보내기를 누르면 다시 보냅니다."
@@ -5743,10 +5761,20 @@ msgstr "추론 강도를 골라 주십시오."
 msgid "추론 내용"
 msgstr "추론 내용"
 
+#. Select in the model picker: how much the model reasons
+#: app/entry/chat/model-picker.tsx
+msgid "추론 단계"
+msgstr "추론 단계"
+
 #. Title of the model's reasoning while it is still thinking
 #: app/entry/chat/message.tsx
 msgid "추론 중"
 msgstr "추론 중"
+
+#. Placeholder of the source select in the model picker
+#: app/entry/chat/model-picker.tsx
+msgid "출처 고르기"
+msgstr "출처 고르기"
 
 #. BTW tool call: follows where a memory came from
 #: app/entry/chat/btw-panel.tsx
