@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest";
 import { i18n } from "@lingui/core";
 import { I18nProvider } from "@lingui/react";
-import { Cause, Effect } from "effect";
+import { Cause, Effect, Schema } from "effect";
 import type { ReactNode } from "react";
 import { useState } from "react";
 import { Array as EffectArray } from "effect";
@@ -19,6 +19,12 @@ import type { CompatibleAccountChange } from "./compatible-client";
 import { ModelSection, ProjectSection, SessionSection } from "./sidebar";
 import type { ProjectWorking } from "../queries/project";
 import { SidebarProvider } from "../../components/ui/sidebar";
+
+/** The folds as the sidebar stored them; a missing or malformed value fails the read. */
+const storedFolds = () =>
+  Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(
+    localStorage.getItem("context-agent-session-groups-open-v1"),
+  );
 
 /** Renders under the app's Lingui instance, which the test setup activates in Korean. */
 const withI18n = {
@@ -633,9 +639,7 @@ describe("sidebar disclosures", () => {
       yield* sdkCall(() =>
         expect.element(screen.getByRole("link", { name: "알파 대화" })).not.toBeInTheDocument(),
       );
-      expect(localStorage.getItem("context-agent-session-groups-open-v1")).toBe(
-        JSON.stringify({ alpha: false }),
-      );
+      expect(yield* storedFolds()).toEqual({ alpha: false });
 
       const again = yield* sdkCall(() =>
         render(
@@ -664,9 +668,7 @@ describe("sidebar disclosures", () => {
       yield* sdkCall(() =>
         expect.element(again.getByRole("link", { name: "알파 대화" })).toBeVisible(),
       );
-      expect(localStorage.getItem("context-agent-session-groups-open-v1")).toBe(
-        JSON.stringify({ alpha: true }),
-      );
+      expect(yield* storedFolds()).toEqual({ alpha: true });
     }),
   );
 
