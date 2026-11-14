@@ -74,6 +74,7 @@ import {
   type PendingLifecycle,
   type ProviderId,
 } from "./api";
+import { ChatHeader } from "./chat/chat-header";
 import { SessionView, type SlashSupport } from "./chat/chat-panel";
 import { AppEventsProvider, SessionEventsProvider } from "./events/providers";
 import { ThemeSelect } from "./shared/theme";
@@ -84,6 +85,7 @@ import {
   ModelSection,
   OpenFolderButton,
   SessionSection,
+  sessionLabel,
 } from "./navigation/sidebar";
 import { DecisionInbox } from "./navigation/decision-inbox";
 import { ProjectMenu } from "./navigation/project-menu";
@@ -97,6 +99,7 @@ import { WorkTracePanel } from "./chat/work-trace-panel";
 import { BtwPanel } from "./chat/btw-panel";
 import { ReportLink, reportHref } from "./report/report-link";
 import { RetryButton } from "./shared/load-failed";
+import { useHydrated } from "./shared/use-hydrated";
 import { ModelDownloadList } from "./shared/model-downloads";
 import { effortChoices, providerLabels } from "./navigation/providers";
 
@@ -202,6 +205,12 @@ export function App() {
   const groups = useAllProjectSessions(
     projects.map((project) => ({ id: project.id, name: project.name })),
   );
+  // An archived conversation can still be opened by its address, so its group's archive is read too.
+  const openSession =
+    groups
+      .flatMap((group) => [...group.sessions, ...group.archived])
+      .find((session) => session.id === sessionId) ?? null;
+  const hydrated = useHydrated();
   /**
    * Conversations at work now, per project: the groups lead with them and badge their count.
    * Every listed project is read, not only the selected one, so a group answers from its own read.
@@ -560,22 +569,36 @@ export function App() {
   })
     // Local history does not depend on the provider's remote model catalogue.
     // Keep model/auth readiness on mutations, not on mounting the session reader.
-    .with({ projectId: P.string, sessionId: P.string }, ({ sessionId: id }) => (
-      <SessionView
-        key={id}
-        sessionId={id}
-        slash={slash}
-        sendingEnabled={selectedSignedIn}
-        imagesSupported={
-          selection !== null &&
-          sessions.find((session) => session.id === id)?.agent == null &&
-          ((modelQueries[selection.provider].data?.models ?? [])
-            .find((model) => model.id === selection.model)
-            ?.capabilities.inputModalities.includes("image") ??
-            false)
-        }
-      />
-    ))
+    .with(
+      { projectId: P.string, sessionId: P.string },
+      ({ projectId: openProjectId, sessionId: id }) => (
+        <div className="flex h-full min-h-0 flex-col">
+          <ChatHeader
+            title={openSession === null ? t`제목 없는 대화` : sessionLabel(hydrated)(openSession)}
+            projectName={projects.find((item) => item.id === openProjectId)?.name ?? null}
+          >
+            {selection && <BtwPanel key={id} projectId={openProjectId} sessionId={id} />}
+            <WorkTracePanel key={id} projectId={openProjectId} sessionId={id} />
+          </ChatHeader>
+          <div className="min-h-0 flex-1">
+            <SessionView
+              key={id}
+              sessionId={id}
+              slash={slash}
+              sendingEnabled={selectedSignedIn}
+              imagesSupported={
+                selection !== null &&
+                sessions.find((session) => session.id === id)?.agent == null &&
+                ((modelQueries[selection.provider].data?.models ?? [])
+                  .find((model) => model.id === selection.model)
+                  ?.capabilities.inputModalities.includes("image") ??
+                  false)
+              }
+            />
+          </div>
+        </div>
+      ),
+    )
     .with({ selection: null, signedIn: false, authFailed: true }, () => (
       <Placeholder
         icon={<LogInIcon />}
@@ -837,12 +860,6 @@ export function App() {
             <SidebarReopen />
             {main}
           </SidebarInset>
-          {projectId && sessionId && selection && (
-            <BtwPanel key={sessionId} projectId={projectId} sessionId={sessionId} />
-          )}
-          {projectId && sessionId && (
-            <WorkTracePanel key={sessionId} projectId={projectId} sessionId={sessionId} />
-          )}
           {projectId && (boardsOpen === true || boardCardKeyParam !== null) && (
             <ProjectBoard
               projectId={projectId}

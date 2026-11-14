@@ -384,7 +384,7 @@ function AddProjectDialog({
  * A conversation's title. One without a title yet reads as when it started, in the browser's time
  * zone, so the server's HTML and its hydration name it in words instead.
  */
-const sessionLabel = (hydrated: boolean) => (session: Session) =>
+export const sessionLabel = (hydrated: boolean) => (session: Session) =>
   session.title ?? (hydrated ? dayAndTime(session.createdAt) : t`제목 없는 대화`);
 
 /** Where in the repository a conversation ran: its branch, or else its worktree folder's name. */

@@ -5321,6 +5321,7 @@ msgid "제목"
 msgstr "제목"
 
 #: app/entry/chat/board/project-board.tsx
+#: app/entry/index.tsx
 #: app/entry/navigation/decision-inbox.tsx
 #: app/entry/navigation/sidebar.tsx
 msgid "제목 없는 대화"
