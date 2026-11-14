@@ -11,6 +11,8 @@ import {
   Schema,
 } from "effect";
 import { SqlClient } from "effect/sql";
+import { Attachments } from "../attachments/attachments.ts";
+import { picturesIn } from "../attachments/previews.ts";
 import type { StoredMessage, StoredToolCall } from "../chat-store/schema.ts";
 import type { JsonValue } from "../json.ts";
 import { type AnsweredCall, asRunFailed, type RunHook, StepEnded } from "../loop/run.ts";
@@ -52,7 +54,12 @@ interface RecordedCall {
   /** The arguments as the model wrote them. */
   readonly written: string;
   /** None while the call waits for the user. */
-  readonly result: Option.Option<{ readonly ok: boolean; readonly text: string }>;
+  readonly result: Option.Option<{
+    readonly ok: boolean;
+    readonly text: string;
+    /** Attachment ids of the pictures the result names. */
+    readonly pictures: ReadonlyArray<string>;
+  }>;
 }
 
 /**
@@ -90,9 +97,17 @@ const jsonText = (result: JsonValue) =>
  */
 const recordedResult = ({ answer }: AnsweredCall) =>
   Match.valueTags(answer, {
-    Returned: ({ result }) => ({ ok: !isErrorResult(result), text: jsonText(result) }),
-    Failed: ({ message }) => ({ ok: false, text: message }),
-    Refused: ({ result }) => ({ ok: !isErrorResult(result), text: jsonText(result) }),
+    Returned: ({ result }) => ({
+      ok: !isErrorResult(result),
+      text: jsonText(result),
+      pictures: picturesIn(result),
+    }),
+    Failed: ({ message }) => ({ ok: false, text: message, pictures: [] }),
+    Refused: ({ result }) => ({
+      ok: !isErrorResult(result),
+      text: jsonText(result),
+      pictures: picturesIn(result),
+    }),
   });
 
 /** The reason a cut answer is kept with: the run's failure, or its abort. */
@@ -106,6 +121,7 @@ const partialReason = RunEnd.$match({
 /** One run's recorder; every write goes through it. */
 const recorderFor = Effect.fnUntraced(function* (binding: RunBinding) {
   const sql = yield* SqlClient.SqlClient;
+  const attachments = yield* Attachments;
   const nodes = yield* Nodes;
   const reviews = yield* PermissionReviews;
   const redactor = yield* SecretRedactor;
@@ -217,7 +233,7 @@ const recorderFor = Effect.fnUntraced(function* (binding: RunBinding) {
                 isTruthy(yield* nodes.toolNode(binding.sessionId, "tool_result", id))
               )
                 return;
-              yield* nodes.append({
+              const resultNode = yield* nodes.append({
                 ...base,
                 // Keep the result in the run that made the call, so history shows them together.
                 runId: callNode.runId ?? binding.runId,
@@ -231,6 +247,9 @@ const recorderFor = Effect.fnUntraced(function* (binding: RunBinding) {
                 },
                 links: [{ kind: "returns", nodeId: callNode.id }],
               });
+              // A drawing's picture is saved before this node exists; tying it here keeps cleanup
+              // from deleting what the recorded result still points at.
+              yield* attachments.linkStored(resultNode.id, result.value.pictures);
             }),
           { discard: true },
         );
@@ -276,7 +295,7 @@ export const makeRecordingHook = Effect.fnUntraced(function* (
 ): Effect.fn.Return<
   RunHook,
   never,
-  Nodes | PermissionReviews | SecretRedactor | SqlClient.SqlClient
+  Attachments | Nodes | PermissionReviews | SecretRedactor | SqlClient.SqlClient
 > {
   const recorder = yield* recorderFor(binding);
 
@@ -328,7 +347,7 @@ export const makeRecordingHook = Effect.fnUntraced(function* (
 
 const make = Effect.gen(function* () {
   const context = yield* Effect.context<
-    Nodes | PermissionReviews | SecretRedactor | SqlClient.SqlClient
+    Attachments | Nodes | PermissionReviews | SecretRedactor | SqlClient.SqlClient
   >();
   return {
     /** The recording of one Effect AI run. */
