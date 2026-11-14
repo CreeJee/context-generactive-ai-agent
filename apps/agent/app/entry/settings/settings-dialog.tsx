@@ -24,6 +24,14 @@ import {
 } from "~/components/ui/dialog";
 import { Alert, AlertAction, AlertDescription } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
+import { FieldDescription, FieldLabel } from "~/components/ui/field";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "~/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
 import { type Project } from "../api";
 import { MissingFolderNotice } from "../navigation/sidebar";
@@ -165,6 +173,7 @@ export function SettingsOverlay({
   const projects = useProjectsQuery().data ?? [];
   const [chosenId, setChosenId] = useState(projectId);
   const project = projects.find((item) => item.id === chosenId) ?? null;
+  const projectItems = projects.map((item) => ({ value: item.id, label: item.name }));
   return (
     <Dialog
       open={open}
@@ -181,6 +190,42 @@ export function SettingsOverlay({
             <Trans>대화 밖에서 쓰는 도구와 연결을 관리합니다.</Trans>
           </DialogDescription>
         </DialogHeader>
+        {projects.length > 0 && (
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-3">
+              <FieldLabel htmlFor="settings-project">
+                <Trans comment="Label of the settings dialog's project picker">프로젝트</Trans>
+              </FieldLabel>
+              <Select
+                value={chosenId}
+                items={projectItems}
+                onValueChange={(value) => setChosenId(value)}
+              >
+                <SelectTrigger id="settings-project" className="w-56">
+                  <SelectValue
+                    placeholder={t({
+                      message: "프로젝트 고르기",
+                      comment: "Placeholder of the settings dialog's project picker",
+                    })}
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {projectItems.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <FieldDescription>
+              <Trans comment="Description under the settings dialog's project picker">
+                MCP 서버, 외부 에이전트, 권한, Skills, 보호 브랜치는 여기서 고른 프로젝트의
+                설정입니다.
+              </Trans>
+            </FieldDescription>
+          </div>
+        )}
         {project?.folderMissing === true && (
           <MissingFolderAlert project={project} onArchived={onClose} />
         )}

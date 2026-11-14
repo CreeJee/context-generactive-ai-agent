@@ -877,6 +877,11 @@ msgstr "MCP 도구 {name} 실행을 승인할까요?"
 msgid "MCP 서버"
 msgstr "MCP 서버"
 
+#. Description under the settings dialog's project picker
+#: app/entry/settings/settings-dialog.tsx
+msgid "MCP 서버, 외부 에이전트, 권한, Skills, 보호 브랜치는 여기서 고른 프로젝트의 설정입니다."
+msgstr "MCP 서버, 외부 에이전트, 권한, Skills, 보호 브랜치는 여기서 고른 프로젝트의 설정입니다."
+
 #: app/entry/settings/pages/mcp-tool-hints.tsx
 msgid "MCP 표준의 도구 표시를 따릅니다. 서버가 표시하지 않은 값은 표준의 조심스러운 기본값을 씁니다. 직접 고른 값이 서버 표시보다 우선합니다. 분류와 상관없이 도구를 부를 때마다 권한 모드대로 묻습니다."
 msgstr "MCP 표준의 도구 표시를 따릅니다. 서버가 표시하지 않은 값은 표준의 조심스러운 기본값을 씁니다. 직접 고른 값이 서버 표시보다 우선합니다. 분류와 상관없이 도구를 부를 때마다 권한 모드대로 묻습니다."
@@ -3053,8 +3058,8 @@ msgid "보호 브랜치 merge"
 msgstr "보호 브랜치 merge"
 
 #: app/entry/settings/pages/kanban.tsx
-msgid "보호 브랜치는 프로젝트마다 정합니다. 프로젝트를 고른 뒤 다시 열어 주십시오."
-msgstr "보호 브랜치는 프로젝트마다 정합니다. 프로젝트를 고른 뒤 다시 열어 주십시오."
+msgid "보호 브랜치는 프로젝트마다 정합니다. 위에서 프로젝트를 골라 주십시오."
+msgstr "보호 브랜치는 프로젝트마다 정합니다. 위에서 프로젝트를 골라 주십시오."
 
 #. Button that copies a tool call's code block
 #: app/entry/chat/message.tsx
@@ -3215,10 +3220,6 @@ msgstr "사이드바 펼치기"
 #: app/entry/index.tsx
 msgid "사이드바 펼치기 (⌘B)"
 msgstr "사이드바 펼치기 (⌘B)"
-
-#: app/entry/settings/shared.tsx
-msgid "사이드바에서 프로젝트를 고르면 그 프로젝트의 설정이 보입니다."
-msgstr "사이드바에서 프로젝트를 고르면 그 프로젝트의 설정이 보입니다."
 
 #. Button that deletes a subagent task's record
 #. Button that deletes the BTW thread
@@ -4523,6 +4524,10 @@ msgstr "웹훅 설정을 확인하지 못했습니다. 복사·저장으로 직�
 #: app/entry/settings/pages/kanban.tsx
 msgid "위 프로젝트의 카드부터 실행합니다. 한 프로젝트 안에서는 칸반 보드의 대화 순서를 따릅니다."
 msgstr "위 프로젝트의 카드부터 실행합니다. 한 프로젝트 안에서는 칸반 보드의 대화 순서를 따릅니다."
+
+#: app/entry/settings/shared.tsx
+msgid "위에서 프로젝트를 고르면 그 프로젝트의 설정이 보입니다."
+msgstr "위에서 프로젝트를 고르면 그 프로젝트의 설정이 보입니다."
 
 #: app/entry/chat/chat-composer.tsx
 msgid "위의 승인 요청에 먼저 답해 주십시오"
@@ -6287,10 +6292,12 @@ msgstr "폴더의 절대 경로를 입력해 주십시오. 등록한 폴더 안�
 msgid "표시 없음, 기본값: {shown}"
 msgstr "표시 없음, 기본값: {shown}"
 
+#. Label of the settings dialog's project picker
 #. Scope badge: set in this project's config
 #. Sidebar section of project settings
 #. Sidebar section of project settings
 #: app/entry/navigation/sidebar.tsx
+#: app/entry/settings/settings-dialog.tsx
 #: app/entry/settings/shared.tsx
 msgid "프로젝트"
 msgstr "프로젝트"
@@ -6309,6 +6316,11 @@ msgstr "프로젝트 개선"
 #: app/entry/navigation/sidebar.tsx
 msgid "프로젝트 검색"
 msgstr "프로젝트 검색"
+
+#. Placeholder of the settings dialog's project picker
+#: app/entry/settings/settings-dialog.tsx
+msgid "프로젝트 고르기"
+msgstr "프로젝트 고르기"
 
 #: app/entry/navigation/sidebar.tsx
 msgid "프로젝트 기억으로 채택된 내용과 그 출처 기록은 남습니다."
