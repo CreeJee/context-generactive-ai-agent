@@ -1,7 +1,13 @@
 import { ph } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
 import { Array as Arr, Effect } from "effect";
-import { ArchiveIcon, EllipsisIcon, KanbanSquareIcon, SettingsIcon } from "lucide-react";
+import {
+  ArchiveIcon,
+  EllipsisIcon,
+  KanbanSquareIcon,
+  SettingsIcon,
+  WrenchIcon,
+} from "lucide-react";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import {
@@ -15,6 +21,7 @@ import {
 import { refusalOf, type ListedProject } from "../api";
 import { useCrossRecallMutation, useHideProjectMutation } from "../queries/mutations/project";
 import { useProjectBoardsQuery } from "../queries/project";
+import { openImprovementsOverlay } from "../settings/open-improvements";
 import { errorMessage } from "../settings/shared";
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
 
@@ -90,6 +97,12 @@ export function ProjectMenu({
               {boards.length}
             </Badge>
           )}
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={openImprovementsOverlay}>
+          <WrenchIcon />{" "}
+          <Trans comment="Menu item that opens the project improvement reports">
+            프로젝트 개선
+          </Trans>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuCheckboxItem

@@ -4204,6 +4204,11 @@ msgstr "연동·루프·결함"
 msgid "열린 질문 {count}"
 msgstr "열린 질문 {count}"
 
+#. Description of the project improvement dialog
+#: app/entry/settings/open-improvements.tsx
+msgid "열린 프로젝트 전체의 사용 기록에서 찾습니다."
+msgstr "열린 프로젝트 전체의 사용 기록에서 찾습니다."
+
 #: app/entry/settings/pages/improvements.tsx
 msgid "열린 프로젝트의 최근 90일 사용 기록에서 반복된 정정과 실패를 찾아 저장소마다 고칠 항목과 작업 명세를 문서로 남깁니다. 코드와 에이전트 지침을 함께 고치는 명세입니다. 앱은 저장소를 직접 바꾸지 않습니다."
 msgstr "열린 프로젝트의 최근 90일 사용 기록에서 반복된 정정과 실패를 찾아 저장소마다 고칠 항목과 작업 명세를 문서로 남깁니다. 코드와 에이전트 지침을 함께 고치는 명세입니다. 앱은 저장소를 직접 바꾸지 않습니다."
@@ -6279,7 +6284,11 @@ msgstr "표시 없음, 기본값: {shown}"
 msgid "프로젝트"
 msgstr "프로젝트"
 
+#. Menu item that opens the project improvement reports
 #. Settings page name: finding repeated corrections in project history
+#. Title of the project improvement dialog
+#: app/entry/navigation/project-menu.tsx
+#: app/entry/settings/open-improvements.tsx
 #: app/entry/settings/shared.tsx
 msgid "프로젝트 개선"
 msgstr "프로젝트 개선"
