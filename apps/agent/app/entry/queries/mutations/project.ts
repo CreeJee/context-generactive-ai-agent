@@ -96,11 +96,12 @@ export function useRestoreProjectMutation() {
   });
 }
 
-export function useCreateSessionMutation(projectId: string) {
+export function useCreateSessionMutation() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (agent?: string) => api.createSession(projectId, agent),
-    onSuccess: () =>
+    mutationFn: ({ projectId, agent }: { readonly projectId: string; readonly agent?: string }) =>
+      api.createSession(projectId, agent),
+    onSuccess: (_session, { projectId }) =>
       client.invalidateQueries({ queryKey: projectQueries.sessions(projectId).queryKey }),
   });
 }

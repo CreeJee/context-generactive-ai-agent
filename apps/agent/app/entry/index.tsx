@@ -200,7 +200,7 @@ export function App() {
   const crossRecallMutation = useCrossRecallMutation(projectId ?? "");
   const hideProjectMutation = useHideProjectMutation();
   const restoreProjectMutation = useRestoreProjectMutation();
-  const createSessionMutation = useCreateSessionMutation(projectId ?? "");
+  const createSessionMutation = useCreateSessionMutation();
   const lifecycleMutation = useSessionLifecycleMutation(pageHolder);
   const sessionsQuery = useProjectSessionsQuery(projectId);
   const sessions = sessionsQuery.data?.active ?? [];
@@ -477,13 +477,17 @@ export function App() {
     );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const createSession = (agent?: string) =>
+  const createSession = (targetProjectId: string, agent?: string) =>
     runUiEffect(
       Effect.gen(function* () {
-        if (!isTruthy(projectId)) return;
-        const session = yield* uiPromise(() => createSessionMutation.mutateAsync(agent));
+        const session = yield* uiPromise(() =>
+          createSessionMutation.mutateAsync({ projectId: targetProjectId, agent }),
+        );
         setArchiveError(null);
-        void setLocation({ session: session.id }, { history: "push" });
+        void setLocation(
+          { ...leaveProject, project: targetProjectId, session: session.id },
+          { history: "push" },
+        );
       }).pipe(
         Effect.catchTag("UnknownError", () =>
           Effect.sync(() =>
@@ -522,8 +526,16 @@ export function App() {
     run: (command) =>
       runUiEffect(
         Match.valueTags(command, {
-          new: () => uiPromise(() => createSession()),
-          agent: ({ agent }) => uiPromise(() => createSession(agent)),
+          new: () =>
+            uiPromise(() => createSession(projectId ?? "")).pipe(
+              Effect.when(Effect.succeed(isTruthy(projectId))),
+              Effect.asVoid,
+            ),
+          agent: ({ agent }) =>
+            uiPromise(() => createSession(projectId ?? "", agent)).pipe(
+              Effect.when(Effect.succeed(isTruthy(projectId))),
+              Effect.asVoid,
+            ),
           settings: () => Effect.sync(openSettings),
           report: () => Effect.sync(() => window.location.assign(reportHref(projectId, sessionId))),
           mode: ({ mode }) =>
@@ -786,7 +798,7 @@ export function App() {
                 projectId={projectId}
                 sessionId={sessionId}
                 archiveError={archiveError}
-                onCreate={(agent) => void createSession(agent)}
+                onCreate={(agent) => void createSession(projectId, agent)}
                 onArchive={archiveSession}
                 onDelete={deleteSession}
                 onRestore={restoreSession}
