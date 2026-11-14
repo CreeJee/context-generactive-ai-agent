@@ -650,6 +650,60 @@ function makeOpenAICompatibleSettingsBody(
         ),
       ),
     );
+  /** The endpoint a compatible choice names, read again on every call so edits show up. */
+  const accountNamed = (id: string) =>
+    Effect.map(accountsOf, (all) => all.accounts.find((account) => account.id === id) ?? null);
+  /** One endpoint's models; `load` reads that endpoint's account. */
+  const catalogOf = (load: Effect.Effect<CompatibleAccount | null, GlobalConfigFailed>) => ({
+    list: Effect.gen(function* () {
+      const listed = yield* load;
+      // Discovery only refreshes published reasoning; the registered models list without it.
+      yield* Option.match(Option.liftPredicate(listed, isTruthy), {
+        onNone: () => Effect.void,
+        onSome: (account) =>
+          discover(account.id).pipe(
+            Effect.catchTag(["OpenAICompatibleFailed", "GlobalConfigFailed"], () => Effect.void),
+          ),
+      });
+      const account = yield* load;
+      return Option.match(Option.liftPredicate(account, isTruthy), {
+        onNone: () => [],
+        onSome: (refreshed) =>
+          refreshed.models.flatMap((entry, index) =>
+            Option.toArray(
+              Option.map(
+                Option.fromNullishOr(compatibleEndpointModel(refreshed, entry.id)),
+                (settings) => model(settings, index === 0),
+              ),
+            ),
+          ),
+      });
+    }).pipe(
+      Effect.mapError(() => ProviderOperationFailed.make({ provider, operation: "catalog" })),
+    ),
+    /**
+     * Whether the endpoint's registered model accepts image parts. Absent settings read as off, as
+     * every model written before the setting did (decisions.md 2026-11-02).
+     */
+    acceptsImages: (modelId: string) =>
+      Effect.map(
+        load,
+        (account) => account?.models.find((entry) => entry.id === modelId)?.imageInput === true,
+      ).pipe(Effect.mapError(() => ProviderOperationFailed.make({ provider, operation: "model" }))),
+    cheapestEffort: <S extends ModelSelection>(selection: S) =>
+      load.pipe(
+        Effect.map((account) =>
+          Option.liftPredicate(account, isTruthy).pipe(
+            Option.flatMapNullishOr((found) => compatibleEndpointModel(found, selection.model)),
+            Option.flatMapNullishOr(publishedReasoning),
+            Option.flatMap((options) => cheapestPublished(options, selection.reasoningEffort)),
+            Option.getOrElse(() => "default"),
+          ),
+        ),
+        Effect.orElseSucceed(() => "default"),
+        Effect.map((reasoningEffort) => ({ ...selection, reasoningEffort })),
+      ),
+  });
   const services: ProviderConfiguration = {
     provider,
     auth: {
@@ -665,69 +719,34 @@ function makeOpenAICompatibleSettingsBody(
     },
     models: {
       provider,
-      list: Effect.gen(function* () {
-        const selected = yield* read;
-        // Discovery only refreshes published reasoning; the registered models list without it.
-        yield* Option.match(Option.liftPredicate(selected, isTruthy), {
-          onNone: () => Effect.void,
-          onSome: (account) =>
-            discover(account.id).pipe(
-              Effect.catchTag(["OpenAICompatibleFailed", "GlobalConfigFailed"], () => Effect.void),
-            ),
-        });
-        const account = yield* read;
-        return Option.match(Option.liftPredicate(account, isTruthy), {
-          onNone: () => [],
-          onSome: (refreshed) =>
-            refreshed.models.flatMap((entry, index) =>
-              Option.toArray(
-                Option.map(
-                  Option.fromNullishOr(compatibleEndpointModel(refreshed, entry.id)),
-                  (settings) => model(settings, index === 0),
-                ),
-              ),
-            ),
-        });
-      }).pipe(
-        Effect.mapError(() => ProviderOperationFailed.make({ provider, operation: "catalog" })),
-      ),
+      ...catalogOf(read),
+      /** The selected model, on the selected endpoint. */
       selected: Effect.map(config.read, (settings) =>
-        Option.liftPredicate(settings.model, isTruthy).pipe(
+        Option.all({
+          account: Option.fromNullishOr(selectedCompatibleAccount(compatibleAccountsOf(settings))),
+          chosen: Option.liftPredicate(settings.model, isTruthy),
+        }).pipe(
           Option.filter(() => settings.provider === provider),
-          Option.map((chosen) => ({
-            provider,
-            model: chosen,
-            reasoningEffort: Option.exists(
-              selectedEndpoint(settings),
-              (endpoint) =>
-                endpoint.model === chosen &&
-                model(endpoint, false).supportedReasoningEfforts.includes(
-                  settings.reasoningEffort ?? "default",
-                ),
-            )
-              ? (settings.reasoningEffort ?? "default")
-              : "default",
-          })),
+          Option.map(
+            ({ account, chosen }): CompatibleModelSelection => ({
+              provider,
+              account: account.id,
+              model: chosen,
+              reasoningEffort: Option.exists(
+                selectedEndpoint(settings),
+                (endpoint) =>
+                  endpoint.model === chosen &&
+                  model(endpoint, false).supportedReasoningEfforts.includes(
+                    settings.reasoningEffort ?? "default",
+                  ),
+              )
+                ? (settings.reasoningEffort ?? "default")
+                : "default",
+            }),
+          ),
           Option.getOrNull,
         ),
       ),
-      acceptsImages: (model: string) =>
-        Effect.map(config.read, (settings) => compatibleImageInput(settings, model)).pipe(
-          Effect.mapError(() => ProviderOperationFailed.make({ provider, operation: "model" })),
-        ),
-      cheapestEffort: (selection) =>
-        read.pipe(
-          Effect.map((account) =>
-            Option.liftPredicate(account, isTruthy).pipe(
-              Option.flatMapNullishOr((found) => compatibleEndpointModel(found, selection.model)),
-              Option.flatMapNullishOr(publishedReasoning),
-              Option.flatMap((options) => cheapestPublished(options, selection.reasoningEffort)),
-              Option.getOrElse(() => "default"),
-            ),
-          ),
-          Effect.orElseSucceed(() => "default"),
-          Effect.map((reasoningEffort) => ({ ...selection, reasoningEffort })),
-        ),
       select: (id: string, effort = "default") =>
         updates.withPermit(
           Effect.gen(function* () {
@@ -736,16 +755,26 @@ function makeOpenAICompatibleSettingsBody(
             );
             const selection = yield* Effect.fromOption(
               Option.liftPredicate(account, isTruthy).pipe(
-                Option.flatMapNullishOr((found) => compatibleEndpointModel(found, id)),
-                Option.filter((settings) =>
-                  model(settings, false).supportedReasoningEfforts.includes(effort),
+                Option.filter((found) =>
+                  Option.exists(
+                    Option.fromNullishOr(compatibleEndpointModel(found, id)),
+                    (settings) => model(settings, false).supportedReasoningEfforts.includes(effort),
+                  ),
                 ),
-                Option.as({ provider, model: id, reasoningEffort: effort }),
+                Option.map(
+                  (found): CompatibleModelSelection => ({
+                    provider,
+                    account: found.id,
+                    model: id,
+                    reasoningEffort: effort,
+                  }),
+                ),
               ),
               () => ModelUnavailable.make({ provider, model: id, reasoningEffort: effort }),
             );
+            // The selected endpoint is kept with the accounts; the settings name only the model.
             yield* config
-              .update(selection)
+              .update({ provider, model: id, reasoningEffort: effort })
               .pipe(
                 Effect.mapError(() =>
                   ProviderOperationFailed.make({ provider, operation: "model" }),

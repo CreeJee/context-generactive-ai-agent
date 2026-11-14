@@ -39,3 +39,39 @@ testAgent({ testProvider: { responder } })("repeat guard", (it) => {
     }),
   );
 });
+
+/** A model guessing arguments: each call reads another missing file and fails the same way. */
+const guessing: ScriptedResponder = (invocation) =>
+  invocation.index < 30
+    ? {
+        toolCalls: [
+          {
+            id: `call-${invocation.index}`,
+            name: "read_file",
+            arguments: JSON.stringify({ path: `missing-${invocation.index}.txt` }),
+          },
+        ],
+      }
+    : { text: "the guard did not stop the run" };
+
+testAgent({ testProvider: { responder: guessing } })("repeat guard on failures", (it) => {
+  it.effect("a tool that keeps failing the same way is refused once, then the run stops", () =>
+    Effect.gen(function* () {
+      const { provider } = yield* TestEnv;
+      yield* selectTestModel();
+      const session = yield* freshSession;
+      const events = yield* runTurn(session, `${session}:guess`, "read the file");
+      const invocations = (provider?.invocations ?? []).filter(
+        (invocation) => invocation.run.threadId === session,
+      );
+      // Twenty failed reads, the refusal the model reads, and the call that ends the run.
+      expect(invocations).toHaveLength(22);
+      const results = (invocations.at(-1)?.history ?? []).filter(
+        (message) => message.role === "tool",
+      );
+      expect(results).toHaveLength(21);
+      expect(results.at(-1)?.content).toEqual(expect.stringContaining("failed the same way"));
+      expect(events.find(AgUiEvent.guards.RUN_ERROR)?.code).toBe("repeated_tool_call");
+    }),
+  );
+});
