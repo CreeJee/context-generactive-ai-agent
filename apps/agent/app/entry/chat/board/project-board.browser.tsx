@@ -180,6 +180,12 @@ it.live("project board shows the executing Plans in order, moves a Goal and move
     const opened = vi.fn();
     const screen = yield* sdkCall(() => render(<Harness onOpenSession={opened} />));
 
+    // The board is a region of the page, not a dialog over it.
+    yield* sdkCall(() =>
+      expect.element(screen.getByRole("region", { name: "프로젝트 칸반 보드" })).toBeVisible(),
+    );
+    expect(document.querySelectorAll('[data-slot="sheet-content"]').length).toBe(0);
+
     // Executing Plans share the columns; each card names its conversation. A Plan not executing
     // is only named, and its cards are not even read.
     yield* sdkCall(() => expect.element(screen.getByText("결제 요청")).toBeVisible());
@@ -231,8 +237,6 @@ it.live("project board shows the executing Plans in order, moves a Goal and move
     yield* sdkCall(() =>
       expect.element(screen.getByRole("complementary", { name: "카드 패널" })).toBeVisible(),
     );
-    // The panel is not a dialog of its own: only the board's sheet is one.
-    expect(document.querySelectorAll('[data-slot="sheet-content"]').length).toBe(1);
     yield* sdkCall(() => screen.getByRole("combobox", { name: "옮길 대화" }).click());
     yield* sdkCall(() => screen.getByRole("option", { name: "결제 모듈" }).click());
     yield* sdkCall(() => screen.getByRole("button", { name: "옮기기" }).click());

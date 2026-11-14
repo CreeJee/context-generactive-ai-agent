@@ -2962,6 +2962,11 @@ msgstr "보드"
 msgid "보드 #{ref} · {status} · 루프 {health}"
 msgstr "보드 #{ref} · {status} · 루프 {health}"
 
+#. Button that closes the kanban board and shows the conversation again
+#: app/entry/chat/board/board-frame.tsx
+msgid "보드 닫기"
+msgstr "보드 닫기"
+
 #. Name of the board loop in its health status
 #. Name of the board loop in its health status
 #. Name of the board loop in its health status

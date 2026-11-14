@@ -1,7 +1,7 @@
 import { i18n } from "@lingui/core";
 import { msg, ph } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useQueries } from "@tanstack/react-query";
 import {
   ChevronDownIcon,
@@ -23,13 +23,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "../../../components/ui/dropdown-menu";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "../../../components/ui/sheet";
 import { Toggle } from "../../../components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "../../../components/ui/toggle-group";
 import type { ProjectBoard as ProjectBoardRow } from "memory-agent";
@@ -55,6 +48,7 @@ import { GoalMergeStatus, mergeFailed } from "./goal-merge";
 import { BoardShortcuts } from "./kanban-board";
 import { Array as Arr, Predicate } from "effect";
 import { waitsForUser } from "./hold-reason";
+import { BoardFrame } from "./board-frame";
 
 const cardsOf = (row: ProjectBoardRow) =>
   boardColumns.reduce((sum, status) => sum + row.counts[status], 0);
@@ -92,6 +86,7 @@ const needsUser = (surface: SurfaceBoard | null, goalDecisions: number) => {
 export function ProjectBoard({
   projectId,
   holder,
+  leading,
   peek,
   onPeek,
   onOpenSession,
@@ -99,6 +94,8 @@ export function ProjectBoard({
 }: {
   readonly projectId: string;
   readonly holder: string;
+  /** Drawn before the title; see {@link BoardFrame}. */
+  readonly leading?: ReactNode;
   /** The card open in the peek panel, from the `boardCard` query. */
   readonly peek: BoardCardRef | null;
   readonly onPeek: (card: BoardCardRef | null) => void;
@@ -165,27 +162,20 @@ export function ProjectBoard({
   };
 
   return (
-    <Sheet
-      open
-      onOpenChange={(next, details) => {
-        if (!next && details.reason === "escape-key") {
-          // Esc puts a picked-up card back, or closes the open card panel; the board stays open.
-          if (dragging) return details.cancel();
-          if (peek !== null || adding !== null) {
-            setAdding(null);
-            onPeek(null);
-            return details.cancel();
-          }
-        }
-        if (!next) onClose();
+    <BoardFrame
+      title={t`프로젝트 칸반 보드`}
+      leading={leading}
+      tools={rows.length > 0 ? <BoardShortcuts /> : null}
+      onEscape={() => {
+        // Esc closes the open card panel; a picked-up card's Esc is dnd-kit's own.
+        if (dragging || (peek === null && adding === null)) return;
+        setAdding(null);
+        onPeek(null);
       }}
-    >
-      <SheetContent className="w-full sm:max-w-none">
-        <SheetHeader>
-          <SheetTitle>
-            <Trans>프로젝트 칸반 보드</Trans>
-          </SheetTitle>
-          <SheetDescription>
+      onClose={onClose}
+      header={
+        <>
+          <div className="text-xs/relaxed text-muted-foreground">
             {/* Muted labels, numbers in the foreground colour: the counts read at a glance
                 without boxing every figure in a badge. The badge stays for "판단 대기" alone,
                 the one figure that asks for action. */}
@@ -218,7 +208,7 @@ export function ProjectBoard({
                 </Badge>
               )}
             </span>
-          </SheetDescription>
+          </div>
           {waiting.length > 0 && (
             <p role="status" className="flex flex-wrap items-center gap-1 text-xs">
               <span className="text-muted-foreground">
@@ -273,7 +263,7 @@ export function ProjectBoard({
                   </ToggleGroup>
                 </div>
               )}
-              {/* Right after the filters, not pushed to the far edge: on a wide sheet a
+              {/* Right after the filters, not pushed to the far edge: on a wide board a
                   justify-between row leaves these alone across an empty strip. Without filters
                   the ghost button's padding is pulled back so its chevron lines up with the title. */}
               <span className="flex items-center gap-1">
@@ -378,48 +368,40 @@ export function ProjectBoard({
               </CollapsibleContent>
             )}
           </Collapsible>
-          {/* Drawn on the title row beside the sheet's close button (top-2 right-2, 24px wide):
-              the keys belong to the whole board, not to the conversation filters. Last in the
-              header so the sheet does not focus it first and open its tooltip; for the same
-              reason it is left out while loading, when it would be the only control. */}
-          {rows.length > 0 && (
-            <span className="absolute top-2 right-9">
-              <BoardShortcuts />
-            </span>
-          )}
-        </SheetHeader>
-        {boards.data === undefined &&
-          (boards.isError ? (
-            <LoadFailed className="px-4" onRetry={() => void boards.refetch()}>
-              <Trans>보드를 불러오지 못했습니다.</Trans>
-            </LoadFailed>
-          ) : (
-            <p className="px-4 text-muted-foreground">
-              <Trans>보드를 불러오는 중입니다.</Trans>
-            </p>
-          ))}
-        {boards.data !== undefined && rows.length === 0 && (
+        </>
+      }
+    >
+      {boards.data === undefined &&
+        (boards.isError ? (
+          <LoadFailed className="px-4" onRetry={() => void boards.refetch()}>
+            <Trans>보드를 불러오지 못했습니다.</Trans>
+          </LoadFailed>
+        ) : (
           <p className="px-4 text-muted-foreground">
-            <Trans>실행 중인 Plan이 없습니다. 대화에서 Plan을 실행하면 보드에 올라옵니다.</Trans>
+            <Trans>보드를 불러오는 중입니다.</Trans>
           </p>
-        )}
-        {rows.length > 0 && (
-          <BoardSurface
-            projectId={projectId}
-            holder={holder}
-            disabled={false}
-            boards={surfaces}
-            shown={shown}
-            peek={peek}
-            onPeek={onPeek}
-            adding={adding}
-            onAddingChange={setAdding}
-            onDraggingChange={setDragging}
-            className="min-h-0 flex-1 pt-3"
-          />
-        )}
-      </SheetContent>
-    </Sheet>
+        ))}
+      {boards.data !== undefined && rows.length === 0 && (
+        <p className="px-4 text-muted-foreground">
+          <Trans>실행 중인 Plan이 없습니다. 대화에서 Plan을 실행하면 보드에 올라옵니다.</Trans>
+        </p>
+      )}
+      {rows.length > 0 && (
+        <BoardSurface
+          projectId={projectId}
+          holder={holder}
+          disabled={false}
+          boards={surfaces}
+          shown={shown}
+          peek={peek}
+          onPeek={onPeek}
+          adding={adding}
+          onAddingChange={setAdding}
+          onDraggingChange={setDragging}
+          className="min-h-0 flex-1 pt-3"
+        />
+      )}
+    </BoardFrame>
   );
 }
 
