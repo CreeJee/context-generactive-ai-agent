@@ -18,7 +18,7 @@ import { SecureRandom } from "effect/crypto";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { StorageRoot } from "../config/storage-root.ts";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
-import { canonicalPathEffect, pathsOverlap } from "../files/paths.ts";
+import { canonicalPathEffect, isCredentialPath, pathsOverlap } from "../files/paths.ts";
 import { findExecutable } from "../runtime/host.ts";
 import { path as hostPath } from "../runtime/synchronous-path.ts";
 import {
@@ -129,6 +129,16 @@ const dependencyInstalls = [
     args: ["ci", "--offline", "--ignore-scripts", "--no-audit", "--no-fund"],
   },
 ] as const;
+
+/**
+ * The file at the repository top whose gitignore patterns name ignored files a new worktree gets
+ * copied from the user's checkout, such as a native module built outside the package manager. It
+ * is the file Claude Code reads for its worktrees: a file is copied only when a pattern matches it
+ * and the repository ignores it.
+ */
+const worktreeIncludeFile = ".worktreeinclude";
+
+const nulSeparated = (text: string) => text.split("\0").filter((entry) => entry.length > 0);
 
 /** Longest a worktree's install may take before the card starts without it. */
 const installTimeout = Duration.minutes(5);
@@ -253,6 +263,64 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
       );
     },
     Effect.catch(logFailure("Worktree dependencies not installed")),
+  );
+  /**
+   * Copies into a new worktree the ignored files `.worktreeinclude` names (`worktreeIncludeFile`),
+   * as they are in the user's checkout. Without them a card rebuilds them, or fails the checks that
+   * need them, in every worktree. Credential files are never copied. A copy that fails is logged,
+   * and the card starts without it.
+   */
+  const copyIncluded = Effect.fnUntraced(
+    function* (operation: Operation, repository: string, folder: string) {
+      const include = path.join(repository, worktreeIncludeFile);
+      if (!(yield* fs.exists(include))) return;
+      // Ignored folders come as one entry ending in `/`; nothing below them is listed.
+      const untracked = (exclude: string) =>
+        Effect.map(
+          expect(operation, repository, [
+            "ls-files",
+            "-z",
+            "--others",
+            "--ignored",
+            "--directory",
+            exclude,
+          ]),
+          nulSeparated,
+        );
+      const [named, ignored] = yield* Effect.all(
+        [untracked(`--exclude-from=${include}`), untracked("--exclude-standard")],
+        { concurrency: 2 },
+      );
+      const isIgnored = (entry: string) =>
+        ignored.some(
+          (ignoredEntry) =>
+            entry === ignoredEntry ||
+            (ignoredEntry.endsWith("/") && entry.startsWith(ignoredEntry)),
+        );
+      // A folder is copied file by file, so a credential file inside it stays behind too.
+      const filesOf = (entry: string) =>
+        entry.endsWith("/")
+          ? fs.readDirectory(path.join(repository, entry), { recursive: true }).pipe(
+              Effect.map((names) => names.map((name) => path.join(entry, name))),
+              Effect.flatMap((paths) =>
+                Effect.filter(paths, (file) =>
+                  Effect.map(fs.stat(path.join(repository, file)), (info) => info.type === "File"),
+                ),
+              ),
+            )
+          : Effect.succeed([entry]);
+      const files = (yield* Effect.forEach(named.filter(isIgnored), filesOf)).flat();
+      yield* Effect.forEach(
+        files.filter((file) => !isCredentialPath(file)),
+        (file) =>
+          fs.copy(path.join(repository, file), path.join(folder, file), {
+            overwrite: true,
+            preserveTimestamps: true,
+          }),
+        { discard: true },
+      );
+    },
+    Effect.catch(logFailure("Worktree include files not copied")),
   );
   /** A git call that must succeed; its trimmed output. */
   const expect = (operation: Operation, cwd: string, args: ReadonlyArray<string>) =>
@@ -470,6 +538,7 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
         worktree.branch,
       ]).pipe(Effect.uninterruptible);
       yield* installDependencies(worktree.path);
+      yield* copyIncluded("lease", worktree.repository, worktree.path);
       return worktree;
     });
     return yield* Match.value(state).pipe(
@@ -600,6 +669,7 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
               );
               yield* expect("checkout", repository, ["worktree", "add", "--detach", folder, head]);
               yield* installDependencies(folder);
+              yield* copyIncluded("checkout", repository, folder);
               yield* Ref.update(checkouts, HashSet.add(goalKey(goal)));
               return {
                 repository,

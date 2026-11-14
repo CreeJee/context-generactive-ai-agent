@@ -6,14 +6,14 @@ import { StorageRoot } from "../src/config/storage-root.ts";
 import { ActiveProvider } from "../src/providers/active-provider.ts";
 import {
   AuthConnectionState,
-  ProviderId,
   ProviderUnavailable,
   type ProviderServices,
+  type SubscriptionAccountProvider,
 } from "../src/providers/contracts.ts";
 import { ProviderRegistry, providerRegistryFrom } from "../src/providers/registry.ts";
 import { withTestPlatform } from "./support/platform.ts";
 
-const fakeProvider = (provider: ProviderId): ProviderServices => ({
+const fakeProvider = (provider: SubscriptionAccountProvider): ProviderServices => ({
   provider,
   auth: {
     provider,
@@ -99,8 +99,8 @@ describe("provider-neutral contracts", () => {
         runtimes: [openai.runtime],
       });
 
-      expect(yield* registry.runtime("openai")).toBe(openai.runtime);
-      const missing = yield* Effect.result(registry.runtime("anthropic"));
+      expect(yield* registry.runtime(openaiSelection)).toBe(openai.runtime);
+      const missing = yield* Effect.result(registry.runtime(anthropicSelection));
       expect(Result.isFailure(missing) && missing.failure).toEqual(
         ProviderUnavailable.make({ provider: "anthropic" }),
       );

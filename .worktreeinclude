@@ -1,0 +1,5 @@
+# Ignored files a new worktree copies from this checkout (gitignore syntax).
+# The native vector module, built by cargo outside pnpm install.
+packages/turbovec/memory-turbovec.node
+# React Router typegen output the agent app's typecheck reads.
+apps/agent/.react-router/

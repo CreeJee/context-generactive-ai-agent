@@ -4784,6 +4784,9 @@
 - pnpm 보정(2026-11-12, 사용자 결정): pnpm은 `pnpm install --prefer-offline --frozen-lockfile --ignore-scripts`로 설치한다. 위 "네트워크를 쓰지 않는다"를 pnpm에 한해 대체한다. npm은 그대로 `--offline`이다.
   - 계기: web 저장소의 카드 S17에서 설치가 `ERR_PNPM_NO_OFFLINE_META`로 실패했다. pnpm 12는 `--frozen-lockfile`이어도 lockfile의 모든 항목(1939개)을 공급망 정책으로 검사한다. 검사에는 패키지 메타데이터가 필요한데, 오프라인에서는 메타데이터 캐시에서만 읽는다. 캐시에는 22개만 있었다. store에 패키지가 모두 있어도 실패한다. 11-11에 성공한 것은 그때 캐시가 차 있었기 때문으로 본다.
   - 같은 lockfile 사본에서 `--config.minimum-release-age=0`을 더해도 GitHub registry 패키지의 메타데이터가 없어 실패했다. `--prefer-offline`은 5.6초에 성공했다. 패키지는 store에서 가져오고, 캐시에 없는 메타데이터만 받는다. 버전은 여전히 lockfile이 고정한다.
+- 무시 파일 복사 보정(2026-11-14, 사용자 승인): 설치 뒤에 저장소 맨 위 `.worktreeinclude`(gitignore 문법, Claude Code가 worktree에 쓰는 것과 같은 파일)가 이름 붙인 파일 중 git이 무시하는 것만 사용자 checkout에서 복사한다. 폴더는 파일 하나씩 복사하고, 자격 증명으로 보이는 파일(`isCredentialPath`)은 폴더 안에 있어도 복사하지 않는다. 복사 실패는 설치처럼 로그만 남기고 카드는 그대로 시작한다.
+  - 계기: 세션 `cc6157a4`의 Goal은 worktree마다 `--ignore-scripts` 설치로 빠진 turbovec 네이티브 모듈을 다시 빌드했고(라운드당 1~3분, 합계 약 8분), React Router typegen 산출물이 없어 검사가 실패했다.
+  - 이 저장소의 `.worktreeinclude`는 `packages/turbovec/memory-turbovec.node`와 `apps/agent/.react-router/`를 적는다. 카드가 Rust 코드를 바꾸면 카드가 다시 빌드한다.
 
 ## 실시간 변경 연결이 끊기면 화면 위에 다시 연결하는 중이라고 알린다 (2026-11-11)
 

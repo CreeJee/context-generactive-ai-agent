@@ -117,7 +117,7 @@ it.live(
         const fresh = implementation.bind(yield* registry.subscriptionDependencies!("openai"));
         expect(fresh.contextWindow("gpt-5")).toBe(222);
         const second = yield* pinned(fresh, "run-1");
-        const legacy = yield* pinned(yield* registry.runtime("openai"), "run-2");
+        const legacy = yield* pinned(yield* registry.runtime(selection), "run-2");
         requests.length = 0;
         yield* Effect.forEach(
           [first, second, legacy],

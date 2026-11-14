@@ -421,6 +421,52 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
       }),
   );
 
+  it.effect(
+    "copies the ignored files .worktreeinclude names into a new card worktree, never credentials",
+    () =>
+      run(({ fs, path, project }) =>
+        Effect.gen(function* () {
+          yield* fs.writeFileString(
+            path.join(project, ".gitignore"),
+            "build/\n*.node\n.env\nscratch.txt\n",
+          );
+          yield* git(project, "add", ".gitignore");
+          yield* git(project, "commit", "-qm", "ignore build output");
+          yield* fs.makeDirectory(path.join(project, "build", "nested"), { recursive: true });
+          yield* fs.writeFileString(path.join(project, "build", "nested", "out.js"), "built\n");
+          yield* fs.writeFileString(path.join(project, "build", ".env"), "TOKEN=secret\n");
+          yield* fs.writeFileString(path.join(project, "addon.node"), "native\n");
+          yield* fs.writeFileString(path.join(project, ".env"), "TOKEN=secret\n");
+          yield* fs.writeFileString(path.join(project, "scratch.txt"), "ignored, not named\n");
+          yield* fs.writeFileString(path.join(project, "notes.txt"), "named, not ignored\n");
+          yield* fs.writeFileString(
+            path.join(project, ".worktreeinclude"),
+            "build/\n*.node\n.env\nnotes.txt\n",
+          );
+          const worktrees = yield* CardWorktrees;
+          yield* worktrees.prepareGoal({ projectRoot: project, goalInstanceId: "g1" });
+          const present = yield* Effect.scoped(
+            Effect.flatMap(
+              worktrees.lease({ projectRoot: project, goalInstanceId: "g1", cardId: "c1" }),
+              (worktree) =>
+                Effect.forEach(
+                  [
+                    "build/nested/out.js",
+                    "addon.node",
+                    ".env",
+                    "build/.env",
+                    "scratch.txt",
+                    "notes.txt",
+                  ],
+                  (file) => fs.exists(path.join(worktree.toolRoot, file)),
+                ),
+            ),
+          );
+          expect(present).toEqual([true, true, false, false, false, false]);
+        }),
+      ),
+  );
+
   it.effect("lets one check of a Goal hold the Goal checkout at a time", () =>
     run(({ fs, project }) =>
       Effect.gen(function* () {

@@ -28,7 +28,11 @@ import { collectResponse } from "../src/model/response.ts";
 import { shownReason } from "../src/model/shown-failure.ts";
 import { subscriptionBody } from "../src/model/subscription.ts";
 import { Projects, type Project } from "../src/projects/projects.ts";
-import { AuthConnectionState, type ModelSelection } from "../src/providers/contracts.ts";
+import {
+  AuthConnectionState,
+  type ModelSelection,
+  type ProviderConfiguration,
+} from "../src/providers/contracts.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
 import { homeDirectory } from "../src/runtime/host-system.ts";
 import { runNativeEffect } from "../src/runtime/native-effect.ts";
@@ -110,42 +114,43 @@ const signedIn = Effect.succeed(AuthConnectionState["signed-in"]({ provider: "op
 const registry = (model: LanguageModel.LanguageModel) =>
   Layer.effect(
     ProviderRegistry,
-    Effect.map(GlobalConfig, (config) =>
-      ProviderRegistry.of({
+    Effect.map(GlobalConfig, (config) => {
+      const configuration: ProviderConfiguration = {
+        provider: "openai",
+        auth: {
+          provider: "openai",
+          status: signedIn,
+          connect: signedIn,
+          cancel: signedIn,
+          disconnect: signedIn,
+        },
+        models: {
+          provider: "openai",
+          list: Effect.succeed([
+            {
+              provider: "openai",
+              id: selection.model,
+              displayName: selection.model,
+              isDefault: true,
+              defaultReasoningEffort: selection.reasoningEffort,
+              supportedReasoningEfforts: [selection.reasoningEffort],
+              capabilities: {
+                inputModalities: ["text", "image"],
+                toolCalling: true,
+                reasoning: true,
+              },
+            },
+          ]),
+          selected: Effect.succeed(selection),
+          acceptsImages: () => Effect.succeed(true),
+          cheapestEffort: Effect.succeed,
+          select: () => Effect.as(config.update(selection).pipe(Effect.orDie), selection),
+        },
+      };
+      return ProviderRegistry.of({
         providers: ["openai"],
-        get: () =>
-          Effect.succeed({
-            provider: "openai",
-            auth: {
-              provider: "openai",
-              status: signedIn,
-              connect: signedIn,
-              cancel: signedIn,
-              disconnect: signedIn,
-            },
-            models: {
-              provider: "openai",
-              list: Effect.succeed([
-                {
-                  provider: "openai",
-                  id: selection.model,
-                  displayName: selection.model,
-                  isDefault: true,
-                  defaultReasoningEffort: selection.reasoningEffort,
-                  supportedReasoningEfforts: [selection.reasoningEffort],
-                  capabilities: {
-                    inputModalities: ["text", "image"],
-                    toolCalling: true,
-                    reasoning: true,
-                  },
-                },
-              ]),
-              selected: Effect.succeed(selection),
-              acceptsImages: () => Effect.succeed(true),
-              cheapestEffort: Effect.succeed,
-              select: () => Effect.as(config.update(selection).pipe(Effect.orDie), selection),
-            },
-          }),
+        get: () => Effect.succeed(configuration),
+        configurationOf: () => Effect.succeed(configuration),
         runtime: () =>
           Effect.succeed({
             provider: "openai",
@@ -158,8 +163,8 @@ const registry = (model: LanguageModel.LanguageModel) =>
               }),
             contextWindow: () => 400_000,
           }),
-      }),
-    ),
+      });
+    }),
   );
 
 /** The estimated tokens of the OpenAI subscription request body for this prompt and these tools. */

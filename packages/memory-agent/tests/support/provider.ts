@@ -431,6 +431,7 @@ export function testProvider(options: TestProviderOptions = {}): TestProvider {
       return {
         providers: ["openai" as const],
         get: () => Effect.succeed(configuration),
+        configurationOf: () => Effect.succeed(configuration),
         runtime: () =>
           Effect.succeed({
             provider: "openai" as const,
