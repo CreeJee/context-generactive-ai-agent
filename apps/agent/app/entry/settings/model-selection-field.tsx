@@ -25,16 +25,37 @@ const subscriptionProviders = [
 const unset = "unset";
 
 /** The source select's value: a subscription provider, or one compatible endpoint account. */
-const sourceKey = (source: CatalogTarget) =>
+export const sourceKey = (source: CatalogTarget) =>
   source.provider === "openai-compatible"
     ? `${source.provider}:${source.account}`
     : source.provider;
 
 /** Where a saved model comes from; a compatible one names its endpoint account. */
-const sourceOf = (selection: ModelSelection): CatalogTarget =>
+export const sourceOf = (selection: ModelSelection): CatalogTarget =>
   selection.provider === "openai-compatible"
     ? { provider: selection.provider, account: selection.account }
     : { provider: selection.provider };
+
+/** Where a model can come from: each subscription provider and each compatible endpoint. */
+export function useModelSources() {
+  const { t } = useLingui();
+  const compatible = useCompatibleAccountsQuery();
+  // Each compatible endpoint is a source of its own, named by the user's label for it.
+  const sources: ReadonlyArray<{ readonly source: CatalogTarget; readonly label: string }> = [
+    ...subscriptionProviders.map((provider) => ({
+      source: { provider },
+      label: t(providerLabels[provider]),
+    })),
+    ...(compatible.data?.accounts ?? []).map((account) => ({
+      source: { provider: "openai-compatible" as const, account: account.id },
+      label: account.label,
+    })),
+  ];
+  const sourceLabel = (target: CatalogTarget) =>
+    sources.find((candidate) => sourceKey(candidate.source) === sourceKey(target))?.label ??
+    t(providerLabels[target.provider]);
+  return { sources, sourceLabel };
+}
 
 const sameSelection = (left: ModelSelection | null, right: ModelSelection | null) =>
   left !== null &&
@@ -77,7 +98,7 @@ export function ModelSelectionField({
   );
   const [modelId, setModelId] = useState<string | null>(saved?.model ?? null);
   const [effort, setEffort] = useState<string | null>(saved?.reasoningEffort ?? null);
-  const compatible = useCompatibleAccountsQuery();
+  const { sources, sourceLabel } = useModelSources();
   const catalog = useCatalogQuery(source);
   const models = catalog.data?.models ?? [];
   const model = models.find((candidate) => candidate.id === modelId);
@@ -89,20 +110,6 @@ export function ModelSelectionField({
       ? { ...source, model: model.id, reasoningEffort: effort }
       : null;
   const efforts = draft === null || model === undefined ? [] : effortChoices(draft, model);
-  // Each compatible endpoint is a source of its own, named by the user's label for it.
-  const sources: ReadonlyArray<{ readonly source: CatalogTarget; readonly label: string }> = [
-    ...subscriptionProviders.map((provider) => ({
-      source: { provider },
-      label: t(providerLabels[provider]),
-    })),
-    ...(compatible.data?.accounts ?? []).map((account) => ({
-      source: { provider: "openai-compatible" as const, account: account.id },
-      label: account.label,
-    })),
-  ];
-  const sourceLabel = (target: CatalogTarget) =>
-    sources.find((candidate) => sourceKey(candidate.source) === sourceKey(target))?.label ??
-    t(providerLabels[target.provider]);
   // Each select's labels by value, so the closed select shows the label and not the raw value.
   const sourceItems = [
     { value: unset, label: unsetLabel },
