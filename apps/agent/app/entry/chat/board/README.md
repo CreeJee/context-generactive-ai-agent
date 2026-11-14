@@ -9,8 +9,10 @@
 - `BoardSurface` — 하나 또는 여러 Plan의 열, 카드 peek, 거절 알림, 실행 중 카드 변경 요청 프롬프트, 다른 대화로 옮기기 확인을 그리는 공용 보드 컴포넌트다. props는 projectId, holder, boards, shown, peek, onPeek, adding, onDraggingChange, className 등이다
 - `SurfaceBoard` — 보드 위 한 Plan의 묶음이다(sessionId, label, view, plan, decisions, loop, rank). label과 rank는 Plan 하나만 보일 때 null이다
 - `ActiveKanban` / `BoardPlan` — `KanbanView`의 active 변형과 `BoardView["plan"]`의 non-null 타입 별칭
+- `PlannerStalledBadge` / `ReplanWaitBadge` — "자동 Plan 작성 멈춤"과 "확인 필요 카드" 배지다. 세션 보드와 프로젝트 보드가 함께 쓰므로 문구와 설명을 이 한 곳에서 정의한다
+- `goalDecisionCardId` — Goal 수준 판단 요청이 카드 id로 갖는 `"@goal"`이다(memory-agent의 `goalDecisionCardId`와 같은 값)
 - `errorText` / `editErrorText` — `ApiErrorCode`(또는 `isApiError` Error)를 한국어 안내 문구로 바꾼다. 모르는 코드는 "보드를 바꾸지 못했습니다."로 떨어진다
-- `ProjectBoard` — 프로젝트의 모든 실행 중 Plan을 우선순위 트리 순서로 한 보드에 보여 준다. `useProjectBoardsQuery`, `useDecisionInboxQuery`, `useGoalOrderMutation`을 쓰고 `BoardSurface`를 렌더한다
+- `ProjectBoard` — 프로젝트의 모든 실행 중 Plan을 우선순위 트리 순서로 한 보드에 보여 준다. `useProjectBoardsQuery`, `useDecisionInboxQuery`, `useGoalOrderMutation`을 쓰고 `BoardSurface`를 렌더한다. 사람을 기다리는 대화(멈춘 루프, 멈춘 Plan 작성, 일시 중지, 확인 필요 카드, Goal 수준 판단)가 있으면 상태 패널이 펼쳐진 채로 열린다. 사용자가 접거나 펴면 그 뒤로는 그 선택을 따른다. 대화 줄에서 Goal 수준 판단에 답하고, "카드 추가"는 머리줄에 있다
 - `KanbanBoard` — 상태 열 7개와 dnd-kit 드래그(마우스, 터치 홀드, 그립 키보드), j/k/h/l·화살표 포커스 이동, 열 접기를 맡는다. 드롭 결과는 onReorder, onSend, onAskChange, onRefused 콜백으로 부모에 넘긴다
 - `CardPeek` — 오른쪽 Sheet peek 패널이다. 카드 상세, DecisionPrompt, 보류 사유와 검증 의견, 편집기, 새 카드 폼, 다른 대화로 옮기기 Select, Hold/Release/Requeue 버튼을 보여 준다. 카드 상세는 카드가 위하는 Goal outcome id를 보여 준다. outcome은 계획자가 정하므로 편집기에는 없다
 - `Peek` — peek 내용을 나타내는 TaggedEnum이다: `New` 또는 `Card{cardId, editing}`
