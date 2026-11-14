@@ -1185,9 +1185,14 @@ msgstr "거부 선택됨"
 msgid "거부됨"
 msgstr "거부됨"
 
+#. Button in the card panel that rejects a card waiting for approval
 #: app/entry/chat/board/card-peek.tsx
-msgid "거절하려면 편집에서 카드를 취소해 주십시오."
-msgstr "거절하려면 편집에서 카드를 취소해 주십시오."
+msgid "거절"
+msgstr "거절"
+
+#: app/entry/chat/board/card-peek.tsx
+msgid "거절한 카드는 취소되고 실행되지 않습니다."
+msgstr "거절한 카드는 취소되고 실행되지 않습니다."
 
 #. Local model being downloaded
 #: app/entry/shared/model-downloads.tsx
@@ -1559,6 +1564,7 @@ msgstr "그린 그림: {path}"
 
 #. Button: close the stop dialog without stopping the Goal
 #. Closes the dialog without cancelling the card
+#. Closes the dialog without rejecting the card
 #. Dialog button: keep the Plan open
 #: app/entry/chat/board-panel.tsx
 #: app/entry/chat/board/card-peek.tsx
@@ -4720,6 +4726,10 @@ msgstr "이 작업의 기록을 삭제할까요?"
 msgid "이 작업의 대화 기록을 지웁니다. 프로젝트 기억으로 채택된 내용과 그 출처 기록은 남습니다."
 msgstr "이 작업의 대화 기록을 지웁니다. 프로젝트 기억으로 채택된 내용과 그 출처 기록은 남습니다."
 
+#: app/entry/chat/board/card-peek.tsx
+msgid "이 카드를 거절할까요?"
+msgstr "이 카드를 거절할까요?"
+
 #: app/entry/chat/board/board-surface.tsx
 msgid "이 카드를 기다리는 카드가 있어서 옮길 수 없습니다. 그 카드의 의존을 먼저 풀어 주십시오."
 msgstr "이 카드를 기다리는 카드가 있어서 옮길 수 없습니다. 그 카드의 의존을 먼저 풀어 주십시오."
@@ -5847,6 +5857,11 @@ msgstr "카드 {done}/{total} 완료"
 #: app/entry/chat/board/card-peek.tsx
 msgid "카드 id를 쉼표로 구분합니다."
 msgstr "카드 id를 쉼표로 구분합니다."
+
+#. Button that confirms rejecting a card waiting for approval
+#: app/entry/chat/board/card-peek.tsx
+msgid "카드 거절"
+msgstr "카드 거절"
 
 #. Decision answer: redo the card's work
 #: app/entry/chat/decision-prompt.tsx

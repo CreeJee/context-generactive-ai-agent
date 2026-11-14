@@ -175,6 +175,7 @@ export function CardPeek({
 }) {
   const { t } = useLingui();
   const [transferTo, setTransferTo] = useState<string | null>(null);
+  const [rejectError, setRejectError] = useState<string | null>(null);
   const hold = loopCard?.reason ?? null;
   const holdNote = hold === null ? null : holdReasonNote(hold);
   // The running board takes any blocked card back: a dead-lettered one continues its delivery,
@@ -248,19 +249,69 @@ export function CardPeek({
                       <Trans>자동 검토: {ph({ reason: card.approval.review.reason })}</Trans>
                     </p>
                   )}
-                  <p className="text-muted-foreground">
-                    <Trans>거절하려면 편집에서 카드를 취소해 주십시오.</Trans>
-                  </p>
-                  <Button
-                    type="button"
-                    size="sm"
-                    disabled={disabled || closed || intentPending}
-                    onClick={() => onIntent("Approve", card.id)}
-                  >
-                    <Trans comment="Button in the card panel that approves the card to run">
-                      승인
-                    </Trans>
-                  </Button>
+                  <span className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={disabled || closed || intentPending}
+                      onClick={() => onIntent("Approve", card.id)}
+                    >
+                      <Trans comment="Button in the card panel that approves the card to run">
+                        승인
+                      </Trans>
+                    </Button>
+                    <AlertDialog>
+                      <AlertDialogTrigger
+                        render={
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={disabled || closed || intentPending || editPending}
+                          />
+                        }
+                      >
+                        <Trans comment="Button in the card panel that rejects a card waiting for approval">
+                          거절
+                        </Trans>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent size="sm">
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>
+                            <Trans>이 카드를 거절할까요?</Trans>
+                          </AlertDialogTitle>
+                          <AlertDialogDescription>
+                            <Trans>거절한 카드는 취소되고 실행되지 않습니다.</Trans>
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>
+                            <Trans comment="Closes the dialog without rejecting the card">
+                              그만두기
+                            </Trans>
+                          </AlertDialogCancel>
+                          <AlertDialogAction
+                            variant="destructive"
+                            onClick={() => {
+                              setRejectError(null);
+                              void onSubmit(
+                                BoardEdit.CancelCard({ planVersion, cardId: card.id }),
+                              ).then(setRejectError);
+                            }}
+                          >
+                            <Trans comment="Button that confirms rejecting a card waiting for approval">
+                              카드 거절
+                            </Trans>
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  </span>
+                  {rejectError !== null && (
+                    <p className="text-destructive" role="alert">
+                      {rejectError}
+                    </p>
+                  )}
                 </div>
               )}
               {(hold !== null || changePending || requeueable(card)) && (
