@@ -2,12 +2,13 @@
 
 ## Overview
 
-`apps/agent/app/entry/settings`는 웹 앱의 전역 설정 대화상자 진입점이다. `openSettingsOverlay`가 overlay-kit으로 `SettingsOverlay`를 연다. `SettingsOverlay`는 연결·기억·실행·개선·지침 그룹의 세로 탭을 그린다. 각 탭 본문은 `pages/` 하위 컴포넌트이고, `QuerySection` 로딩 경계 안에서 렌더한다. `shared.tsx`에는 여러 설정 페이지가 함께 쓰는 UI 부품과 헬퍼가 있다. 헤더, 오류 표시, 경로 축약, 설정 파일 출처, MCP/에이전트 항목, 신뢰 버튼이 여기에 속한다.
+`apps/agent/app/entry/settings`는 웹 앱의 전역 설정 대화상자 진입점이다. `openSettingsOverlay`가 overlay-kit으로 `SettingsOverlay`를 연다. `SettingsOverlay`는 일반·도구·기억·프로젝트·실행 묶음의 세로 탭을 그린다. `openImprovementsOverlay`는 프로젝트 개선 화면을 설정 밖의 자기 창으로 연다(프로젝트 `…` 메뉴가 부른다). 각 탭 본문은 `pages/` 하위 컴포넌트이고, `QuerySection` 로딩 경계 안에서 렌더한다. `shared.tsx`에는 여러 설정 페이지가 함께 쓰는 UI 부품과 헬퍼가 있다. 헤더, 오류 표시, 경로 축약, 설정 파일 출처, MCP/에이전트 항목, 신뢰 버튼이 여기에 속한다.
 
 ## Interface
 
-- `openSettingsOverlay` — `{ projectId: string | null; initialPage?: SettingsPage }`를 받아 overlay-kit `overlay.open`으로 `SettingsOverlay`를 연다. 프로젝트 객체가 아니라 id만 넘긴다. 닫을 때 `close()` 후 `unmount()`를 호출한다
-- `SettingsOverlay` — `{ projectId, open, onClose, initialPage?: SettingsPage }` 설정 Dialog 컴포넌트다. 프로젝트를 프로젝트 목록 쿼리에서 id로 읽고, 헤더 아래 선택 상자로 창 안에서 대상 프로젝트를 바꾼다. `settingsGroups`의 탭(web, image, mcp, agents, permission, conversation, recall, imports, embedding, kanban, improvements, skills)을 그리고 `pageBodies`로 각 페이지를 렌더한다
+- `openImprovementsOverlay` — 인자 없이 `ImprovementSettings`를 `QuerySection` 안에 담은 창을 overlay-kit으로 연다. 열린 프로젝트 전부를 본다
+- `openSettingsOverlay` — `{ projectId: string | null; initialPage?: SettingsPage; reportLink: string }`를 받아 overlay-kit `overlay.open`으로 `SettingsOverlay`를 연다. 프로젝트 객체가 아니라 id만 넘긴다. 닫을 때 `close()` 후 `unmount()`를 호출한다
+- `SettingsOverlay` — `{ projectId, open, onClose, initialPage?: SettingsPage, reportLink }` 설정 Dialog 컴포넌트다. 지금 쪽을 state로 쥔다(`Tabs`를 `value`로 제어). 프로젝트를 프로젝트 목록 쿼리에서 id로 읽고, 헤더 아래 선택 상자로 창 안에서 대상 프로젝트를 바꾼다. 이 선택 상자와 폴더 없음 안내는 `projectPages`(permission, mcp, agents, skills, kanban)일 때만 보인다. `settingsGroups`의 묶음 — 일반(general, conversation), 도구(web, image), 기억(recall, imports, embedding), 프로젝트(permission, mcp, agents, skills), 실행(kanban) — 의 탭을 그리고 `pageBodies`로 각 페이지를 렌더한다
 - `ModelSelectionField` (`model-selection-field.tsx`) — 설정 한 칸의 모델(구독 공급자나 호환 계정 하나·모델·추론 단계, 또는 없음)을 고르고 `onSave(selection | null)`로 넘기는 폼이다. 칸반 역할 모델과 skill router 모델이 쓴다
 - `errorMessage` — `ApiError | null`을 한국어 오류 문구로 바꾼다. `keychain_failed`와 `kagi_key_required`는 전용 문구를 쓰고, 나머지는 기본 문구를 쓴다
 - `PageHeader` — 설정 페이지 상단 컴포넌트다. 제목, 배지, 설명, 선택 프로젝트 배지(`project`가 있을 때), 주 동작을 보여 준다
@@ -28,7 +29,7 @@
 - `pageBodies`는 `Record<SettingsPage, ...>` 타입이다. `settingsGroups`에 탭 value를 추가하면 `pageBodies`에도 본문을 넣어야 한다. 이 규칙은 타입이 강제한다
 - 페이지마다 자기 데이터를 읽는다. 그래서 각 페이지 본문은 자기 `QuerySection` 로딩 경계로 따로 감싼다(주석에 명시)
 - Dialog는 페이지가 바뀌어도 크기를 유지한다(`h-[min(40rem,calc(100dvh-2rem))]`). 페이지 내용은 `TabsContent` 안에서 스크롤한다(주석에 명시)
-- `openSettingsOverlay`와 `SettingsOverlay`의 `initialPage`는 모든 `SettingsPage`를 받는다. 기본값 `"web"`은 `SettingsOverlay`에만 있다
+- `openSettingsOverlay`와 `SettingsOverlay`의 `initialPage`는 모든 `SettingsPage`를 받는다. 기본값 `"general"`은 `SettingsOverlay`에만 있다
 - 창이 붙들고 있는 프로젝트 정보는 고른 id뿐이다. 프로젝트 값(권한 모드 등)은 매번 목록 쿼리에서 읽으므로 저장 뒤 바로 바뀐다
 - `shared.tsx`의 `configFileFailures`는 `satisfies Record<ConfigFileFailureCode, MessageDescriptor>`로 모든 실패 코드에 문구가 있어야 한다
 - `ConfigEntry`는 `target === null`(서버가 비밀정보를 확인하지 못함)이면 명령줄을 숨긴다. 비밀정보는 이름만 보여 주고 값은 보여 주지 않는다

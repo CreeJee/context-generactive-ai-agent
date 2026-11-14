@@ -2,10 +2,11 @@
 
 ## Overview
 
-`apps/agent/app/entry/settings/pages`에는 앱 설정 대화상자의 페이지 본문 React 컴포넌트가 있다. `settings-dialog.tsx`의 `pageBodies`가 이 컴포넌트들을 렌더한다. 각 페이지는 `../../queries`의 React Query 훅으로 백엔드 설정을 읽는다. mutation은 `runUiEffect`/`uiPromise`로 감싼 Effect 경계에서 실행한다. 다루는 설정은 외부 ACP 에이전트, 긴 대화 요약, 임베딩, 이미지 생성, 대화 가져오기, 프로젝트 권한 모드, 프로젝트 개선, 칸반, MCP, 회상 범위, 스킬, Kagi 웹 검색이다. 화면 문구는 모두 한국어다. 프로젝트 범위 페이지는 `project: Project | null`을 받고, 프로젝트가 없으면 `NoProject`를 보여 준다.
+`apps/agent/app/entry/settings/pages`에는 앱 설정 대화상자의 페이지 본문 React 컴포넌트가 있다. `settings-dialog.tsx`의 `pageBodies`가 이 컴포넌트들을 렌더한다. 각 페이지는 `../../queries`의 React Query 훅으로 백엔드 설정을 읽는다. mutation은 `runUiEffect`/`uiPromise`로 감싼 Effect 경계에서 실행한다. 다루는 설정은 화면 테마와 문제 제보 링크, 외부 ACP 에이전트, 긴 대화 요약, 임베딩, 이미지 생성, 대화 가져오기, 프로젝트 권한 모드, 칸반, MCP, 회상 범위, 스킬, Kagi 웹 검색이다. 화면 문구는 모두 한국어다. 프로젝트 범위 페이지는 `project: Project | null`을 받고, 프로젝트가 없으면 `NoProject`를 보여 준다.
 
 ## Interface
 
+- `GeneralSettings` — `{ reportLink: string }`. 앱 자체의 설정 페이지. 화면 테마(`ThemeField`)와 문제 제보 화면으로 가는 링크를 둔다
 - `AgentSettings` — `{ project: Project | null }`. 외부 ACP 에이전트 목록, 신뢰·연결 상태 배지, 신뢰 토글과 다시 연결 버튼(`AgentChange.trust`/`AgentChange.reconnect`)을 보여 주는 페이지
 - `PermissionSettings` — `{ project: Project | null }`. 프로젝트 권한 모드(ask/auto/full)를 고르는 페이지. `full`은 '전체 권한으로 바꿀까요?' 확인 창을 거쳐 저장하며, `usePermissionModeMutation`으로 저장하고 프로젝트 목록 쿼리를 무효화한다
 - `ConversationSettings` — 긴 대화를 요약으로 보내기 시작하는 시점(`summaryStartPercent`, 0~50%)을 저장하는 페이지
@@ -13,7 +14,7 @@
 - `FailedInterpretations` (`failed-interpretations.tsx`) — 기억 해석이 실패로 남긴 발언 수와 '다시 시도' 버튼. 실패한 발언이 없거나 수를 읽기 전에는 그리지 않는다. 임베딩 페이지가 쓴다
 - `ImageSettings` — 이미지 생성 켜기/끄기와 공급자 간 이미지 생성 동의 모드(disabled/ask/always)를 고르는 페이지
 - `ImportSettings` — Claude Code·Codex CLI 대화 가져오기 페이지. 실행·계속 가져오기·감시 재시작·해석(`ImportCommand.run/enable/disable/restart_watch/interpret`)을 다루고 진행 상황, 소스별 통계, 등록하지 못한 폴더, 실패 기록을 보여 준다
-- `ImprovementSettings` — 프로젝트 개선 스캔 페이지. `/api/settings/improvements`로 시작·중지 명령을 보내고, 저장소별 `ImprovementReport`와 작업 명세 markdown을 보여 주며 복사할 수 있다
+- `ImprovementSettings` — 프로젝트 개선 스캔 화면. 설정 메뉴에는 없고 `openImprovementsOverlay`의 창 안에서 그려진다. `/api/settings/improvements`로 시작·중지 명령을 보내고, 저장소별 `ImprovementReport`와 작업 명세 markdown을 보여 주며 복사할 수 있다
 - `KanbanSettings` — `{ project: Project | null }`. 칸반 동시 실행 카드 수(`ConcurrencyField`), 프로젝트 순서(`ProjectOrderField`), 계획자·실행자·검증자 모델(`RoleModelField`가 `ModelSelectionField`를 씀, 비우면 선택된 모델), 보호 브랜치(Goal 병합 위치)를 정하는 페이지
 - `McpSettings` — `{ project: Project | null }`. 프로젝트의 MCP 서버 설정 페이지. 프로젝트가 없으면 `NoProject`를 보여 준다
 - `McpLoginDialog` (`mcp-login.tsx`) — 스스로 등록하는 OAuth 클라이언트로 로그인하는 서버(`McpServerView.clientName`이 있음)의 로그인 창. 클라이언트 이름을 기본값·`Claude Code`·직접 입력 중에서 고르고, 고른 이름을 `McpCommand.login`의 `clientName`으로 보낸다. 처음에는 지난번에 고른 이름이 선택돼 있다
