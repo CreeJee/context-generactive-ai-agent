@@ -95,35 +95,36 @@ UI 컴포넌트는 shadcn으로 추가합니다(`AGENT.md`).
 
 `app/routes/api/*`는 React Router flat routes이며 `/api` 접두사로 마운트됩니다. 상태를 바꾸는 요청은 교차 사이트 요청을 거부합니다.
 
-| 라우트                                       | 동작                                                                                 |
-| -------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `GET/POST /api/auth`                         | 로그인 상태 조회, `login`, `cancel`, `logout`                                        |
-| `GET /api/models`                            | 계정에서 쓸 수 있는 모델 목록과 현재 선택                                            |
-| `POST /api/models/:model`                    | 모델과 추론 강도 선택(없는 모델은 자동 대체 없이 오류)                               |
-| `GET/POST /api/projects`                     | 프로젝트 목록(`hidden=1`이면 보관한 프로젝트), 경로로 추가                           |
-| `POST /api/projects/pick`                    | 앱이 도는 컴퓨터의 폴더 선택 창을 열고 고른 경로를 돌려줌(등록은 하지 않음)          |
-| `GET/POST /api/projects/:project/agents`     | 외부 ACP 에이전트 목록과 연결 상태, `trust`, `reconnect`                             |
-| `GET /api/projects/:project/skills`          | 이 프로젝트에서 쓸 수 있는 skill과 읽지 못한 폴더                                    |
-| `GET/POST /api/projects/:project/mcp`        | MCP 서버 목록과 상태, `{scope, name, trusted}`로 신뢰/중지                           |
-| `POST /api/projects/:project`                | `crossRecallExcluded`, `permissionMode`(`ask`/`auto`), `hidden`(보관과 해제) 변경    |
-| `GET/POST /api/sessions`                     | 프로젝트별 대화 목록(`archived=1`이면 보관함), 새 대화(`agent`로 외부 에이전트 직접) |
-| `GET /api/sessions/:session?holder=`         | 진행 중인 run, 마지막 run의 끝난 방식, 이 탭의 소유 여부, 컨텍스트 사용량            |
-| `POST /api/sessions/:session`                | 보관·복원, 삭제, workflow 단계·동작(답변 중 409, 다른 탭 사용 중 423)                |
-| `POST /api/sessions/:session/lease`          | 탭의 소유권 얻기, 갱신(`claim`), 놓기(`release`)                                     |
-| `POST /api/sessions/:session/cancel`         | 진행 중인 run 취소(소유 탭만), 실제로 멈췄는지 응답                                  |
-| `POST /api/sessions/:session/compact`        | `/compact`: 앞 대화 요약, 이미 답한 도구 출력 비우기(답변 중 409)                    |
-| `GET/POST /api/sessions/:session/queue`      | 대기열 목록, 답변 중 메시지 넣기(`queue`/`steer`)                                    |
-| `POST /api/sessions/:session/queue/:message` | 대기 메시지 편집 내용 저장, 저장, 제거, 확인 후 보내기                               |
-| `GET /api/sessions/:session/subagents`       | 서브에이전트 목록과 상태                                                             |
-| `GET /api/sessions/:session/approvals`       | run을 멈추지 못하는 승인 대기(서브에이전트, 외부 에이전트)                           |
-| `GET /api/sessions/:session/subagents/:id`   | 서브에이전트 대화 기록                                                               |
-| `POST .../approvals/:approval`               | 그 호출 승인/거부 `{approved}`(소유 탭만)                                            |
-| `GET /api/sessions/:session/messages?limit=` | 최근 메시지 한 쪽(`before`로 이전 쪽), 진행 중인 run, 대기 중인 승인                 |
-| `POST /api/sessions/:session/runs`           | 채팅 실행(SSE), 승인 재개 포함(소유 탭만)                                            |
-| `GET .../runs/:run/events?after=`            | 진행 중이거나 끝난 run의 답변을 로그에서 `after` 다음부터 다시 읽기                  |
-| `GET/POST /api/settings/kagi`                | Kagi 상태, `register`, `enable`, `disable`, `remove`                                 |
-| `POST /api/attachments`                      | 이미지 원본 바이트 업로드(png/jpeg/gif/webp, 20 MiB 이하)                            |
-| `GET /api/attachments/:attachment`           | 저장된 이미지(다른 사이트 삽입 차단)                                                 |
+| 라우트                                       | 동작                                                                                                                 |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `GET/POST /api/auth`                         | 로그인 상태 조회, `login`, `cancel`, `logout`                                                                        |
+| `GET /api/models`                            | 계정에서 쓸 수 있는 모델 목록과 현재 선택                                                                            |
+| `POST /api/models/:model`                    | 모델과 추론 강도 선택(없는 모델은 자동 대체 없이 오류)                                                               |
+| `GET/POST /api/projects`                     | 프로젝트 목록(`hidden=1`이면 보관한 프로젝트), 경로로 추가                                                           |
+| `POST /api/projects/pick`                    | 앱이 도는 컴퓨터의 폴더 선택 창을 열고 고른 경로를 돌려줌(등록은 하지 않음)                                          |
+| `GET/POST /api/projects/:project/agents`     | 외부 ACP 에이전트 목록과 연결 상태, `trust`, `reconnect`                                                             |
+| `GET /api/projects/:project/skills`          | 이 프로젝트에서 쓸 수 있는 skill과 읽지 못한 폴더                                                                    |
+| `GET/POST /api/projects/:project/mcp`        | MCP 서버 목록과 상태, `{scope, name, trusted}`로 신뢰/중지                                                           |
+| `POST /api/projects/:project`                | `crossRecallExcluded`, `permissionMode`(`ask`/`auto`), `hidden`(보관과 해제) 변경                                    |
+| `GET/POST /api/sessions`                     | 프로젝트별 대화 목록(`archived=1`이면 보관함), 새 대화(`agent`로 외부 에이전트 직접, 아니면 그때 선택된 모델로 시작) |
+| `GET /api/sessions/:session?holder=`         | 진행 중인 run, 마지막 run의 끝난 방식, 이 탭의 소유 여부, 컨텍스트 사용량                                            |
+| `POST /api/sessions/:session`                | 보관·복원, 삭제, workflow 단계·동작(답변 중 409, 다른 탭 사용 중 423)                                                |
+| `POST /api/sessions/:session/lease`          | 탭의 소유권 얻기, 갱신(`claim`), 놓기(`release`)                                                                     |
+| `POST /api/sessions/:session/cancel`         | 진행 중인 run 취소(소유 탭만), 실제로 멈췄는지 응답                                                                  |
+| `POST /api/sessions/:session/model`          | 대화의 모델 바꾸기(`model: null`이면 앱의 선택된 모델을 다시 따름), 소유 탭만(다른 탭 423)                           |
+| `POST /api/sessions/:session/compact`        | `/compact`: 앞 대화 요약, 이미 답한 도구 출력 비우기(답변 중 409)                                                    |
+| `GET/POST /api/sessions/:session/queue`      | 대기열 목록, 답변 중 메시지 넣기(`queue`/`steer`)                                                                    |
+| `POST /api/sessions/:session/queue/:message` | 대기 메시지 편집 내용 저장, 저장, 제거, 확인 후 보내기                                                               |
+| `GET /api/sessions/:session/subagents`       | 서브에이전트 목록과 상태                                                                                             |
+| `GET /api/sessions/:session/approvals`       | run을 멈추지 못하는 승인 대기(서브에이전트, 외부 에이전트)                                                           |
+| `GET /api/sessions/:session/subagents/:id`   | 서브에이전트 대화 기록                                                                                               |
+| `POST .../approvals/:approval`               | 그 호출 승인/거부 `{approved}`(소유 탭만)                                                                            |
+| `GET /api/sessions/:session/messages?limit=` | 최근 메시지 한 쪽(`before`로 이전 쪽), 진행 중인 run, 대기 중인 승인                                                 |
+| `POST /api/sessions/:session/runs`           | 채팅 실행(SSE), 승인 재개 포함(소유 탭만)                                                                            |
+| `GET .../runs/:run/events?after=`            | 진행 중이거나 끝난 run의 답변을 로그에서 `after` 다음부터 다시 읽기                                                  |
+| `GET/POST /api/settings/kagi`                | Kagi 상태, `register`, `enable`, `disable`, `remove`                                                                 |
+| `POST /api/attachments`                      | 이미지 원본 바이트 업로드(png/jpeg/gif/webp, 20 MiB 이하)                                                            |
+| `GET /api/attachments/:attachment`           | 저장된 이미지(다른 사이트 삽입 차단)                                                                                 |
 
 ## 구조
 
