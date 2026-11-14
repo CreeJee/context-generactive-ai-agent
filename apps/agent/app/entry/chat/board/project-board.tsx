@@ -46,7 +46,8 @@ import {
   type SurfaceBoard,
 } from "./board-surface";
 import { BoardShortcuts } from "./kanban-board";
-import { Array as Arr } from "effect";
+import { Array as Arr, Predicate } from "effect";
+import { waitsForUser } from "./hold-reason";
 
 const cardsOf = (row: ProjectBoardRow) =>
   boardColumns.reduce((sum, status) => sum + row.counts[status], 0);
@@ -54,6 +55,22 @@ const untitled = msg`제목 없는 대화`;
 const titleOf = (row: ProjectBoardRow) => row.sessionTitle ?? i18n._(untitled);
 /** Only an executing Plan's cards are the scheduler's business, so only those are on the board. */
 const onBoard = (row: ProjectBoardRow) => row.plan.status === "executing";
+
+/**
+ * Whether the conversation's board waits for the user: a loop that is not healthy, a stalled
+ * planner, a paused Goal, cards the planner left unreplanned, or a Goal-level decision.
+ */
+const needsUser = (surface: SurfaceBoard | null, goalDecisions: number) => {
+  const loop = surface?.loop ?? null;
+  return (
+    goalDecisions > 0 ||
+    (loop !== null &&
+      (!Predicate.isTagged(loop.loop, "Healthy") ||
+        loop.plannerStalled ||
+        loop.goalPaused ||
+        loop.cards.some((card) => waitsForUser(card.reason))))
+  );
+};
 
 /**
  * The project's kanban board: every executing Plan on one board of the same seven columns, in the
@@ -98,6 +115,8 @@ export function ProjectBoard({
   const [shown, setShown] = useState<readonly string[]>([]);
   const [adding, setAdding] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  // Null until the user folds or unfolds the panel; until then it follows what waits for them.
+  const [panelOpen, setPanelOpen] = useState<boolean | null>(null);
   const [orderError, setOrderError] = useState<string | null>(null);
   const surfaces = rows.flatMap((row, index): SurfaceBoard[] => {
     const view = views[index]?.data;
@@ -121,6 +140,9 @@ export function ProjectBoard({
   /** Goal-level requests name no card, so no card's peek shows them; the conversation's line does. */
   const goalDecisionsOf = (sessionId: string) =>
     inbox.filter((item) => item.sessionId === sessionId && item.cardId === goalDecisionCardId);
+  const attention = Arr.countBy(rows, (row) =>
+    needsUser(surfaceOf(row.sessionId), goalDecisionsOf(row.sessionId).length),
+  );
   const running = Arr.countBy(rows, (row) => row.kanbanActive);
   const total = rows.reduce((sum, row) => sum + cardsOf(row), 0);
   const done = rows.reduce((sum, row) => sum + row.counts.done, 0);
@@ -201,7 +223,7 @@ export function ProjectBoard({
               ))}
             </p>
           )}
-          <Collapsible>
+          <Collapsible open={panelOpen ?? attention > 0} onOpenChange={setPanelOpen}>
             <div className="mt-1 flex flex-wrap items-center gap-1">
               {rows.length > 1 && (
                 <div className="flex flex-wrap items-center gap-1">
@@ -255,6 +277,13 @@ export function ProjectBoard({
                       className="transition-transform group-data-[panel-open]:rotate-90"
                     />
                     <Trans>대화 순서와 상태</Trans>
+                    {attention > 0 && (
+                      <Badge variant="outline">
+                        <Trans comment="Badge on the status panel's button: conversations that wait for the user">
+                          확인할 대화 {attention}
+                        </Trans>
+                      </Badge>
+                    )}
                   </CollapsibleTrigger>
                 )}
               </span>

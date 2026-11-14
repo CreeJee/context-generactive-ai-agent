@@ -6539,6 +6539,11 @@ msgstr "확인됨"
 msgid "확인하는 중입니다. 처음 확인할 때는 GPU용 모델(약 570MB)을 내려받습니다."
 msgstr "확인하는 중입니다. 처음 확인할 때는 GPU용 모델(약 570MB)을 내려받습니다."
 
+#. Badge on the status panel's button: conversations that wait for the user
+#: app/entry/chat/board/project-board.tsx
+msgid "확인할 대화 {attention}"
+msgstr "확인할 대화 {attention}"
+
 #: app/entry/chat/uncertain-runs.tsx
 msgid "확인할 목록이 바뀌었습니다. 새 목록을 확인해 주십시오."
 msgstr "확인할 목록이 바뀌었습니다. 새 목록을 확인해 주십시오."
