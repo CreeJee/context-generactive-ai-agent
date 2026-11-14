@@ -27,19 +27,22 @@ import {
 import { Toggle } from "../../../components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "../../../components/ui/toggle-group";
 import type { ProjectBoard as ProjectBoardRow } from "memory-agent";
+import type { HumanDecisionRequest } from "../../api";
 import { useGoalOrderMutation } from "../../queries/mutations/project";
 import { KanbanAction, useKanbanMutation } from "../../queries/mutations/session";
 import { useDecisionInboxQuery, useProjectBoardsQuery } from "../../queries/project";
 import { sessionQueries } from "../../queries/session";
 import { LoadFailed } from "../../shared/load-failed";
 import { LoopHealthStatus } from "../../shared/loop-health";
+import { DecisionPrompt } from "../decision-prompt";
 import { planStatusLabels } from "../workflow-panel";
-import { boardColumns, type BoardCardRef } from "./board-moves";
+import { boardColumns, goalDecisionCardId, type BoardCardRef } from "./board-moves";
 import {
   BoardSurface,
   editErrorText,
   KanbanRunningBadge,
   PlannerStalledBadge,
+  ReplanWaitBadge,
   type SurfaceBoard,
 } from "./board-surface";
 import { BoardShortcuts } from "./kanban-board";
@@ -115,6 +118,9 @@ export function ProjectBoard({
   });
   const surfaceOf = (sessionId: string) =>
     surfaces.find((surface) => surface.sessionId === sessionId) ?? null;
+  /** Goal-level requests name no card, so no card's peek shows them; the conversation's line does. */
+  const goalDecisionsOf = (sessionId: string) =>
+    inbox.filter((item) => item.sessionId === sessionId && item.cardId === goalDecisionCardId);
   const running = Arr.countBy(rows, (row) => row.kanbanActive);
   const total = rows.reduce((sum, row) => sum + cardsOf(row), 0);
   const done = rows.reduce((sum, row) => sum + row.counts.done, 0);
@@ -267,6 +273,7 @@ export function ProjectBoard({
                     holder={holder}
                     row={row}
                     surface={surfaceOf(row.sessionId)}
+                    goalDecisions={goalDecisionsOf(row.sessionId)}
                     decisions={
                       Arr.countBy(inbox, (item) => item.sessionId === row.sessionId) +
                       row.awaitingApproval.length
@@ -348,6 +355,7 @@ function ConversationRow({
   holder,
   row,
   surface,
+  goalDecisions,
   decisions,
   moving,
   onMoveUp,
@@ -360,6 +368,8 @@ function ConversationRow({
   readonly row: ProjectBoardRow;
   /** The conversation's board as the surface shows it; null until it has loaded. */
   readonly surface: SurfaceBoard | null;
+  /** Goal-level decisions waiting for the user; answered on this line. */
+  readonly goalDecisions: readonly HumanDecisionRequest[];
   /** Decisions and card approvals waiting for the user. */
   readonly decisions: number;
   /** A move is on its way to the server. */
@@ -416,6 +426,7 @@ function ConversationRow({
         <Badge variant="outline">{t(planStatusLabels[row.plan.status])}</Badge>
       )}
       {loop !== null && loop.plannerStalled && <PlannerStalledBadge />}
+      {loop !== null && <ReplanWaitBadge loop={loop} />}
       {loop !== null && loop.loop._tag !== "Healthy" && (
         <LoopHealthStatus
           label={t({
@@ -478,6 +489,19 @@ function ConversationRow({
           <Trans comment="Button that goes to the conversation">대화 열기</Trans>
         </Button>
       </span>
+      {goalDecisions.length > 0 && (
+        <div className="flex basis-full flex-col gap-2">
+          {goalDecisions.map((request) => (
+            <DecisionPrompt
+              key={request.requestId}
+              projectId={projectId}
+              holder={holder}
+              request={request}
+              disabled={false}
+            />
+          ))}
+        </div>
+      )}
       {actionError !== null && (
         <p className="basis-full text-destructive" role="alert">
           {actionError}
