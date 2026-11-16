@@ -2,7 +2,7 @@
 
 ## Overview
 
-`apps/agent/app/entry`는 에이전트 웹앱 프론트엔드(React)의 최상위 진입 디렉터리다. `index.tsx`의 `App`은 사이드바(모델·프로젝트·세션), 세션 채팅 화면, 프로젝트 보드, 계정 관리, 설정·제보 진입을 하나로 묶는다. 위치(project/session/board 등)는 nuqs URL 쿼리 상태가 소유한다.
+`apps/agent/app/entry`는 에이전트 웹앱 프론트엔드(React)의 최상위 진입 디렉터리다. `index.tsx`의 `App`은 사이드바(모델·프로젝트·세션), 세션 채팅 화면, 칸반 보드(세션 보드와 프로젝트 보드, 둘 다 본문 영역), 계정 관리, 설정·제보 진입을 하나로 묶는다. 위치(project/session/board 등)는 nuqs URL 쿼리 상태가 소유한다.
 
 `api.ts`는 브라우저 쪽 백엔드 클라이언트 계층이다. `appFetch`로 `/api/*` 라우트를 부르는 `api` 객체, `ApiError`/`ApiErrorCode` 오류 계약, 서버로 보내는 명령 TaggedEnum, 화면용 거절 문구 함수를 정의한다. memory-agent의 타입도 다시 내보낸다. 하위 디렉터리는 모두 이 두 파일을 import하거나 `App`에서 렌더된다.
 

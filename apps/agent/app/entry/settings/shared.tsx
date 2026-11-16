@@ -23,6 +23,7 @@ import { FailureDetails } from "../shared/failure-details";
 
 /** Each page's name, in the tab list and at the top of the page. */
 export const pageTitles = {
+  general: msg({ message: "일반", comment: "Settings page name: theme and problem reporting" }),
   web: msg({ message: "웹 검색", comment: "Settings page name: web search through Kagi" }),
   image: msg({ message: "이미지 생성", comment: "Settings page name: image generation" }),
   mcp: msg({ message: "MCP 서버", comment: "Settings page name: configured MCP servers" }),
@@ -126,7 +127,7 @@ export function PageError({ error }: { error: string | null }) {
 export function NoProject() {
   return (
     <FieldDescription>
-      <Trans>사이드바에서 프로젝트를 고르면 그 프로젝트의 설정이 보입니다.</Trans>
+      <Trans>위에서 프로젝트를 고르면 그 프로젝트의 설정이 보입니다.</Trans>
     </FieldDescription>
   );
 }

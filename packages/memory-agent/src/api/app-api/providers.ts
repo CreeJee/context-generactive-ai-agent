@@ -83,7 +83,7 @@ export const ModelCatalogView = Schema.Struct({
 export type ModelCatalogView = typeof ModelCatalogView.Type;
 
 /** The provider is not configured in this app. */
-const ProviderUnavailable = appRefusal(404, ["provider_unavailable"]);
+export const ProviderUnavailable = appRefusal(404, ["provider_unavailable"]);
 
 /**
  * The selected model's provider cannot run now; `provider` names it. `ProviderUnavailable` matches
@@ -106,10 +106,10 @@ const AuthRefusals = [
 const LoginRequired = refusalWith({ auth: ProviderAuthState })(401, ["login_required"]);
 
 /** The provider's catalog could not be read. */
-const ModelListFailed = appRefusal(502, ["model_list_failed"]);
+export const ModelListFailed = appRefusal(502, ["model_list_failed"]);
 
 /** The catalog has no such model, or the model has no such reasoning effort. */
-const ModelUnavailable = refusalWith({
+export const ModelUnavailable = refusalWith({
   provider: ProviderId,
   model: Schema.String,
   reasoningEffort: Schema.NullOr(Schema.String),

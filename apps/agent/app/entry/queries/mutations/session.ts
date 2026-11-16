@@ -6,6 +6,7 @@ import {
   type BoardEdit,
   type DecisionAnswer,
   type HumanDecisionRequest,
+  type ModelSelection,
   type WorkflowAction,
   type WorkflowMove,
 } from "../../api";
@@ -298,6 +299,27 @@ function useCompactSessionMutationBody(projectId: string, sessionId: string, hol
       client.invalidateQueries({
         queryKey: sessionQueries.runState(projectId, sessionId, holder).queryKey,
       }),
+  });
+}
+
+/** Saves the model one conversation runs on; null makes it follow the app's selected model. */
+export const useSessionModelMutation: {
+  (
+    sessionId: string,
+    holder: string,
+  ): (projectId: string) => ReturnType<typeof useSessionModelMutationBody>;
+} & typeof useSessionModelMutationBody = EffectFunction.dual(3, useSessionModelMutationBody);
+function useSessionModelMutationBody(projectId: string, sessionId: string, holder: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (model: ModelSelection | null) => api.setSessionModel(sessionId, holder, model),
+    onSuccess: () =>
+      Promise.all([
+        client.invalidateQueries({ queryKey: projectQueries.sessions(projectId).queryKey }),
+        client.invalidateQueries({
+          queryKey: sessionQueries.runState(projectId, sessionId, holder).queryKey,
+        }),
+      ]),
   });
 }
 

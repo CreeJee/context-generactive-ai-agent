@@ -1,8 +1,6 @@
-import type { MessageDescriptor } from "@lingui/core";
-import { msg } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
 import { isTruthy } from "../../truthy.ts";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Array as Arr, Match, Order } from "effect";
 import { ChevronRightIcon, CircleSlashIcon, KanbanSquareIcon, PlusIcon } from "lucide-react";
 import { createSerializer, parseAsBoolean, parseAsString, useQueryStates } from "nuqs";
@@ -23,19 +21,11 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "../../components/ui/collapsible";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "../../components/ui/sheet";
 import { Switch } from "../../components/ui/switch";
 import {
   BoardEdit,
   type BoardView,
   type CardStatus,
-  type GoalMergeState,
   type HumanDecisionRequest,
   type KanbanScheduleView,
 } from "../api";
@@ -57,11 +47,15 @@ import {
   startErrorText,
   type ActiveKanban,
   KanbanRunningBadge,
+  PlannerStalledBadge,
+  ReplanWaitBadge,
   type BoardPlan,
 } from "./board/board-surface";
-import { cardStatusLabels } from "./board/board-moves";
+import { BoardFrame } from "./board/board-frame";
+import { cardStatusLabels, goalDecisionCardId } from "./board/board-moves";
 import { authorLabel, StatusIcon } from "./board/card-face";
-import { verdictText, waitsForUser } from "./board/hold-reason";
+import { GoalMergeStatus, mergeStateLabel } from "./board/goal-merge";
+import { waitsForUser } from "./board/hold-reason";
 import { BoardShortcuts } from "./board/kanban-board";
 
 export { authorLabel } from "./board/card-face";
@@ -179,69 +173,25 @@ export function BoardTally({
   );
 }
 
-/** The cards whose replan the planner left undone: they wait for the user. */
-function ReplanWaitBadge({ loop }: { readonly loop: ActiveKanban }) {
-  const { t } = useLingui();
-  const waiting = Arr.countBy(loop.cards, (card) => waitsForUser(card.reason));
-  if (waiting === 0) return null;
-  return (
-    <Badge
-      variant="outline"
-      title={t`계속 실패해 다시 짜 달라고 요청한 카드를 Plan 작성자가 고치지 않았습니다. 카드를 고치거나 다시 대기열에 넣어 주십시오.`}
-    >
-      <Trans comment="Badge: blocked cards the planner did not replan, waiting for the user">
-        확인 필요 카드 {waiting}
-      </Trans>
-    </Badge>
-  );
-}
-
 /**
- * Opens the Plan's board wide over the page (`?board=1`), at the card it last showed; a card opens
- * in a peek panel beside it (`?card=…`, as the inbox links and the card rows do). The board lives
- * here so it opens whether or not the bar is unfolded.
+ * Opens the Plan's board in the page's main area (`?board=1`), at the card it last showed. The
+ * page draws the board, so it opens whether or not the bar is unfolded.
  */
 export function OpenBoardButton({
   projectId,
   sessionId,
-  holder,
-  disabled,
 }: {
   readonly projectId: string;
   readonly sessionId: string;
-  readonly holder: string;
-  readonly disabled: boolean;
 }) {
   const view = useBoardQuery(projectId, sessionId).data;
-  const decisions = useDecisionsQuery(projectId, sessionId).data ?? [];
-  const kanban = useKanbanQuery(projectId, sessionId);
-  const kanbanAction = useKanbanMutation(projectId, sessionId, holder);
-  const { location, setLocation, openBoard } = useBoardLocation();
+  const { location, openBoard } = useBoardLocation();
   if (!isTruthy(view) || view.plan === null) return null;
-  const open = location.board === true || location.card !== null;
   return (
-    <>
-      <Button type="button" size="sm" variant="ghost" onClick={() => openBoard(location.card)}>
-        <KanbanSquareIcon data-icon="inline-start" />
-        <Trans comment="Button that opens the kanban board of the Plan">보드</Trans>
-      </Button>
-      {open && (
-        <BoardSheet
-          projectId={projectId}
-          sessionId={sessionId}
-          holder={holder}
-          disabled={disabled}
-          view={view}
-          plan={view.plan}
-          decisions={decisions}
-          loop={kanban.data?.active === true ? kanban.data : null}
-          kanbanAction={kanbanAction}
-          peekCardId={location.card}
-          onPeek={openBoard}
-          onClose={() => void setLocation({ board: null, card: null })}
-        />
-      )}
-    </>
+    <Button type="button" size="sm" variant="ghost" onClick={() => openBoard(location.card)}>
+      <KanbanSquareIcon data-icon="inline-start" />
+      <Trans comment="Button that opens the kanban board of the Plan">보드</Trans>
+    </Button>
   );
 }
 
@@ -312,16 +262,7 @@ export function WorkflowBoard({
       {(loop !== null || switchable || view.pendingChanges.length > 0) && (
         <div className="flex flex-wrap items-center gap-1.5 px-1.5">
           {loop !== null && <KanbanRunningBadge paused={loop.goalPaused} />}
-          {loop !== null && loop.plannerStalled && (
-            <Badge
-              variant="outline"
-              title={t`Plan 작성자가 연속으로 카드를 고쳤지만 새로 충족된 결과가 없어 자동 Plan 작성을 멈췄습니다. 이미 맡은 카드는 계속 실행됩니다. 대화에서 방향을 알려 주면 다시 Plan을 짭니다.`}
-            >
-              <Trans comment="Badge: the automatic Plan writer has stopped">
-                자동 Plan 작성 멈춤
-              </Trans>
-            </Badge>
-          )}
+          {loop !== null && loop.plannerStalled && <PlannerStalledBadge />}
           {loop !== null && <ReplanWaitBadge loop={loop} />}
           {view.pendingChanges.length > 0 && (
             <Badge variant="outline">
@@ -406,35 +347,107 @@ export function WorkflowBoard({
   );
 }
 
-/** The wide board over the page, with the card peek panel and the board's notices. */
-function BoardSheet({
+/**
+ * The conversation's board as the page's main area shows it (`?board=1`, a card open beside it
+ * with `?card=…`). It reads the board itself, so the page needs only the conversation.
+ */
+export function SessionBoard({
   projectId,
   sessionId,
   holder,
-  disabled,
-  view,
-  plan,
-  decisions,
-  loop,
-  kanbanAction,
   peekCardId,
+  leading,
   onPeek,
   onClose,
 }: {
   readonly projectId: string;
   readonly sessionId: string;
   readonly holder: string;
-  readonly disabled: boolean;
+  readonly peekCardId: string | null;
+  readonly leading?: ReactNode;
+  readonly onPeek: (cardId: string | null) => void;
+  readonly onClose: () => void;
+}) {
+  const { t } = useLingui();
+  const board = useBoardQuery(projectId, sessionId);
+  const decisions = useDecisionsQuery(projectId, sessionId).data ?? [];
+  const kanban = useKanbanQuery(projectId, sessionId);
+  const kanbanAction = useKanbanMutation(projectId, sessionId, holder);
+  const view = board.data;
+  if (!isTruthy(view) || view.plan === null)
+    return (
+      <BoardFrame
+        title={t`칸반 보드`}
+        leading={leading}
+        header={null}
+        onEscape={() => {}}
+        onClose={onClose}
+      >
+        {isTruthy(view) ? (
+          <p className="px-4 text-muted-foreground">
+            <Trans>이 대화에는 아직 Plan이 없습니다. Plan이 생기면 보드에 카드가 올라옵니다.</Trans>
+          </p>
+        ) : board.isError ? (
+          <LoadFailed className="px-4" onRetry={() => void board.refetch()}>
+            <Trans>보드를 불러오지 못했습니다.</Trans>
+          </LoadFailed>
+        ) : (
+          <p className="px-4 text-muted-foreground">
+            <Trans>보드를 불러오는 중입니다.</Trans>
+          </p>
+        )}
+      </BoardFrame>
+    );
+  return (
+    <SessionBoardBody
+      projectId={projectId}
+      sessionId={sessionId}
+      holder={holder}
+      view={view}
+      plan={view.plan}
+      decisions={decisions}
+      loop={kanban.data?.active === true ? kanban.data : null}
+      kanbanAction={kanbanAction}
+      peekCardId={peekCardId}
+      leading={leading}
+      onPeek={onPeek}
+      onClose={onClose}
+    />
+  );
+}
+
+/** The conversation's board in the page's main area, with its status and the board's notices. */
+function SessionBoardBody({
+  projectId,
+  sessionId,
+  holder,
+  view,
+  plan,
+  decisions,
+  loop,
+  kanbanAction,
+  peekCardId,
+  leading,
+  onPeek,
+  onClose,
+}: {
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly holder: string;
   readonly view: BoardView;
   readonly plan: BoardPlan;
   readonly decisions: readonly HumanDecisionRequest[];
   readonly loop: ActiveKanban | null;
   readonly kanbanAction: ReturnType<typeof useKanbanMutation>;
   readonly peekCardId: string | null;
+  readonly leading?: ReactNode;
   readonly onPeek: (cardId: string | null) => void;
   readonly onClose: () => void;
 }) {
   const { t } = useLingui();
+  // The page cannot tell whether another window holds the conversation; the server refuses then
+  // and the board shows why, as the project board does.
+  const disabled = false;
   const [adding, setAdding] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -470,32 +483,23 @@ function BoardSheet({
   ];
 
   return (
-    <Sheet
-      open
-      onOpenChange={(next, details) => {
-        // Esc while a card is picked up puts the card back; the board stays open.
-        if (!next && dragging && details.reason === "escape-key") return details.cancel();
-        if (!next) onClose();
+    <BoardFrame
+      title={t`칸반 보드`}
+      leading={leading}
+      tools={<BoardShortcuts />}
+      onEscape={() => {
+        // Esc closes the open card panel; a picked-up card's Esc is dnd-kit's own.
+        if (dragging || !(adding || (peekCardId !== null && !goalAsked))) return;
+        setAdding(false);
+        onPeek(null);
       }}
-    >
-      <SheetContent className="w-full sm:max-w-none">
-        <SheetHeader>
-          <SheetTitle>
-            <Trans>칸반 보드</Trans>
-          </SheetTitle>
-          <SheetDescription>
+      onClose={onClose}
+      header={
+        <>
+          <div className="text-xs/relaxed text-muted-foreground">
             <span className="flex flex-wrap items-center gap-2">
               {loop !== null && <KanbanRunningBadge paused={loop.goalPaused} />}
-              {loop !== null && loop.plannerStalled && (
-                <Badge
-                  variant="outline"
-                  title={t`Plan 작성자가 연속으로 카드를 고쳤지만 새로 충족된 결과가 없어 자동 Plan 작성을 멈췄습니다. 이미 맡은 카드는 계속 실행됩니다. 대화에서 방향을 알려 주면 다시 Plan을 짭니다.`}
-                >
-                  <Trans comment="Badge: the automatic Plan writer has stopped">
-                    자동 Plan 작성 멈춤
-                  </Trans>
-                </Badge>
-              )}
+              {loop !== null && loop.plannerStalled && <PlannerStalledBadge />}
               {loop !== null && <ReplanWaitBadge loop={loop} />}
               {loop !== null && loop.loop._tag !== "Healthy" && (
                 <LoopHealthStatus
@@ -508,13 +512,14 @@ function BoardSheet({
                   onRestart={() => act(KanbanAction.RestartLoop())}
                 />
               )}
+              {loop?.schedule?.merge != null && <GoalMergeStatus merge={loop.schedule.merge} />}
               <span>
                 <Trans comment="Board sheet tally: cards done / all cards">
                   완료 {doneCount}/{cardCount}
                 </Trans>
               </span>
             </span>
-          </SheetDescription>
+          </div>
           <Collapsible
             defaultOpen={goalAsked || goalDecisions.length > 0 || view.pendingChanges.length > 0}
           >
@@ -582,7 +587,6 @@ function BoardSheet({
                     )}
                   </CollapsibleTrigger>
                 )}
-                <BoardShortcuts />
               </span>
             </div>
             <Dialog open={askClose} onOpenChange={setAskClose}>
@@ -671,69 +675,24 @@ function BoardSheet({
               </CollapsibleContent>
             )}
           </Collapsible>
-        </SheetHeader>
-        <BoardSurface
-          projectId={projectId}
-          holder={holder}
-          disabled={disabled}
-          boards={[{ sessionId, label: null, view, plan, decisions, loop, rank: null }]}
-          shown={[]}
-          peek={peekCardId === null || goalAsked ? null : { sessionId, cardId: peekCardId }}
-          onPeek={(card) => onPeek(card === null ? null : card.cardId)}
-          adding={adding ? sessionId : null}
-          onAddingChange={(session) => setAdding(session !== null)}
-          onDraggingChange={setDragging}
-          className="min-h-0 flex-1 pt-3"
-        />
-      </SheetContent>
-    </Sheet>
+        </>
+      }
+    >
+      <BoardSurface
+        projectId={projectId}
+        holder={holder}
+        disabled={disabled}
+        boards={[{ sessionId, label: null, view, plan, decisions, loop, rank: null }]}
+        shown={[]}
+        peek={peekCardId === null || goalAsked ? null : { sessionId, cardId: peekCardId }}
+        onPeek={(card) => onPeek(card === null ? null : card.cardId)}
+        adding={adding ? sessionId : null}
+        onAddingChange={(session) => setAdding(session !== null)}
+        onDraggingChange={setDragging}
+        className="min-h-0 flex-1 pt-3"
+      />
+    </BoardFrame>
   );
-}
-
-/** The card id Goal-level requests carry (memory-agent `goalDecisionCardId`). */
-const goalDecisionCardId = "@goal";
-
-/** Why the scheduler stopped merging a Goal on its own. */
-const stoppedMergeTexts = {
-  no_target: msg`detached HEAD에서 시작해 브랜치가 없으므로 자동 merge하지 않습니다`,
-  target_missing: msg`대상 브랜치가 없어졌습니다`,
-  conflict_stopped: msg`충돌로 자동 merge를 멈췄습니다`,
-  goal_replaced: msg`Goal 변경으로 merge를 멈췄습니다`,
-} satisfies Record<
-  Extract<GoalMergeState, { readonly _tag: "Stopped" }>["reason"],
-  MessageDescriptor
->;
-
-/** Where a Goal's merge into its target stands, in words. */
-export function mergeStateLabel(state: GoalMergeState | null): MessageDescriptor {
-  if (state === null) return msg`카드가 모두 끝난 뒤 merge합니다`;
-  return Match.valueTags(state, {
-    ResolvingConflict: ({ files }) => {
-      const count = files.length;
-      return msg`대상 브랜치와 충돌한 파일 ${count}개를 에이전트가 해결하는 중`;
-    },
-    Verifying: () => msg`Goal 전체를 검증하는 중`,
-    VerifyFailed: ({ verdict: failure }) => {
-      const verdict = verdictText(failure);
-      return msg`Goal 검증 실패: ${verdict}`;
-    },
-    WaitingWorktree: ({ worktree }) =>
-      msg`작업 트리에 커밋하지 않은 변경이 있어 기다리는 중 (${worktree})`,
-    TargetMoving: () => msg`대상 브랜치가 계속 바뀌어 다시 시도할 예정`,
-    AwaitingDecision: () => msg`사람의 판단을 기다리는 중`,
-    Merged: ({ commit: full }) => {
-      const commit = full.slice(0, 8);
-      return msg`merge됨 (${commit})`;
-    },
-    ManualMerge: () => msg`직접 merge하기로 함, Goal 브랜치를 남겨 둠`,
-    PullRequestPending: () => msg`PR을 만드는 중`,
-    PullRequestCreated: ({ url }) => msg`PR을 만듦: ${url}`,
-    PullRequestUncertain: () =>
-      msg`PR을 만들던 중 멈췄습니다. 원격 저장소에서 직접 확인해 주십시오`,
-    PullRequestFailed: ({ stage }) =>
-      stage === "push" ? msg`Goal 브랜치 push 실패` : msg`PR 생성 실패`,
-    Stopped: ({ reason }) => stoppedMergeTexts[reason],
-  });
 }
 
 /** How the project scheduler runs this Goal: the Goals it waits for and its merge. */
@@ -771,8 +730,10 @@ function GoalSchedulePanel({
     >
       <div className="flex flex-wrap items-center gap-3">
         <span>
-          <Trans>대상 브랜치: {targetBranch}</Trans> · {t(mergeStateLabel(schedule.merge))}
+          <Trans>대상 브랜치: {targetBranch}</Trans>
+          {schedule.merge === null && <> · {t(mergeStateLabel(schedule.merge))}</>}
         </span>
+        {schedule.merge !== null && <GoalMergeStatus merge={schedule.merge} />}
         {schedule.upstreamPending && (
           <Badge variant="outline">
             <Trans>대상 브랜치 변경 반영 중</Trans>

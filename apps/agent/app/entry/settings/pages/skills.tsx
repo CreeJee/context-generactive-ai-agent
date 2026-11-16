@@ -84,6 +84,7 @@ export function SkillSettings({ project }: { project: Project | null }) {
     return (
       <FieldGroup>
         <PageHeader title={t(pageTitles.skills)} description={t(description)} />
+        <SkillRouterField />
         <NoProject />
       </FieldGroup>
     );

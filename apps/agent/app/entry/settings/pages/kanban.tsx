@@ -354,7 +354,7 @@ export function KanbanSettings({ project }: { project: Project | null }) {
       ))}
       {project === null ? (
         <p className="text-sm text-muted-foreground">
-          <Trans>보호 브랜치는 프로젝트마다 정합니다. 프로젝트를 고른 뒤 다시 열어 주십시오.</Trans>
+          <Trans>보호 브랜치는 프로젝트마다 정합니다. 위에서 프로젝트를 골라 주십시오.</Trans>
         </p>
       ) : (
         <ProtectedBranchesField project={project} />

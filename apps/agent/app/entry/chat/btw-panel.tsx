@@ -320,7 +320,6 @@ export function BtwPanel({ projectId, sessionId }: { projectId: string; sessionI
           type="button"
           size="sm"
           variant="outline"
-          className="fixed top-3 right-12 z-30"
           aria-label={t`BTW 열기`}
           onClick={() => setOpen(true)}
         >

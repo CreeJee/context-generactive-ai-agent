@@ -4,11 +4,13 @@ import { CancelResult, CompactResult, SessionRunState } from "../../agent/run-st
 import { RelayedApprovalView } from "../../approvals/relayed-state.ts";
 import { StoredMessage } from "../../chat-store/schema.ts";
 import {
+  CardFolderView,
   DecisionAnswer,
   HumanDecisionRequest,
   KanbanBoardView,
   KanbanStarted,
 } from "../../kanban/contracts.ts";
+import { ModelSelection } from "../../providers/contracts.ts";
 import {
   QueuedMessage,
   QueueEditRequest,
@@ -33,7 +35,12 @@ import { PlanDependencyIssue } from "../../workflow/plan-schedule.ts";
 import { UnknownStepOutcome } from "../../workflow/step-outcomes.ts";
 import { sessionHolderHeaders } from "../chat-api.ts";
 import { appRefusalFields, refusalWith, SameSite } from "../refusal.ts";
-import { SelectedProviderUnavailable } from "./providers.ts";
+import {
+  ModelListFailed,
+  ModelUnavailable,
+  ProviderUnavailable,
+  SelectedProviderUnavailable,
+} from "./providers.ts";
 
 const appRefusal = refusalWith(appRefusalFields);
 
@@ -398,6 +405,12 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
       success: KanbanView,
       error: [UnknownSession, SessionStorageFailed],
     }),
+    /** Where a card's work is on disk; null when the card has no folder now. */
+    HttpApiEndpoint.get("cardFolder", "/api/sessions/:session/kanban/cards/:card/folder", {
+      params: { ...session, card: Schema.String },
+      success: Schema.NullOr(CardFolderView),
+      error: [UnknownSession, SessionStorageFailed],
+    }),
     /**
      * Starts the board, restarts its loop, sets the Goals it waits for or its target branch, or
      * carries out what a person meant by dragging a card. The owner decides the card's status and
@@ -506,6 +519,17 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
       headers: sessionHolderHeaders,
       success: CompactResult,
       error: [SessionInUse, UnknownSession, RunInProgress, SelectedProviderUnavailable],
+    }),
+    /**
+     * Gives the conversation a model of its own, or with null lets it follow the app's selected
+     * model again. The next run uses it; a run in progress keeps the model it started with.
+     */
+    HttpApiEndpoint.post("setModel", "/api/sessions/:session/model", {
+      params: session,
+      headers: sessionHolderHeaders,
+      payload: Schema.Struct({ model: Schema.NullOr(ModelSelection) }),
+      success: Session,
+      error: [SessionInUse, UnknownSession, ModelUnavailable, ProviderUnavailable, ModelListFailed],
     }),
     /** Abandons approvals whose continuation was lost; the gated tools never run. */
     HttpApiEndpoint.post("discardInterrupts", "/api/sessions/:session/interrupts/discard", {

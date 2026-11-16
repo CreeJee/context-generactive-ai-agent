@@ -18,7 +18,7 @@
 - `koreanLocalTime` / `koreanTimeOfDayOf` / `koreanShortTime` — 서버 타임스탬프를 ko-KR 로컬 날짜·시각 / 시각 / 월·일·분으로 포맷한다. 파싱 불가 시 `Invalid Date`
 - `timeUntil` — `(timestamp, now)` dual. 남은 시간을 `3d 8h 7m` 형태로 돌려주고, 지났거나 파싱 불가면 `null`
 - `themes` — 테마 선택지 상수(`system`/`light`/`dark`와 한국어 라벨)
-- `ThemeSelect` — 테마 선택 React 컴포넌트. localStorage `context-agent-theme`에 저장하고 `document.documentElement`의 `dark` 클래스를 토글한다
+- `ThemeSync` / `ThemeField` — `ThemeSync`는 화면이 저장된 테마를 따르게 하는 React 컴포넌트다(그리는 것은 없다). 시스템 테마가 바뀌어도 따르고, `document.documentElement`의 `dark` 클래스를 토글한다. `ThemeField`는 설정 창의 테마 선택 한 줄이다. 고른 테마는 localStorage `context-agent-theme`에 저장하고 바로 적용한다
 - `themeScript` — 페인트 전에 실행할 인라인 테마 스크립트 문자열
 - `loopHealthLabel` — `LoopHealth`(`Healthy`/`Retrying`/`Exhausted`/`Defected`)를 한국어 문구로 바꾼다
 - `LoopHealthStatus` — 백그라운드 루프 상태 배지와, `Exhausted`/`Defected`일 때만 보이는 '다시 시작' 버튼 컴포넌트. `Exhausted`면 멈춘 이유 한 줄과 서버가 준 오류 이름을 접힌 `FailureDetails`로 보인다

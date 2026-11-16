@@ -3126,6 +3126,12 @@ export const migrations: readonly string[] = [
     UNIQUE (project_id, command)
   );
   `,
+  `
+  -- The model a conversation runs on, as JSON of its provider, model and effort (decisions.md
+  -- "모델은 대화마다 둔다"). NULL follows the app's selected model, as every conversation did
+  -- before this column.
+  ALTER TABLE sessions ADD COLUMN model_selection TEXT;
+  `,
 ];
 
 /** One of the two startup migrations that may rebuild a referenced table with FK checks suspended;

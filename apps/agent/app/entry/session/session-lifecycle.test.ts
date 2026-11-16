@@ -20,6 +20,7 @@ const session = {
   importedFrom: null,
   worktreePath: null,
   branch: null,
+  model: null,
 };
 const waiting = ArchiveTaskResult.cases.waiting_for_stop.make({
   operationId: "operation-1",

@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest";
 import { i18n } from "@lingui/core";
 import { I18nProvider } from "@lingui/react";
-import { Cause, Effect } from "effect";
+import { Cause, Effect, Schema } from "effect";
 import type { ReactNode } from "react";
 import { useState } from "react";
 import { Array as EffectArray } from "effect";
@@ -11,14 +11,19 @@ import { describe, expect, beforeEach } from "vite-plus/test";
 import "../../app.css";
 import { AccountLoginState, ProviderAuthState } from "../api";
 import type { Session } from "../api";
-import { AccountModelPanel } from "./account-model-panel";
 import { AccountManagerList, QuotaStatus } from "./account-profiles";
 import { AccountEntry, AccountSwitcherMenu } from "./account-switcher";
 import { CompatibleAccountsList } from "./compatible-accounts";
 import type { CompatibleAccountChange } from "./compatible-client";
-import { ModelSection, ProjectSection, SessionSection } from "./sidebar";
+import { ModelSection, SessionSection } from "./sidebar";
 import type { ProjectWorking } from "../queries/project";
 import { SidebarProvider } from "../../components/ui/sidebar";
+
+/** The folds as the sidebar stored them; a missing or malformed value fails the read. */
+const storedFolds = () =>
+  Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(
+    localStorage.getItem("context-agent-session-groups-open-v1"),
+  );
 
 /** Renders under the app's Lingui instance, which the test setup activates in Korean. */
 const withI18n = {
@@ -104,118 +109,28 @@ describe("sidebar disclosures", () => {
       const screen = yield* sdkCall(() =>
         render(
           <div className="w-72">
-            <AccountModelPanel
-              provider="openai"
-              auth={ProviderAuthState["signed-in"]({ provider: "openai" })}
-              selection={{ provider: "openai", model: "model-1", reasoningEffort: "medium" }}
-              modelName="Model 1"
-            >
-              <ModelSection
-                models={[
-                  {
-                    provider: "openai",
-                    id: "model-1",
-                    displayName: "Model 1",
-                    isDefault: true,
-                    defaultReasoningEffort: "medium",
-                    supportedReasoningEfforts: ["medium"],
-                    capabilities: { inputModalities: ["text"], toolCalling: true, reasoning: true },
-                  },
-                ]}
-                selection={{ provider: "openai", model: "model-1", reasoningEffort: "medium" }}
-                onSelect={() => {}}
-              />
-            </AccountModelPanel>
-          </div>,
-          withI18n,
-        ),
-      );
-
-      yield* sdkCall(() => screen.getByRole("button", { name: /Model 1/ }).click());
-      alignedTerms(screen.container, ["모델", "추론"]);
-    }),
-  );
-
-  it.live("project settings retain aligned rows when expanded", () =>
-    Effect.gen(function* () {
-      const screen = yield* sdkCall(() =>
-        render(
-          <div className="w-72">
-            <ProjectSection
-              projects={[
+            <ModelSection
+              models={[
                 {
-                  id: "project-1",
-                  root: "/tmp/project-1",
-                  name: "Project 1",
-                  crossRecallExcluded: false,
-                  permissionMode: "ask",
-                  createdAt: "2026-10-01T00:00:00.000Z",
-                  hiddenAt: null,
-                  folderMissing: false,
+                  provider: "openai",
+                  id: "model-1",
+                  displayName: "Model 1",
+                  isDefault: true,
+                  defaultReasoningEffort: "medium",
+                  supportedReasoningEfforts: ["medium"],
+                  capabilities: { inputModalities: ["text"], toolCalling: true, reasoning: true },
                 },
               ]}
-              projectId="project-1"
-              hiddenProjects={[]}
+              selection={{ provider: "openai", model: "model-1", reasoningEffort: "medium" }}
               onSelect={() => {}}
-              onAdd={() => Promise.resolve(null)}
-              onPickFolder={() => Promise.resolve({ _tag: "cancelled" })}
-              onCrossRecall={() => {}}
-              onHide={() => {}}
-              onRestore={() => {}}
             />
           </div>,
           withI18n,
         ),
       );
 
-      const trigger = screen.getByRole("button", { name: "프로젝트 Project 1" });
-      expect(trigger.element().textContent).toBe("Project 1");
-      yield* sdkCall(() => trigger.click());
-      alignedTerms(screen.container, ["프로젝트", "기억", "목록"]);
+      alignedTerms(screen.container, ["모델", "추론"]);
     }),
-  );
-
-  it.live(
-    "choosing an archived project releases it, and an open folder already listed is selected",
-    () =>
-      Effect.gen(function* () {
-        const project = (id: string, hiddenAt: string | null) => ({
-          id,
-          root: `/tmp/${id}`,
-          name: id,
-          crossRecallExcluded: false,
-          permissionMode: "ask" as const,
-          createdAt: "2026-10-01T00:00:00.000Z",
-          hiddenAt,
-          folderMissing: false,
-        });
-        const events: string[] = [];
-        // The section's open state persists across tests; start closed like a first visit.
-        yield* Effect.sync(() => localStorage.removeItem("context-agent-project-section-open-v2"));
-        const screen = yield* sdkCall(() =>
-          render(
-            <div className="w-72">
-              <ProjectSection
-                projects={[project("alpha", null)]}
-                hiddenProjects={[project("beta", "2026-10-02T00:00:00.000Z")]}
-                projectId="alpha"
-                onSelect={(id) => void events.push(`select:${id}`)}
-                onAdd={(root) => Promise.resolve(void events.push(`add:${root}`)).then(() => null)}
-                onPickFolder={() => Promise.resolve({ _tag: "picked", root: "/tmp/alpha" })}
-                onCrossRecall={() => {}}
-                onHide={() => {}}
-                onRestore={(id) => void events.push(`restore:${id}`)}
-              />
-            </div>,
-            withI18n,
-          ),
-        );
-        yield* sdkCall(() => screen.getByRole("button", { name: "프로젝트 alpha" }).click());
-        yield* sdkCall(() => screen.getByRole("combobox", { name: "프로젝트 선택" }).click());
-        yield* sdkCall(() => screen.getByRole("option", { name: /beta/ }).click());
-        yield* sdkCall(() => screen.getByRole("button", { name: "폴더 열기" }).click());
-        yield* sdkCall(() => expect.poll(() => events).toEqual(["restore:beta", "select:alpha"]));
-      }),
   );
 
   it.live("the account manager lists every provider's accounts in one editable list", () =>
@@ -517,6 +432,7 @@ describe("sidebar disclosures", () => {
     importedFrom: null,
     worktreePath: null,
     branch: null,
+    model: null,
   });
 
   const group = (
@@ -529,7 +445,14 @@ describe("sidebar disclosures", () => {
     name,
     sessions,
     archived,
+    folderMissing: false,
   });
+
+  /**
+   * A project's header button by the project's name. The header's + button is named after the
+   * project too ("Alpha에 새 대화"), so the name must not be followed by it.
+   */
+  const headerName = (name: string) => new RegExp(`^${name}(?!에 새 대화)`, "u");
 
   /** No conversation of any project is at work; tests that need one name their own. */
   const idle: Array<ProjectWorking> = [];
@@ -554,7 +477,7 @@ describe("sidebar disclosures", () => {
                   sessionOf("beta", "b1", "베타 질문"),
                   sessionOf("beta", "b2", "베타 후속"),
                 ]),
-                // No sessions: only the selected project is shown as a group.
+                // No sessions: still a group, with its own header.
                 group("gamma", "Gamma", []),
               ]}
               working={idle}
@@ -566,7 +489,8 @@ describe("sidebar disclosures", () => {
               onArchive={() => {}}
               onDelete={() => {}}
               onRestore={() => {}}
-              agents={[]}
+              header={null}
+              projectActions={() => null}
             />
           </div>,
           withSidebar,
@@ -574,25 +498,25 @@ describe("sidebar disclosures", () => {
       );
 
       yield* sdkCall(() =>
-        expect.element(screen.getByRole("button", { name: /^Alpha/ })).toBeVisible(),
+        expect.element(screen.getByRole("button", { name: headerName("Alpha") })).toBeVisible(),
       );
       yield* sdkCall(() =>
-        expect.element(screen.getByRole("button", { name: /^Beta/ })).toBeVisible(),
+        expect.element(screen.getByRole("button", { name: headerName("Beta") })).toBeVisible(),
       );
-      // Gamma has no conversations, so its group exists only while it is the selected project.
+      // Gamma has no conversations, and its group is there all the same.
       yield* sdkCall(() =>
-        expect.element(screen.getByRole("button", { name: "Gamma" })).toBeVisible(),
+        expect.element(screen.getByRole("button", { name: headerName("Gamma") })).toBeVisible(),
       );
       // Base UI's Collapsible unmounts a closed panel, so a folded group renders no row links;
       // its header keeps only the conversation count.
-      yield* sdkCall(() => expect.element(screen.getByText("대화 1개")).toBeVisible());
+      yield* sdkCall(() => expect.element(screen.getByLabelText("대화 1개")).toBeVisible());
       expect(screen.container.querySelectorAll('a[href*="session="]').length).toBe(0);
       // Opening a group mounts its rows.
-      yield* sdkCall(() => screen.getByRole("button", { name: /^Alpha/ }).click());
+      yield* sdkCall(() => screen.getByRole("button", { name: headerName("Alpha") }).click());
       yield* sdkCall(() =>
         expect.element(screen.getByRole("link", { name: "알파 대화" })).toBeVisible(),
       );
-      yield* sdkCall(() => screen.getByRole("button", { name: /^Beta/ }).click());
+      yield* sdkCall(() => screen.getByRole("button", { name: headerName("Beta") }).click());
       yield* sdkCall(() =>
         expect.element(screen.getByRole("link", { name: "베타 질문" })).toBeVisible(),
       );
@@ -616,7 +540,8 @@ describe("sidebar disclosures", () => {
               onArchive={() => {}}
               onDelete={() => {}}
               onRestore={() => {}}
-              agents={[]}
+              header={null}
+              projectActions={() => null}
             />
           </div>,
           withSidebar,
@@ -629,14 +554,15 @@ describe("sidebar disclosures", () => {
       // Folding it unmounts the rows (Base UI closes its panel) and records the fold; the next
       // visit starts folded even though it is the selected project, because the user's choice
       // outranks the default.
-      yield* sdkCall(() => screen.getByRole("button", { name: /^Alpha/ }).click());
+      yield* sdkCall(() => screen.getByRole("button", { name: headerName("Alpha") }).click());
       yield* sdkCall(() =>
         expect.element(screen.getByRole("link", { name: "알파 대화" })).not.toBeInTheDocument(),
       );
-      expect(localStorage.getItem("context-agent-session-groups-open-v1")).toBe(
-        JSON.stringify({ alpha: false }),
-      );
+      expect(yield* storedFolds()).toEqual({ alpha: false });
 
+      // The first render leaves the document before the second one, so the second one's queries
+      // see only itself and read the fold from storage.
+      yield* sdkCall(() => screen.unmount());
       const again = yield* sdkCall(() =>
         render(
           <div className="w-72">
@@ -651,7 +577,8 @@ describe("sidebar disclosures", () => {
               onArchive={() => {}}
               onDelete={() => {}}
               onRestore={() => {}}
-              agents={[]}
+              header={null}
+              projectActions={() => null}
             />
           </div>,
           withSidebar,
@@ -660,13 +587,11 @@ describe("sidebar disclosures", () => {
       yield* sdkCall(() =>
         expect.element(again.getByRole("link", { name: "알파 대화" })).not.toBeInTheDocument(),
       );
-      yield* sdkCall(() => again.getByRole("button", { name: /^Alpha/ }).click());
+      yield* sdkCall(() => again.getByRole("button", { name: headerName("Alpha") }).click());
       yield* sdkCall(() =>
         expect.element(again.getByRole("link", { name: "알파 대화" })).toBeVisible(),
       );
-      expect(localStorage.getItem("context-agent-session-groups-open-v1")).toBe(
-        JSON.stringify({ alpha: true }),
-      );
+      expect(yield* storedFolds()).toEqual({ alpha: true });
     }),
   );
 
@@ -676,7 +601,14 @@ describe("sidebar disclosures", () => {
         render(
           <div className="w-72">
             <SessionSection
-              groups={[group("alpha", "Alpha", [sessionOf("alpha", "a1", "알파 대화")])]}
+              groups={[
+                group(
+                  "alpha",
+                  "Alpha",
+                  [sessionOf("alpha", "a1", "알파 대화")],
+                  [sessionOf("alpha", "a0", "알파 보관")],
+                ),
+              ]}
               working={idle}
               loading={false}
               projectId="alpha"
@@ -686,18 +618,21 @@ describe("sidebar disclosures", () => {
               onArchive={() => {}}
               onDelete={() => {}}
               onRestore={() => {}}
-              agents={[]}
+              header={null}
+              projectActions={() => null}
             />
           </div>,
           withSidebar,
         ),
       );
-      // The project's name pins to the list's top like the section headings; it must sit above
+      // The project's name pins to the list's top like the archive heading; it must sit above
       // them so a scrolling heading passes under it instead of covering it.
-      const header = screen.getByRole("button", { name: "Alpha" }).element();
-      // The selected group is open, so its header shows only the project's name. The section
-      // heading below it is also a sticky button ("진행 중 {count}개").
-      const heading = screen.getByRole("button", { name: /^진행 중/u }).element();
+      // The row holding the folding trigger and the project's buttons is what pins.
+      const header = screen
+        .getByRole("button", { name: headerName("Alpha") })
+        .element().parentElement!;
+      // The section heading below the header row is also a sticky button ("보관함 {count}개").
+      const heading = screen.getByRole("button", { name: /^보관함/u }).element();
       const headerStyle = getComputedStyle(header);
       const headingStyle = getComputedStyle(heading);
       expect(headerStyle.position).toBe("sticky");
@@ -706,41 +641,7 @@ describe("sidebar disclosures", () => {
     }),
   );
 
-  it.live("a project without conversations is a group only while it is the selected project", () =>
-    Effect.gen(function* () {
-      const screen = yield* sdkCall(() =>
-        render(
-          <div className="w-72">
-            <SessionSection
-              groups={[group("gamma", "Gamma", [])]}
-              working={idle}
-              loading={false}
-              projectId="gamma"
-              sessionId={null}
-              archiveError={null}
-              onCreate={() => {}}
-              onArchive={() => {}}
-              onDelete={() => {}}
-              onRestore={() => {}}
-              agents={[]}
-            />
-          </div>,
-          withSidebar,
-        ),
-      );
-
-      // The selected project without conversations keeps its group and its empty message.
-      yield* sdkCall(() =>
-        expect.element(screen.getByRole("button", { name: "Gamma" })).toBeVisible(),
-      );
-      yield* sdkCall(() => expect.element(screen.getByText("아직 대화가 없습니다.")).toBeVisible());
-      yield* sdkCall(() =>
-        expect.element(screen.getByRole("button", { name: "새 대화" })).toBeVisible(),
-      );
-    }),
-  );
-
-  it.live("a non-selected project without conversations shows no group", () =>
+  it.live("a project without conversations is a group while it is not the open project", () =>
     Effect.gen(function* () {
       const screen = yield* sdkCall(() =>
         render(
@@ -748,7 +649,6 @@ describe("sidebar disclosures", () => {
             <SessionSection
               groups={[
                 group("alpha", "Alpha", [sessionOf("alpha", "a1", "알파 대화")]),
-                // Read fine, but empty and not the selected project: it is not worth a group.
                 group("gamma", "Gamma", []),
               ]}
               working={idle}
@@ -760,7 +660,8 @@ describe("sidebar disclosures", () => {
               onArchive={() => {}}
               onDelete={() => {}}
               onRestore={() => {}}
-              agents={[]}
+              header={null}
+              projectActions={() => null}
             />
           </div>,
           withSidebar,
@@ -768,13 +669,11 @@ describe("sidebar disclosures", () => {
       );
 
       yield* sdkCall(() =>
-        expect.element(screen.getByRole("button", { name: "Alpha" })).toBeVisible(),
+        expect.element(screen.getByRole("button", { name: headerName("Gamma") })).toBeVisible(),
       );
+      // Its header starts the project's first conversation.
       yield* sdkCall(() =>
-        expect.element(screen.getByRole("button", { name: "Gamma" })).not.toBeInTheDocument(),
-      );
-      yield* sdkCall(() =>
-        expect.element(screen.getByText("아직 대화가 없습니다.")).not.toBeInTheDocument(),
+        expect.element(screen.getByRole("button", { name: "Gamma에 새 대화" })).toBeVisible(),
       );
     }),
   );
@@ -799,7 +698,8 @@ describe("sidebar disclosures", () => {
               onArchive={() => {}}
               onDelete={() => {}}
               onRestore={() => {}}
-              agents={[]}
+              header={null}
+              projectActions={() => null}
             />
           </div>,
           withSidebar,
@@ -809,7 +709,7 @@ describe("sidebar disclosures", () => {
       // A group folds, so its conversations are behind its header: the folded alpha has no rows,
       // and opening it mounts them.
       expect(screen.container.querySelectorAll('a[href*="session="]').length).toBe(1);
-      yield* sdkCall(() => screen.getByRole("button", { name: /^Alpha/ }).click());
+      yield* sdkCall(() => screen.getByRole("button", { name: headerName("Alpha") }).click());
       const alpha = screen.getByRole("link", { name: "알파 대화" });
       expect(alpha.element().getAttribute("href")).toBe("/?project=alpha&session=a1");
       const beta = screen.getByRole("link", { name: "베타 질문" });
@@ -841,7 +741,8 @@ describe("sidebar disclosures", () => {
                 void asked.push(`delete:${projectId}:${sessionId}`)
               }
               onRestore={() => {}}
-              agents={[]}
+              header={null}
+              projectActions={() => null}
             />
           </div>,
           withSidebar,
@@ -849,9 +750,8 @@ describe("sidebar disclosures", () => {
       );
 
       // A group folds, so its conversations are behind its header: open it to reach the row.
-      yield* sdkCall(() => screen.getByRole("button", { name: /^Alpha/ }).click());
-      const row = screen.getByRole("listitem", { name: /알파 대화/u });
-      yield* sdkCall(() => row.getByRole("button", { name: "알파 대화 메뉴" }).click());
+      yield* sdkCall(() => screen.getByRole("button", { name: headerName("Alpha") }).click());
+      yield* sdkCall(() => screen.getByRole("button", { name: "알파 대화 메뉴" }).click());
       yield* sdkCall(() => screen.getByRole("menuitem", { name: "보관하기" }).click());
       expect(asked).toEqual(["archive:alpha:a1"]);
     }),
@@ -869,7 +769,7 @@ describe("sidebar disclosures", () => {
                   sessionOf("alpha", "a2", "알파 나중"),
                 ]),
               ]}
-              // a2 answers now: it leaves the "대화" section for the "진행 중" one above it.
+              // a2 answers now: it moves ahead of a1 in the one list.
               working={answeringIn("alpha", "a2")}
               loading={false}
               projectId="alpha"
@@ -879,7 +779,8 @@ describe("sidebar disclosures", () => {
               onArchive={() => {}}
               onDelete={() => {}}
               onRestore={() => {}}
-              agents={[]}
+              header={null}
+              projectActions={() => null}
             />
           </div>,
           withSidebar,
@@ -895,7 +796,7 @@ describe("sidebar disclosures", () => {
 
       // The header badge counts the project's conversations at work; its accessible name says
       // what the count is of, its content the number with a spinning marker.
-      const header = screen.getByRole("button", { name: /^Alpha/u }).element();
+      const header = screen.getByRole("button", { name: headerName("Alpha") }).element();
       const badge = header.querySelector('[data-slot="badge"][aria-label]');
       expect(badge?.getAttribute("aria-label")).toContain("진행 중 1개");
       expect(badge?.textContent).toContain("1");
@@ -916,7 +817,8 @@ describe("sidebar disclosures", () => {
               onArchive={() => {}}
               onDelete={() => {}}
               onRestore={() => {}}
-              agents={[]}
+              header={null}
+              projectActions={() => null}
             />
           </div>,
           withSidebar,
@@ -958,7 +860,8 @@ describe("sidebar disclosures", () => {
               onArchive={() => {}}
               onDelete={() => {}}
               onRestore={() => {}}
-              agents={[]}
+              header={null}
+              projectActions={() => null}
             />
           </div>,
           withSidebar,
@@ -966,8 +869,8 @@ describe("sidebar disclosures", () => {
       );
 
       // Alpha's badge counts both kinds of work; beta's has no badge at all.
-      const alphaHeader = screen.getByRole("button", { name: /^Alpha/u }).element();
-      const betaHeader = screen.getByRole("button", { name: /^Beta/u }).element();
+      const alphaHeader = screen.getByRole("button", { name: headerName("Alpha") }).element();
+      const betaHeader = screen.getByRole("button", { name: headerName("Beta") }).element();
       const alphaBadge = alphaHeader.querySelector('[data-slot="badge"][aria-label]');
       expect(alphaBadge?.getAttribute("aria-label")).toContain("진행 중 2개");
       expect(alphaBadge?.textContent).toContain("2");

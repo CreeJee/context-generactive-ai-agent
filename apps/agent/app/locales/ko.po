@@ -202,6 +202,7 @@ msgid "{contextWindow} / 출력 {output} · 도구 {tools}"
 msgstr "{contextWindow} / 출력 {output} · 도구 {tools}"
 
 #. Badge next to the Skills page title; {count} is how many skills there are
+#. How many archived projects the section holds
 #. How many conversations the section holds
 #: app/entry/navigation/sidebar.tsx
 #: app/entry/settings/pages/skills.tsx
@@ -276,6 +277,11 @@ msgstr "{formatted} 토큰 · {percent}%"
 msgid "{goal} 먼저"
 msgstr "{goal} 먼저"
 
+#. Button that lists the rest of a project's conversations; {hidden} is how many more
+#: app/entry/navigation/sidebar.tsx
+msgid "{hidden}개 더 보기"
+msgstr "{hidden}개 더 보기"
+
 #: app/entry/chat/markdown.tsx
 msgid "{host}의 이미지 불러오기"
 msgstr "{host}의 이미지 불러오기"
@@ -344,9 +350,24 @@ msgstr "{modelId} 수정"
 msgid "{modelId} 연결을 확인했습니다."
 msgstr "{modelId} 연결을 확인했습니다."
 
+#. Button that opens a project's menu; name is the project's name
+#: app/entry/navigation/project-menu.tsx
+msgid "{name} 메뉴"
+msgstr "{name} 메뉴"
+
+#. Button that releases an archived project; name is the project's name
+#: app/entry/navigation/sidebar.tsx
+msgid "{name} 보관 해제"
+msgstr "{name} 보관 해제"
+
 #: app/entry/chat/approval.tsx
 msgid "{name} 실행을 승인할까요?"
 msgstr "{name} 실행을 승인할까요?"
+
+#. Button on a project's header that starts a conversation in it
+#: app/entry/navigation/sidebar.tsx
+msgid "{name}에 새 대화"
+msgstr "{name}에 새 대화"
 
 #: app/entry/chat/images.tsx
 msgid "{path} 크게 보기"
@@ -375,16 +396,6 @@ msgstr "{providerName} 계정 목록"
 #: app/entry/navigation/account-profiles.tsx
 msgid "{providerName} 계정 추가"
 msgstr "{providerName} 계정 추가"
-
-#. Tooltip of the sidebar account panel; model reads as provider / model name
-#: app/entry/navigation/account-model-panel.tsx
-msgid "{providerName} 계정과 모델 설정: {status}, {model}"
-msgstr "{providerName} 계정과 모델 설정: {status}, {model}"
-
-#. {providerName} is the model provider's name, such as ChatGPT
-#: app/entry/index.tsx
-msgid "{providerName} 계정을 연결하면 모델을 고를 수 있습니다."
-msgstr "{providerName} 계정을 연결하면 모델을 고를 수 있습니다."
 
 #: app/entry/settings/pages/agents.tsx
 msgid "{reason} 두 번 연달아 실패해서 멈췄습니다. 다시 연결을 눌러 주십시오."
@@ -675,7 +686,7 @@ msgstr "CPU에서 실행 중"
 msgid "description이 없어 쓰지 않습니다."
 msgstr "description이 없어 쓰지 않습니다."
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "detached HEAD에서 시작해 브랜치가 없으므로 자동 merge하지 않습니다"
 msgstr "detached HEAD에서 시작해 브랜치가 없으므로 자동 merge하지 않습니다"
 
@@ -729,7 +740,7 @@ msgstr "git 저장소인 열린 프로젝트가 없습니다."
 msgid "Goal v{fromGoalVersion} → v{toGoalVersion} 변경이 이 카드에 어떤 영향을 주는지 오케스트레이터가 판단하지 못했습니다."
 msgstr "Goal v{fromGoalVersion} → v{toGoalVersion} 변경이 이 카드에 어떤 영향을 주는지 오케스트레이터가 판단하지 못했습니다."
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "Goal 검증 실패: {verdict}"
 msgstr "Goal 검증 실패: {verdict}"
 
@@ -742,7 +753,7 @@ msgstr "Goal 결과"
 msgid "Goal 기록을 읽지 못해 실행하지 않았습니다. 잠시 뒤 다시 보내 주십시오."
 msgstr "Goal 기록을 읽지 못해 실행하지 않았습니다. 잠시 뒤 다시 보내 주십시오."
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "Goal 변경으로 merge를 멈췄습니다"
 msgstr "Goal 변경으로 merge를 멈췄습니다"
 
@@ -754,7 +765,7 @@ msgstr "Goal 변경으로 오래됨"
 msgid "Goal 변경의 영향 판단"
 msgstr "Goal 변경의 영향 판단"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "Goal 브랜치 push 실패"
 msgstr "Goal 브랜치 push 실패"
 
@@ -798,7 +809,7 @@ msgstr "Goal 실행이 끝나기 전에 멈춰서 아래 도구가 무엇을 바
 msgid "Goal 없음"
 msgstr "Goal 없음"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "Goal 전체를 검증하는 중"
 msgstr "Goal 전체를 검증하는 중"
 
@@ -877,6 +888,11 @@ msgstr "MCP 도구 {name} 실행을 승인할까요?"
 msgid "MCP 서버"
 msgstr "MCP 서버"
 
+#. Description under the settings dialog's project picker
+#: app/entry/settings/settings-dialog.tsx
+msgid "MCP 서버, 외부 에이전트, 권한, Skills, 보호 브랜치는 여기서 고른 프로젝트의 설정입니다."
+msgstr "MCP 서버, 외부 에이전트, 권한, Skills, 보호 브랜치는 여기서 고른 프로젝트의 설정입니다."
+
 #: app/entry/settings/pages/mcp-tool-hints.tsx
 msgid "MCP 표준의 도구 표시를 따릅니다. 서버가 표시하지 않은 값은 표준의 조심스러운 기본값을 씁니다. 직접 고른 값이 서버 표시보다 우선합니다. 분류와 상관없이 도구를 부를 때마다 권한 모드대로 묻습니다."
 msgstr "MCP 표준의 도구 표시를 따릅니다. 서버가 표시하지 않은 값은 표준의 조심스러운 기본값을 씁니다. 직접 고른 값이 서버 표시보다 우선합니다. 분류와 상관없이 도구를 부를 때마다 권한 모드대로 묻습니다."
@@ -885,7 +901,7 @@ msgstr "MCP 표준의 도구 표시를 따릅니다. 서버가 표시하지 않�
 msgid "MCP·외부 에이전트"
 msgstr "MCP·외부 에이전트"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "merge됨 ({commit})"
 msgstr "merge됨 ({commit})"
 
@@ -966,8 +982,7 @@ msgstr "Plan 작성자가 Plan을 다시 준비하면 바로 이어서 실행합
 msgid "Plan 작성자가 실행 중에 더한 카드라 승인을 기다립니다. 승인하기 전에는 실행하지 않습니다."
 msgstr "Plan 작성자가 실행 중에 더한 카드라 승인을 기다립니다. 승인하기 전에는 실행하지 않습니다."
 
-#: app/entry/chat/board-panel.tsx
-#: app/entry/chat/board/project-board.tsx
+#: app/entry/chat/board/board-surface.tsx
 msgid "Plan 작성자가 연속으로 카드를 고쳤지만 새로 충족된 결과가 없어 자동 Plan 작성을 멈췄습니다. 이미 맡은 카드는 계속 실행됩니다. 대화에서 방향을 알려 주면 다시 Plan을 짭니다."
 msgstr "Plan 작성자가 연속으로 카드를 고쳤지만 새로 충족된 결과가 없어 자동 Plan 작성을 멈췄습니다. 이미 맡은 카드는 계속 실행됩니다. 대화에서 방향을 알려 주면 다시 Plan을 짭니다."
 
@@ -993,19 +1008,28 @@ msgstr "PNG, JPEG, GIF, WebP 이미지만 올릴 수 있습니다."
 msgid "PR 만들기"
 msgstr "PR 만들기"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "PR 생성 실패"
 msgstr "PR 생성 실패"
 
-#: app/entry/chat/board-panel.tsx
+#. Link that opens the Goal's pull request in a new tab
+#: app/entry/chat/board/goal-merge.tsx
+msgid "PR 열기"
+msgstr "PR 열기"
+
+#: app/entry/chat/board/goal-merge.tsx
 msgid "PR을 만드는 중"
 msgstr "PR을 만드는 중"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "PR을 만들던 중 멈췄습니다. 원격 저장소에서 직접 확인해 주십시오"
 msgstr "PR을 만들던 중 멈췄습니다. 원격 저장소에서 직접 확인해 주십시오"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
+msgid "PR을 만듦"
+msgstr "PR을 만듦"
+
+#: app/entry/chat/board/goal-merge.tsx
 msgid "PR을 만듦: {url}"
 msgstr "PR을 만듦: {url}"
 
@@ -1148,11 +1172,6 @@ msgstr "개발자 웹훅 …{webhookIdSuffix}. 위 최종 문안이 메시지로
 msgid "개발자 웹훅 …{webhookIdSuffix}. 위 최종 문안이 메시지로, 증거 묶음 전체가 JSON 첨부 파일로 전송됩니다."
 msgstr "개발자 웹훅 …{webhookIdSuffix}. 위 최종 문안이 메시지로, 증거 묶음 전체가 JSON 첨부 파일로 전송됩니다."
 
-#. Settings tab group: project improvement reports
-#: app/entry/settings/settings-dialog.tsx
-msgid "개선"
-msgstr "개선"
-
 #: app/entry/settings/pages/improvements.tsx
 msgid "개선 문서를 쓰거나 읽지 못했습니다."
 msgstr "개선 문서를 쓰거나 읽지 못했습니다."
@@ -1186,9 +1205,14 @@ msgstr "거부 선택됨"
 msgid "거부됨"
 msgstr "거부됨"
 
+#. Button in the card panel that rejects a card waiting for approval
 #: app/entry/chat/board/card-peek.tsx
-msgid "거절하려면 편집에서 카드를 취소해 주십시오."
-msgstr "거절하려면 편집에서 카드를 취소해 주십시오."
+msgid "거절"
+msgstr "거절"
+
+#: app/entry/chat/board/card-peek.tsx
+msgid "거절한 카드는 취소되고 실행되지 않습니다."
+msgstr "거절한 카드는 취소되고 실행되지 않습니다."
 
 #. Local model being downloaded
 #: app/entry/shared/model-downloads.tsx
@@ -1347,7 +1371,7 @@ msgstr "계속 가져오기"
 msgid "계속 실패해 Plan 작성자에게 카드를 다시 짜 달라고 요청했습니다: {failure}"
 msgstr "계속 실패해 Plan 작성자에게 카드를 다시 짜 달라고 요청했습니다: {failure}"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/board-surface.tsx
 msgid "계속 실패해 다시 짜 달라고 요청한 카드를 Plan 작성자가 고치지 않았습니다. 카드를 고치거나 다시 대기열에 넣어 주십시오."
 msgstr "계속 실패해 다시 짜 달라고 요청한 카드를 Plan 작성자가 고치지 않았습니다. 카드를 고치거나 다시 대기열에 넣어 주십시오."
 
@@ -1367,11 +1391,6 @@ msgstr "계정 관리"
 #: app/entry/navigation/account-switcher.tsx
 msgid "계정 목록을 불러오지 못했습니다."
 msgstr "계정 목록을 불러오지 못했습니다."
-
-#. Button that opens account management to connect an account
-#: app/entry/index.tsx
-msgid "계정 연결"
-msgstr "계정 연결"
 
 #: app/entry/index.tsx
 msgid "계정 연결 상태를 불러오지 못했습니다"
@@ -1445,6 +1464,10 @@ msgstr "계정을 찾을 수 없습니다. 목록을 새로 고친 뒤 다시 �
 msgid "계정을 추가하고 계정마다 이름을 바꾸거나 로그아웃합니다. 쓸 계정은 사이드바 아래 계정 전환에서 고릅니다."
 msgstr "계정을 추가하고 계정마다 이름을 바꾸거나 로그아웃합니다. 쓸 계정은 사이드바 아래 계정 전환에서 고릅니다."
 
+#: app/entry/chat/board/card-peek.tsx
+msgid "고른 카드가 끝난 뒤에 이 카드를 시작합니다."
+msgstr "고른 카드가 끝난 뒤에 이 카드를 시작합니다."
+
 #. Heading of the values the typed slash command can take
 #: app/entry/chat/slash-palette.tsx
 msgid "고를 수 있는 값"
@@ -1501,6 +1524,7 @@ msgstr "권한"
 #. Field label: the project's permission mode
 #. Picker of the project's permission mode
 #: app/entry/settings/pages/permission.tsx
+#: app/entry/settings/permission-mode-select.tsx
 msgid "권한 모드"
 msgstr "권한 모드"
 
@@ -1560,6 +1584,7 @@ msgstr "그린 그림: {path}"
 
 #. Button: close the stop dialog without stopping the Goal
 #. Closes the dialog without cancelling the card
+#. Closes the dialog without rejecting the card
 #. Dialog button: keep the Plan open
 #: app/entry/chat/board-panel.tsx
 #: app/entry/chat/board/card-peek.tsx
@@ -1654,8 +1679,6 @@ msgid "기본값으로"
 msgstr "기본값으로"
 
 #. Settings tab group: pages about the app's stored conversation memory
-#. Sidebar field label: the project's memory
-#: app/entry/navigation/sidebar.tsx
 #: app/entry/settings/settings-dialog.tsx
 msgid "기억"
 msgstr "기억"
@@ -1817,10 +1840,6 @@ msgstr "다른 Goal의 카드 {otherCardId}가 같은 파일({files})을 이미 
 msgid "다른 Goal이 merge된 뒤 다시 검증하니 통과하지 못했습니다: {verdict}"
 msgstr "다른 Goal이 merge된 뒤 다시 검증하니 통과하지 못했습니다: {verdict}"
 
-#: app/entry/navigation/sidebar.tsx
-msgid "다른 대화가 없습니다."
-msgstr "다른 대화가 없습니다."
-
 #: app/entry/chat/board/card-peek.tsx
 msgid "다른 대화로 옮기기"
 msgstr "다른 대화로 옮기기"
@@ -1868,8 +1887,8 @@ msgstr "다른 탭에서 쓰고 있는 대화입니다. 그 탭을 닫은 뒤 �
 msgid "다른 프로젝트 기억도 찾기"
 msgstr "다른 프로젝트 기억도 찾기"
 
-#. Switch: conversations in other projects may recall this project's memory
-#: app/entry/navigation/sidebar.tsx
+#. Menu item: conversations in other projects may recall this project's memory
+#: app/entry/navigation/project-menu.tsx
 msgid "다른 프로젝트가 이 기억을 찾도록 허용"
 msgstr "다른 프로젝트가 이 기억을 찾도록 허용"
 
@@ -2165,22 +2184,20 @@ msgstr "대상 브랜치 변경 반영 중"
 msgid "대상 브랜치: {targetBranch}"
 msgstr "대상 브랜치: {targetBranch}"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "대상 브랜치가 계속 바뀌어 다시 시도할 예정"
 msgstr "대상 브랜치가 계속 바뀌어 다시 시도할 예정"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "대상 브랜치가 없어졌습니다"
 msgstr "대상 브랜치가 없어졌습니다"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "대상 브랜치와 충돌한 파일 {count}개를 에이전트가 해결하는 중"
 msgstr "대상 브랜치와 충돌한 파일 {count}개를 에이전트가 해결하는 중"
 
 #. Accessible name of the scrolling message list
-#. Conversation list section: the conversations not at work
 #: app/entry/chat/chat-history.tsx
-#: app/entry/navigation/sidebar.tsx
 msgid "대화"
 msgstr "대화"
 
@@ -2205,10 +2222,6 @@ msgstr "대화 목록을 불러오지 못했습니다."
 #: app/entry/settings/settings-dialog.tsx
 msgid "대화 밖에서 쓰는 도구와 연결을 관리합니다."
 msgstr "대화 밖에서 쓰는 도구와 연결을 관리합니다."
-
-#: app/entry/navigation/sidebar.tsx
-msgid "대화 상대 고르기"
-msgstr "대화 상대 고르기"
 
 #. Placeholder of the conversation picker
 #: app/entry/chat/board/card-peek.tsx
@@ -2276,6 +2289,11 @@ msgstr "더 줄일 내용이 없습니다. 최근 대화는 그대로 보냅니�
 msgid "덮어쓰기"
 msgstr "덮어쓰기"
 
+#. Settings tab group: web search and image generation
+#: app/entry/settings/settings-dialog.tsx
+msgid "도구"
+msgstr "도구"
+
 #. Badge on a connected MCP server; {count} is how many tools it offers
 #: app/entry/settings/pages/mcp.tsx
 msgid "도구 {count}개"
@@ -2336,10 +2354,6 @@ msgstr "동시에 실행할 카드 수"
 msgid "등록된 키 유지"
 msgstr "등록된 키 유지"
 
-#: app/entry/navigation/sidebar.tsx
-msgid "등록된 프로젝트가 없습니다."
-msgstr "등록된 프로젝트가 없습니다."
-
 #: app/entry/navigation/compatible-accounts.tsx
 msgid "등록한 모델이 없습니다. 모델을 추가해야 이 엔드포인트로 대화할 수 있습니다."
 msgstr "등록한 모델이 없습니다. 모델을 추가해야 이 엔드포인트로 대화할 수 있습니다."
@@ -2367,19 +2381,12 @@ msgstr "로그아웃"
 msgid "로그인"
 msgstr "로그인"
 
-#. Account connection status: waiting for the browser login to finish
-#: app/entry/navigation/account-model-panel.tsx
-msgid "로그인 대기"
-msgstr "로그인 대기"
-
 #. Button that cancels an MCP server's OAuth login in progress
 #: app/entry/settings/pages/mcp.tsx
 msgid "로그인 취소"
 msgstr "로그인 취소"
 
-#. Account connection status: signed out
 #. Badge on an MCP server that needs an OAuth login
-#: app/entry/navigation/account-model-panel.tsx
 #: app/entry/settings/pages/mcp.tsx
 msgid "로그인 필요"
 msgstr "로그인 필요"
@@ -2416,11 +2423,6 @@ msgstr "로컬 서버 요청이 실패했습니다"
 #: app/entry/report/report-bundle.tsx
 msgid "루프 {loop}: {health}"
 msgstr "루프 {loop}: {health}"
-
-#. Icon link in the sidebar header that opens the problem report page
-#: app/entry/report/report-link.tsx
-msgid "리포트하기"
-msgstr "리포트하기"
 
 #: app/entry/session/run-state.tsx
 msgid "마지막 답변이 끝나지 않았습니다"
@@ -2468,10 +2470,6 @@ msgstr "막힘은 오케스트레이터가 표시합니다."
 msgid "만들기"
 msgstr "만들기"
 
-#: app/entry/navigation/sidebar.tsx
-msgid "맞는 프로젝트가 없습니다."
-msgstr "맞는 프로젝트가 없습니다."
-
 #: app/entry/chat/message.tsx
 msgid "맞을 수 있는 skill: {skillNames}"
 msgstr "맞을 수 있는 skill: {skillNames}"
@@ -2484,7 +2482,7 @@ msgstr "맡은 카드 없음"
 #. Permission mode 'ask': ask before each tool call
 #. Project permission mode `ask`
 #: app/entry/chat/slash-commands.ts
-#: app/entry/settings/pages/permission.tsx
+#: app/entry/settings/permission-mode-select.tsx
 msgid "매번 묻기"
 msgstr "매번 묻기"
 
@@ -2555,8 +2553,9 @@ msgstr "명령을 실행하지 못했습니다."
 
 #. Author of a chat message in the evidence preview: the AI model
 #. Label before the selected provider and AI model
+#. Select in the model picker: which model the conversation runs on
 #. Sidebar field label: the chat model
-#. Sidebar section of model settings
+#: app/entry/chat/model-picker.tsx
 #: app/entry/navigation/sidebar.tsx
 #: app/entry/report/report-bundle.tsx
 msgid "모델"
@@ -2567,7 +2566,10 @@ msgstr "모델"
 msgid "모델 ID"
 msgstr "모델 ID"
 
+#. Composer button text while the conversation has no model
 #. Placeholder of the model select before one is picked
+#. Placeholder of the model select before one is picked
+#: app/entry/chat/model-picker.tsx
 #: app/entry/settings/model-selection-field.tsx
 msgid "모델 고르기"
 msgstr "모델 고르기"
@@ -2585,14 +2587,10 @@ msgstr "모델 등록"
 msgid "모델 목록 불러오기"
 msgstr "모델 목록 불러오기"
 
+#: app/entry/chat/model-picker.tsx
 #: app/entry/settings/model-selection-field.tsx
 msgid "모델 목록을 읽지 못했습니다. 그 제공자에 로그인했는지 확인해 주십시오."
 msgstr "모델 목록을 읽지 못했습니다. 그 제공자에 로그인했는지 확인해 주십시오."
-
-#. Sidebar account summary when no model is chosen
-#: app/entry/navigation/account-model-panel.tsx
-msgid "모델 미선택"
-msgstr "모델 미선택"
 
 #: app/entry/chat/slash-commands.ts
 msgid "모델 바꾸기"
@@ -2633,6 +2631,11 @@ msgstr "모델 저장"
 msgid "모델 추가"
 msgstr "모델 추가"
 
+#. Select in the model picker: which provider or endpoint the model comes from
+#: app/entry/chat/model-picker.tsx
+msgid "모델 출처"
+msgstr "모델 출처"
+
 #: app/entry/settings/pages/conversation.tsx
 msgid "모델 컨텍스트가 이만큼 찰 때까지는 원문 그대로 보냅니다. 낮추면 일찍 요약해 짧게 보냅니다. 높이면 원문을 오래 보냅니다. 0이면 처음부터 요약합니다. 최대 {maximumPercent}%입니다. 다음 응답부터 적용됩니다. 이미 요약을 쓰기 시작한 대화는 계속 요약을 씁니다."
 msgstr "모델 컨텍스트가 이만큼 찰 때까지는 원문 그대로 보냅니다. 낮추면 일찍 요약해 짧게 보냅니다. 높이면 원문을 오래 보냅니다. 0이면 처음부터 요약합니다. 최대 {maximumPercent}%입니다. 다음 응답부터 적용됩니다. 이미 요약을 쓰기 시작한 대화는 계속 요약을 씁니다."
@@ -2658,6 +2661,7 @@ msgstr "모델은 처음 임베딩할 때 불러옵니다."
 msgid "모델을 골라 주십시오."
 msgstr "모델을 골라 주십시오."
 
+#: app/entry/chat/model-picker.tsx
 #: app/entry/index.tsx
 msgid "모델을 바꾸지 못했습니다. 연결 상태를 확인한 뒤 다시 시도해 주십시오."
 msgstr "모델을 바꾸지 못했습니다. 연결 상태를 확인한 뒤 다시 시도해 주십시오."
@@ -2721,14 +2725,13 @@ msgstr "모든 대화"
 msgid "모든 작업 위치"
 msgstr "모든 작업 위치"
 
+#: app/entry/navigation/decision-inbox.tsx
+msgid "모든 프로젝트의 대화와 Goal에서 사람의 판단이나 승인을 기다리는 카드입니다. 여기서 답하거나 승인하고, 카드가 있는 보드로 이동합니다."
+msgstr "모든 프로젝트의 대화와 Goal에서 사람의 판단이나 승인을 기다리는 카드입니다. 여기서 답하거나 승인하고, 카드가 있는 보드로 이동합니다."
+
 #: app/entry/chat/slash-commands.ts
 msgid "모르는 명령입니다: /{word}"
 msgstr "모르는 명령입니다: /{word}"
-
-#. Sidebar field label: the project's place in the project list
-#: app/entry/navigation/sidebar.tsx
-msgid "목록"
-msgstr "목록"
 
 #: app/entry/navigation/sidebar.tsx
 msgid "목록에서만 뺀 대화입니다. 기억 검색에는 계속 나옵니다."
@@ -2761,7 +2764,9 @@ msgstr "문안을 직접 편집 중입니다. 위 증상·진단을 바꾸거나
 msgid "문제 설명"
 msgstr "문제 설명"
 
+#. Field label: the problem report page
 #. Heading of the problem report page
+#: app/entry/settings/pages/general.tsx
 #: app/routes/report.tsx
 msgid "문제 제보"
 msgstr "문제 제보"
@@ -2895,11 +2900,7 @@ msgstr "보관 재시도"
 msgid "보관 중"
 msgstr "보관 중"
 
-#. Hint on an archived project: choosing it unarchives it
-#: app/entry/navigation/sidebar.tsx
-msgid "보관 해제"
-msgstr "보관 해제"
-
+#. Sidebar section heading: the archived projects
 #: app/entry/navigation/sidebar.tsx
 msgid "보관된 프로젝트"
 msgstr "보관된 프로젝트"
@@ -2911,7 +2912,6 @@ msgstr "보관된 프로젝트"
 msgid "보관됨"
 msgstr "보관됨"
 
-#. Button that archives the project
 #. Button that archives the project
 #. Menu item that archives the conversation
 #: app/entry/navigation/sidebar.tsx
@@ -2962,6 +2962,11 @@ msgstr "보드"
 msgid "보드 #{ref} · {status} · 루프 {health}"
 msgstr "보드 #{ref} · {status} · 루프 {health}"
 
+#. Button that closes the kanban board and shows the conversation again
+#: app/entry/chat/board/board-frame.tsx
+msgid "보드 닫기"
+msgstr "보드 닫기"
+
 #. Name of the board loop in its health status
 #. Name of the board loop in its health status
 #. Name of the board loop in its health status
@@ -3000,6 +3005,7 @@ msgstr "보드를 바꾸지 못했습니다."
 msgid "보드를 불러오는 중"
 msgstr "보드를 불러오는 중"
 
+#: app/entry/chat/board-panel.tsx
 #: app/entry/chat/board/project-board.tsx
 msgid "보드를 불러오는 중입니다."
 msgstr "보드를 불러오는 중입니다."
@@ -3053,8 +3059,8 @@ msgid "보호 브랜치 merge"
 msgstr "보호 브랜치 merge"
 
 #: app/entry/settings/pages/kanban.tsx
-msgid "보호 브랜치는 프로젝트마다 정합니다. 프로젝트를 고른 뒤 다시 열어 주십시오."
-msgstr "보호 브랜치는 프로젝트마다 정합니다. 프로젝트를 고른 뒤 다시 열어 주십시오."
+msgid "보호 브랜치는 프로젝트마다 정합니다. 위에서 프로젝트를 골라 주십시오."
+msgstr "보호 브랜치는 프로젝트마다 정합니다. 위에서 프로젝트를 골라 주십시오."
 
 #. Button that copies a tool call's code block
 #: app/entry/chat/message.tsx
@@ -3108,6 +3114,11 @@ msgstr "브라우저에서 로그인"
 msgid "브라우저에서 로그인 중"
 msgstr "브라우저에서 로그인 중"
 
+#. Card field: the git branch the card's work is on
+#: app/entry/chat/board/card-peek.tsx
+msgid "브랜치"
+msgstr "브랜치"
+
 #: app/entry/settings/shared.tsx
 msgid "비밀정보 확인에 실패해 명령줄을 숨겼습니다."
 msgstr "비밀정보 확인에 실패해 명령줄을 숨겼습니다."
@@ -3130,7 +3141,7 @@ msgstr "빈 파일입니다."
 msgid "사람 판단"
 msgstr "사람 판단"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "사람의 판단을 기다리는 중"
 msgstr "사람의 판단을 기다리는 중"
 
@@ -3150,7 +3161,6 @@ msgstr "사용 안 함"
 #. Badge: image generation is switched on
 #: app/entry/navigation/account-profiles.tsx
 #: app/entry/navigation/compatible-accounts.tsx
-#: app/entry/navigation/sidebar.tsx
 #: app/entry/settings/pages/image.tsx
 msgid "사용 중"
 msgstr "사용 중"
@@ -3216,10 +3226,6 @@ msgstr "사이드바 펼치기"
 msgid "사이드바 펼치기 (⌘B)"
 msgstr "사이드바 펼치기 (⌘B)"
 
-#: app/entry/settings/shared.tsx
-msgid "사이드바에서 프로젝트를 고르면 그 프로젝트의 설정이 보입니다."
-msgstr "사이드바에서 프로젝트를 고르면 그 프로젝트의 설정이 보입니다."
-
 #. Button that deletes a subagent task's record
 #. Button that deletes the BTW thread
 #. Button that removes the endpoint
@@ -3276,18 +3282,10 @@ msgstr "새 계정 로그인을 완료하지 못했습니다. 다시 시도해 �
 msgid "새 계정 이름"
 msgstr "새 계정 이름"
 
-#. Button that starts a conversation
-#. Group of buttons that start a conversation
 #. Title of an empty conversation
 #: app/entry/chat/chat-history.tsx
-#: app/entry/navigation/sidebar.tsx
 msgid "새 대화"
 msgstr "새 대화"
-
-#. Menu heading: who the new conversation talks to
-#: app/entry/navigation/sidebar.tsx
-msgid "새 대화 상대"
-msgstr "새 대화 상대"
 
 #: app/entry/index.tsx
 msgid "새 대화를 만들지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
@@ -3296,6 +3294,11 @@ msgstr "새 대화를 만들지 못했습니다. 잠시 뒤 다시 시도해 주
 #: app/entry/index.tsx
 msgid "새 대화를 시작해 주십시오"
 msgstr "새 대화를 시작해 주십시오"
+
+#. Section in the account sheet: the model new conversations start with
+#: app/entry/navigation/sidebar.tsx
+msgid "새 대화의 기본 모델"
+msgstr "새 대화의 기본 모델"
 
 #. Status badge on a subagent task card
 #: app/entry/chat/message.tsx
@@ -3523,11 +3526,6 @@ msgstr "설정 바뀜, 다시 신뢰 필요"
 msgid "설정 열기"
 msgstr "설정 열기"
 
-#. Account connection status: no compatible endpoint is set up yet
-#: app/entry/navigation/account-model-panel.tsx
-msgid "설정 필요"
-msgstr "설정 필요"
-
 #: app/entry/settings/shared.tsx
 msgid "설정 형식이 맞지 않아 이 파일을 쓰지 않습니다."
 msgstr "설정 형식이 맞지 않아 이 파일을 쓰지 않습니다."
@@ -3539,10 +3537,6 @@ msgstr "설정된 MCP 서버가 없습니다."
 #: app/entry/settings/pages/agents.tsx
 msgid "설정된 에이전트가 없습니다."
 msgstr "설정된 에이전트가 없습니다."
-
-#: app/entry/navigation/sidebar.tsx
-msgid "설정에서 신뢰한 에이전트가 없습니다"
-msgstr "설정에서 신뢰한 에이전트가 없습니다"
 
 #: app/entry/chat/chat-composer.tsx
 msgid "설정에서 이미지 생성을 먼저 켜 주십시오"
@@ -3844,6 +3838,11 @@ msgstr "실행 {chatRunId}"
 msgid "실행 결과를 받지 못함"
 msgstr "실행 결과를 받지 못함"
 
+#. Card field: how often the card failed, was replanned and met conflicts
+#: app/entry/chat/board/card-peek.tsx
+msgid "실행 기록"
+msgstr "실행 기록"
+
 #: app/entry/chat/board/hold-reason.ts
 msgid "실행 기회를 모두 써서 멈췄습니다. 다시 대기열에 넣을 수 있습니다"
 msgstr "실행 기회를 모두 써서 멈췄습니다. 다시 대기열에 넣을 수 있습니다"
@@ -4092,6 +4091,10 @@ msgstr "앱에서 결함이 생기면 요약을 이 웹훅으로 자동 전송 (
 msgid "앱을 다시 시작한 뒤에는 {mode} 모드로 돌아갑니다. 그 모드로 만든 벡터가 없으면 처음부터 다시 만듭니다. 그동안에도 글자 검색과 형태소 검색은 됩니다."
 msgstr "앱을 다시 시작한 뒤에는 {mode} 모드로 돌아갑니다. 그 모드로 만든 벡터가 없으면 처음부터 다시 만듭니다. 그동안에도 글자 검색과 형태소 검색은 됩니다."
 
+#: app/entry/settings/pages/general.tsx
+msgid "앱의 모양과 문제 제보입니다."
+msgstr "앱의 모양과 문제 제보입니다."
+
 #: app/entry/session/run-state.tsx
 msgid "앱이 상태를 고쳤습니다"
 msgstr "앱이 상태를 고쳤습니다"
@@ -4176,9 +4179,7 @@ msgid "여기서는 읽기만 할 수 있습니다."
 msgstr "여기서는 읽기만 할 수 있습니다."
 
 #. Button that opens the endpoint's connection settings
-#. Settings tab group: web, image, MCP and agent pages
 #: app/entry/navigation/compatible-accounts.tsx
-#: app/entry/settings/settings-dialog.tsx
 msgid "연결"
 msgstr "연결"
 
@@ -4186,11 +4187,6 @@ msgstr "연결"
 #: app/entry/settings/pages/agents.tsx
 msgid "연결 실패 {failures}회"
 msgstr "연결 실패 {failures}회"
-
-#. Account connection status: the connection failed
-#: app/entry/navigation/account-model-panel.tsx
-msgid "연결 오류"
-msgstr "연결 오류"
 
 #: app/entry/navigation/compatible-accounts.tsx
 msgid "연결 저장"
@@ -4211,9 +4207,7 @@ msgstr "연결된 결과물이 없습니다."
 msgid "연결된 계정이 없습니다"
 msgstr "연결된 계정이 없습니다"
 
-#. Account connection status
 #. Badge on an agent that is connected
-#: app/entry/navigation/account-model-panel.tsx
 #: app/entry/settings/pages/agents.tsx
 msgid "연결됨"
 msgstr "연결됨"
@@ -4235,9 +4229,19 @@ msgstr "연결하지 못했습니다. 다시 시도해 주십시오."
 msgid "연동·루프·결함"
 msgstr "연동·루프·결함"
 
+#. failures: failures in a row; replans: Plan rewrites; conflicts: conflict rounds
+#: app/entry/chat/board/card-peek.tsx
+msgid "연속 실패 {failures} · Plan 재작성 {replans} · 충돌 해결 {conflicts}"
+msgstr "연속 실패 {failures} · Plan 재작성 {replans} · 충돌 해결 {conflicts}"
+
 #: app/entry/chat/workflow-panel.tsx
 msgid "열린 질문 {count}"
 msgstr "열린 질문 {count}"
+
+#. Description of the project improvement dialog
+#: app/entry/settings/open-improvements.tsx
+msgid "열린 프로젝트 전체의 사용 기록에서 찾습니다."
+msgstr "열린 프로젝트 전체의 사용 기록에서 찾습니다."
 
 #: app/entry/settings/pages/improvements.tsx
 msgid "열린 프로젝트의 최근 90일 사용 기록에서 반복된 정정과 실패를 찾아 저장소마다 고칠 항목과 작업 명세를 문서로 남깁니다. 코드와 에이전트 지침을 함께 고치는 명세입니다. 앱은 저장소를 직접 바꾸지 않습니다."
@@ -4395,10 +4399,6 @@ msgstr "외부 에이전트에게 맡기기"
 msgid "외부 에이전트와 새 대화"
 msgstr "외부 에이전트와 새 대화"
 
-#: app/entry/navigation/sidebar.tsx
-msgid "외부 에이전트와 직접"
-msgstr "외부 에이전트와 직접"
-
 #: app/entry/settings/pages/recall.tsx
 msgid "외부 에이전트와 직접 대화할 때, 메시지와 관련된 기억을 최대 5개까지 출처와 함께 메시지 앞에 붙여 보냅니다. 외부 프로세스로 나가는 내용이라 필요할 때만 켜 주십시오."
 msgstr "외부 에이전트와 직접 대화할 때, 메시지와 관련된 기억을 최대 5개까지 출처와 함께 메시지 앞에 붙여 보냅니다. 외부 프로세스로 나가는 내용이라 필요할 때만 켜 주십시오."
@@ -4413,8 +4413,8 @@ msgid "왼쪽에서 OpenAI 호환 공급자를 설정하거나 구독 계정에 
 msgstr "왼쪽에서 OpenAI 호환 공급자를 설정하거나 구독 계정에 로그인해 주십시오."
 
 #: app/entry/index.tsx
-msgid "왼쪽의 새 대화 버튼을 눌러 주십시오."
-msgstr "왼쪽의 새 대화 버튼을 눌러 주십시오."
+msgid "왼쪽에서 프로젝트 이름 옆의 + 버튼을 눌러 주십시오."
+msgstr "왼쪽에서 프로젝트 이름 옆의 + 버튼을 눌러 주십시오."
 
 #. Compaction stage: earlier turns were summarized
 #: app/entry/chat/context-meter.tsx
@@ -4524,6 +4524,10 @@ msgstr "웹훅 설정을 확인하지 못했습니다. 복사·저장으로 직�
 msgid "위 프로젝트의 카드부터 실행합니다. 한 프로젝트 안에서는 칸반 보드의 대화 순서를 따릅니다."
 msgstr "위 프로젝트의 카드부터 실행합니다. 한 프로젝트 안에서는 칸반 보드의 대화 순서를 따릅니다."
 
+#: app/entry/settings/shared.tsx
+msgid "위에서 프로젝트를 고르면 그 프로젝트의 설정이 보입니다."
+msgstr "위에서 프로젝트를 고르면 그 프로젝트의 설정이 보입니다."
+
 #: app/entry/chat/chat-composer.tsx
 msgid "위의 승인 요청에 먼저 답해 주십시오"
 msgstr "위의 승인 요청에 먼저 답해 주십시오"
@@ -4581,7 +4585,7 @@ msgstr "의존"
 msgid "의존 관계가 올바르지 않습니다. 없는 카드나 순환 의존을 확인해 주십시오."
 msgstr "의존 관계가 올바르지 않습니다. 없는 카드나 순환 의존을 확인해 주십시오."
 
-#. Card editor field: ids of the cards this card waits for
+#. Card editor field: the cards this card waits for
 #: app/entry/chat/board/card-peek.tsx
 msgid "의존 카드"
 msgstr "의존 카드"
@@ -4619,6 +4623,10 @@ msgstr "이 Goal을 중단할까요?"
 msgid "이 Goal의 카드 브랜치(취소한 카드 것 포함)가 남아 있어 대상 브랜치를 바꿀 수 없습니다."
 msgstr "이 Goal의 카드 브랜치(취소한 카드 것 포함)가 남아 있어 대상 브랜치를 바꿀 수 없습니다."
 
+#: app/entry/chat/board/card-peek.tsx
+msgid "이 Plan에 다른 카드가 없습니다."
+msgstr "이 Plan에 다른 카드가 없습니다."
+
 #: app/entry/chat/board-panel.tsx
 msgid "이 Plan을 닫을까요?"
 msgstr "이 Plan을 닫을까요?"
@@ -4639,9 +4647,19 @@ msgstr "이 대화로 아직 모델에 요청하지 않았습니다."
 msgid "이 대화를 쓸 수 있는지 확인하지 못했습니다"
 msgstr "이 대화를 쓸 수 있는지 확인하지 못했습니다"
 
+#: app/entry/chat/board-panel.tsx
+msgid "이 대화에는 아직 Plan이 없습니다. Plan이 생기면 보드에 카드가 올라옵니다."
+msgstr "이 대화에는 아직 Plan이 없습니다. Plan이 생기면 보드에 카드가 올라옵니다."
+
 #: app/entry/chat/work-trace-panel.tsx
 msgid "이 대화에서 진행 중인 카드 작업과 하위 에이전트를 확인합니다."
 msgstr "이 대화에서 진행 중인 카드 작업과 하위 에이전트를 확인합니다."
+
+#. Composer button that opens this conversation's model picker
+#. Hover text of the composer button that opens the model picker
+#: app/entry/chat/model-picker.tsx
+msgid "이 대화의 모델"
+msgstr "이 대화의 모델"
 
 #: app/entry/chat/queue-panel.tsx
 msgid "이 메시지를 보내지 못했습니다. 보내기를 누르면 다시 보냅니다."
@@ -4664,6 +4682,11 @@ msgstr "이 문안은 {deliveredAt}에 이미 보냈습니다."
 msgid "이 문안의 이전 전송({attemptedAt})은 확인되지 않았습니다. 채널을 확인한 뒤 필요하면 다시 보내 주십시오."
 msgstr "이 문안의 이전 전송({attemptedAt})은 확인되지 않았습니다. 채널을 확인한 뒤 필요하면 다시 보내 주십시오."
 
+#. Description of the theme field
+#: app/entry/shared/theme.tsx
+msgid "이 브라우저에 저장됩니다."
+msgstr "이 브라우저에 저장됩니다."
+
 #: app/entry/report/report-delivery.tsx
 msgid "이 서버에 개발자 웹훅이 설정되지 않았습니다"
 msgstr "이 서버에 개발자 웹훅이 설정되지 않았습니다"
@@ -4679,11 +4702,6 @@ msgstr "이 스크립트가 접속할 수 있는 호스트(이 목록 밖으로�
 #: app/entry/navigation/account-profiles.tsx
 msgid "이 앱의 계정 목록에서도 지웁니다."
 msgstr "이 앱의 계정 목록에서도 지웁니다."
-
-#. Menu item: talk to this app's own model
-#: app/entry/navigation/sidebar.tsx
-msgid "이 앱의 모델"
-msgstr "이 앱의 모델"
 
 #: app/entry/chat/slash-commands.ts
 msgid "이 앱의 모델과 새 대화"
@@ -4721,6 +4739,10 @@ msgstr "이 작업의 기록을 삭제할까요?"
 msgid "이 작업의 대화 기록을 지웁니다. 프로젝트 기억으로 채택된 내용과 그 출처 기록은 남습니다."
 msgstr "이 작업의 대화 기록을 지웁니다. 프로젝트 기억으로 채택된 내용과 그 출처 기록은 남습니다."
 
+#: app/entry/chat/board/card-peek.tsx
+msgid "이 카드를 거절할까요?"
+msgstr "이 카드를 거절할까요?"
+
 #: app/entry/chat/board/board-surface.tsx
 msgid "이 카드를 기다리는 카드가 있어서 옮길 수 없습니다. 그 카드의 의존을 먼저 풀어 주십시오."
 msgstr "이 카드를 기다리는 카드가 있어서 옮길 수 없습니다. 그 카드의 의존을 먼저 풀어 주십시오."
@@ -4738,13 +4760,9 @@ msgstr "이 페이지와 연결이 끊겼지만 서버에서는 계속 답하고
 msgid "이 프로젝트의 대화가 도구를 부를 때 따르는 권한 모드입니다. 바꾸면 다음 도구 호출부터 적용됩니다."
 msgstr "이 프로젝트의 대화가 도구를 부를 때 따르는 권한 모드입니다. 바꾸면 다음 도구 호출부터 적용됩니다."
 
-#: app/entry/settings/pages/permission.tsx
+#: app/entry/settings/permission-mode-select.tsx
 msgid "이 프로젝트의 대화가 셸 명령과 MCP 도구처럼 승인을 받던 도구를 묻지 않고 바로 실행합니다. 믿을 수 있는 프로젝트에서만 써 주십시오."
 msgstr "이 프로젝트의 대화가 셸 명령과 MCP 도구처럼 승인을 받던 도구를 묻지 않고 바로 실행합니다. 믿을 수 있는 프로젝트에서만 써 주십시오."
-
-#: app/entry/navigation/decision-inbox.tsx
-msgid "이 프로젝트의 모든 대화와 Goal에서 사람의 판단이나 승인을 기다리는 카드입니다. 여기서 답하거나 승인하고, 카드가 있는 보드로 이동합니다."
-msgstr "이 프로젝트의 모든 대화와 Goal에서 사람의 판단이나 승인을 기다리는 카드입니다. 여기서 답하거나 승인하고, 카드가 있는 보드로 이동합니다."
 
 #. Button that removes one item from the diagnosis list
 #: app/entry/report/report-diagnosis.tsx
@@ -4960,6 +4978,13 @@ msgstr "인자"
 msgid "인증 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주십시오."
 msgstr "인증 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주십시오."
 
+#. Settings page name: theme and problem reporting
+#. Settings tab group: pages about the app itself, not one project
+#: app/entry/settings/settings-dialog.tsx
+#: app/entry/settings/shared.tsx
+msgid "일반"
+msgstr "일반"
+
 #. Hover text of the Chat mode button: plain chat
 #: app/entry/chat/chat-composer.tsx
 msgid "일반 대화"
@@ -5059,10 +5084,8 @@ msgstr "자동 merge 멈춤"
 
 #. Badge: the automatic Plan writer has stopped
 #. Badge: the automatic Plan writer has stopped
-#. Badge: the automatic Plan writer has stopped
-#. Badge: the automatic Plan writer has stopped
 #: app/entry/chat/board-panel.tsx
-#: app/entry/chat/board/project-board.tsx
+#: app/entry/chat/board/board-surface.tsx
 msgid "자동 Plan 작성 멈춤"
 msgstr "자동 Plan 작성 멈춤"
 
@@ -5093,7 +5116,7 @@ msgid "자동 판단"
 msgstr "자동 판단"
 
 #. Project permission mode `auto`
-#: app/entry/settings/pages/permission.tsx
+#: app/entry/settings/permission-mode-select.tsx
 msgid "자동 판단 (auto)"
 msgstr "자동 판단 (auto)"
 
@@ -5177,9 +5200,14 @@ msgstr "작업 중단을 기다리고 있습니다. 완료 후 다시 확인해 
 msgid "작업 트리"
 msgstr "작업 트리"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "작업 트리에 커밋하지 않은 변경이 있어 기다리는 중 ({worktree})"
 msgstr "작업 트리에 커밋하지 않은 변경이 있어 기다리는 중 ({worktree})"
+
+#. Card field: the folder the card's work is in
+#: app/entry/chat/board/card-peek.tsx
+msgid "작업 폴더"
+msgstr "작업 폴더"
 
 #: app/entry/chat/chat-panel.tsx
 msgid "작업을 보관하지 못했습니다."
@@ -5290,22 +5318,27 @@ msgid "전체 경로 복사"
 msgstr "전체 경로 복사"
 
 #. Project permission mode `full`
-#: app/entry/settings/pages/permission.tsx
+#: app/entry/settings/permission-mode-select.tsx
 msgid "전체 권한 (full)"
 msgstr "전체 권한 (full)"
 
 #. Dialog button that confirms switching the project to full permission
-#: app/entry/settings/pages/permission.tsx
+#: app/entry/settings/permission-mode-select.tsx
 msgid "전체 권한으로 바꾸기"
 msgstr "전체 권한으로 바꾸기"
 
-#: app/entry/settings/pages/permission.tsx
+#: app/entry/settings/permission-mode-select.tsx
 msgid "전체 권한으로 바꿀까요?"
 msgstr "전체 권한으로 바꿀까요?"
 
 #: app/entry/report/report-draft.tsx
 msgid "전체 내용: 첨부 context-agent-evidence.json (세션 #{session}, run {runs}/{runCount}개)"
 msgstr "전체 내용: 첨부 context-agent-evidence.json (세션 #{session}, run {runs}/{runCount}개)"
+
+#. Button that folds a project's conversation list back to its first rows
+#: app/entry/navigation/sidebar.tsx
+msgid "접기"
+msgstr "접기"
 
 #. Status badge of a background loop that runs fine
 #: app/entry/shared/loop-health.tsx
@@ -5323,6 +5356,7 @@ msgid "제목"
 msgstr "제목"
 
 #: app/entry/chat/board/project-board.tsx
+#: app/entry/index.tsx
 #: app/entry/navigation/decision-inbox.tsx
 #: app/entry/navigation/sidebar.tsx
 msgid "제목 없는 대화"
@@ -5340,6 +5374,11 @@ msgstr "제보 대화에서는 이미지를 만들 수 없습니다."
 #: app/entry/report/report-draft.tsx
 msgid "제보 문안"
 msgstr "제보 문안"
+
+#. Link that opens the problem report page
+#: app/entry/settings/pages/general.tsx
+msgid "제보 화면 열기"
+msgstr "제보 화면 열기"
 
 #. Button that copies the report and evidence to the clipboard
 #: app/routes/report.tsx
@@ -5471,6 +5510,11 @@ msgstr "증거 수집"
 msgid "증상: {symptom}"
 msgstr "증상: {symptom}"
 
+#. Description of the problem report link field
+#: app/entry/settings/pages/general.tsx
+msgid "증상과 진단 정보를 모아 개발자에게 보냅니다. 열려 있는 대화에 대한 제보 화면으로 이동합니다."
+msgstr "증상과 진단 정보를 모아 개발자에게 보냅니다. 열려 있는 대화에 대한 제보 화면으로 이동합니다."
+
 #: app/entry/chat/board/card-peek.tsx
 msgid "지금 Goal에는 없는 결과입니다."
 msgstr "지금 Goal에는 없는 결과입니다."
@@ -5536,11 +5580,6 @@ msgstr "지우기"
 msgid "지정 안 함"
 msgstr "지정 안 함"
 
-#. Settings tab group: skill instructions for the model
-#: app/entry/settings/settings-dialog.tsx
-msgid "지침"
-msgstr "지침"
-
 #: app/entry/settings/pages/improvements.tsx
 msgid "지침: {rule}"
 msgstr "지침: {rule}"
@@ -5554,7 +5593,7 @@ msgstr "지침과 도구 정의를 포함한 마지막 요청 기준입니다. /
 msgid "직접 merge"
 msgstr "직접 merge"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "직접 merge하기로 함, Goal 브랜치를 남겨 둠"
 msgstr "직접 merge하기로 함, Goal 브랜치를 남겨 둠"
 
@@ -5600,14 +5639,12 @@ msgstr "진단 정보"
 msgid "진단 중입니다. 기다리는 동안에도 제보문을 복사·저장·전송할 수 있습니다."
 msgstr "진단 중입니다. 기다리는 동안에도 제보문을 복사·저장·전송할 수 있습니다."
 
-#. Conversation list section: conversations answering or running a board
 #. Goal outcome status: its cards are being worked on
 #. Goal status: being worked on
 #. Kanban card status and column: an agent is working on it
 #: app/entry/chat/board/board-moves.ts
 #: app/entry/chat/outcome-checklist.tsx
 #: app/entry/chat/workflow-panel.tsx
-#: app/entry/navigation/sidebar.tsx
 msgid "진행 중"
 msgstr "진행 중"
 
@@ -5615,10 +5652,6 @@ msgstr "진행 중"
 #: app/entry/navigation/sidebar.tsx
 msgid "진행 중 {count}개"
 msgstr "진행 중 {count}개"
-
-#: app/entry/navigation/sidebar.tsx
-msgid "진행 중인 대화가 없습니다."
-msgstr "진행 중인 대화가 없습니다."
 
 #: app/entry/chat/message.tsx
 msgid "진행 중인 작업에 알림"
@@ -5733,6 +5766,11 @@ msgstr "최종 제보 문안: 전송·복사·저장 전에 민감정보를 확�
 msgid "추가"
 msgstr "추가"
 
+#. Folded part of the card editor: boundaries, risk, required evidence, human decision
+#: app/entry/chat/board/card-peek.tsx
+msgid "추가 조건"
+msgstr "추가 조건"
+
 #: app/entry/navigation/account-profiles.tsx
 msgid "추가한 계정이 없습니다."
 msgstr "추가한 계정이 없습니다."
@@ -5769,17 +5807,27 @@ msgstr "추론 강도를 골라 주십시오."
 msgid "추론 내용"
 msgstr "추론 내용"
 
+#. Select in the model picker: how much the model reasons
+#: app/entry/chat/model-picker.tsx
+msgid "추론 단계"
+msgstr "추론 단계"
+
 #. Title of the model's reasoning while it is still thinking
 #: app/entry/chat/message.tsx
 msgid "추론 중"
 msgstr "추론 중"
+
+#. Placeholder of the source select in the model picker
+#: app/entry/chat/model-picker.tsx
+msgid "출처 고르기"
+msgstr "출처 고르기"
 
 #. BTW tool call: follows where a memory came from
 #: app/entry/chat/btw-panel.tsx
 msgid "출처 추적"
 msgstr "출처 추적"
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "충돌로 자동 merge를 멈췄습니다"
 msgstr "충돌로 자동 merge를 멈췄습니다"
 
@@ -5812,8 +5860,8 @@ msgstr "충족"
 #: app/entry/navigation/sidebar.tsx
 #: app/entry/settings/pages/mcp-login.tsx
 #: app/entry/settings/pages/mcp.tsx
-#: app/entry/settings/pages/permission.tsx
 #: app/entry/settings/pages/web.tsx
+#: app/entry/settings/permission-mode-select.tsx
 msgid "취소"
 msgstr "취소"
 
@@ -5847,9 +5895,10 @@ msgstr "카드 {done}/{cardCount}"
 msgid "카드 {done}/{total} 완료"
 msgstr "카드 {done}/{total} 완료"
 
+#. Button that confirms rejecting a card waiting for approval
 #: app/entry/chat/board/card-peek.tsx
-msgid "카드 id를 쉼표로 구분합니다."
-msgstr "카드 id를 쉼표로 구분합니다."
+msgid "카드 거절"
+msgstr "카드 거절"
 
 #. Decision answer: redo the card's work
 #: app/entry/chat/decision-prompt.tsx
@@ -5891,7 +5940,8 @@ msgstr "카드 작업 폴더를 준비하지 못했습니다"
 msgid "카드 작업 폴더에 정리되지 않은 변경이 있습니다"
 msgstr "카드 작업 폴더에 정리되지 않은 변경이 있습니다"
 
-#. Button that opens the form for a new card in this conversation
+#. Button that opens the form for a new card
+#. Button that opens the form for a new card
 #. Title of the form that adds a new card
 #: app/entry/chat/board-panel.tsx
 #: app/entry/chat/board/card-peek.tsx
@@ -5905,11 +5955,21 @@ msgstr "카드 추가"
 msgid "카드 취소"
 msgstr "카드 취소"
 
+#. Name of the panel beside the board that shows one card
+#: app/entry/chat/board/card-peek.tsx
+msgid "카드 패널"
+msgstr "카드 패널"
+
+#. Button that closes the card panel beside the board
+#: app/entry/chat/board/card-peek.tsx
+msgid "카드 패널 닫기"
+msgstr "카드 패널 닫기"
+
 #: app/entry/settings/pages/kanban.tsx
 msgid "카드 하나를 맡아 그 카드의 worktree에서 작업하는 카드 에이전트의 모델입니다."
 msgstr "카드 하나를 맡아 그 카드의 worktree에서 작업하는 카드 에이전트의 모델입니다."
 
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/goal-merge.tsx
 msgid "카드가 모두 끝난 뒤 merge합니다"
 msgstr "카드가 모두 끝난 뒤 merge합니다"
 
@@ -5947,10 +6007,10 @@ msgstr "카드마다 에이전트를 따로 두고 보드가 배정·검증·통
 msgid "칸반 동시 실행"
 msgstr "칸반 동시 실행"
 
-#. Sidebar menu item that opens the project's kanban board
+#. Menu item that opens the project's kanban board
 #: app/entry/chat/board-panel.tsx
 #: app/entry/chat/board/kanban-board.tsx
-#: app/entry/navigation/project-board-button.tsx
+#: app/entry/navigation/project-menu.tsx
 #: app/entry/report/report-bundle.tsx
 msgid "칸반 보드"
 msgstr "칸반 보드"
@@ -6259,11 +6319,6 @@ msgstr "폴더 경로"
 msgid "폴더 경로가 아닙니다."
 msgstr "폴더 경로가 아닙니다."
 
-#. Hint on a project whose folder no longer exists
-#: app/entry/navigation/sidebar.tsx
-msgid "폴더 없음"
-msgstr "폴더 없음"
-
 #. Button that adds a project from a folder
 #. Button that adds a project from a folder
 #: app/entry/navigation/sidebar.tsx
@@ -6287,28 +6342,27 @@ msgstr "폴더의 절대 경로를 입력해 주십시오. 등록한 폴더 안�
 msgid "표시 없음, 기본값: {shown}"
 msgstr "표시 없음, 기본값: {shown}"
 
+#. Label of the settings dialog's project picker
 #. Scope badge: set in this project's config
-#. Sidebar section of project settings
-#. Sidebar section of project settings
-#: app/entry/navigation/sidebar.tsx
+#. Settings tab group: pages that apply to the project chosen above
+#: app/entry/settings/settings-dialog.tsx
 #: app/entry/settings/shared.tsx
 msgid "프로젝트"
 msgstr "프로젝트"
 
-#. Project section button; name is the selected project's name
-#: app/entry/navigation/sidebar.tsx
-msgid "프로젝트 {name}"
-msgstr "프로젝트 {name}"
-
+#. Menu item that opens the project improvement reports
 #. Settings page name: finding repeated corrections in project history
+#. Title of the project improvement dialog
+#: app/entry/navigation/project-menu.tsx
+#: app/entry/settings/open-improvements.tsx
 #: app/entry/settings/shared.tsx
 msgid "프로젝트 개선"
 msgstr "프로젝트 개선"
 
-#. Placeholder of the project search box
-#: app/entry/navigation/sidebar.tsx
-msgid "프로젝트 검색"
-msgstr "프로젝트 검색"
+#. Placeholder of the settings dialog's project picker
+#: app/entry/settings/settings-dialog.tsx
+msgid "프로젝트 고르기"
+msgstr "프로젝트 고르기"
 
 #: app/entry/navigation/sidebar.tsx
 msgid "프로젝트 기억으로 채택된 내용과 그 출처 기록은 남습니다."
@@ -6350,8 +6404,8 @@ msgstr "프로젝트 밖 파일을 삭제할까요?"
 msgid "프로젝트 밖 파일을 쓸까요?"
 msgstr "프로젝트 밖 파일을 쓸까요?"
 
-#. Tooltip: archiving takes the project out of the list
-#: app/entry/navigation/sidebar.tsx
+#. Menu item that archives the project
+#: app/entry/navigation/project-menu.tsx
 msgid "프로젝트 보관"
 msgstr "프로젝트 보관"
 
@@ -6359,9 +6413,10 @@ msgstr "프로젝트 보관"
 msgid "프로젝트 사용 기록을 읽지 못했습니다."
 msgstr "프로젝트 사용 기록을 읽지 못했습니다."
 
-#: app/entry/navigation/sidebar.tsx
-msgid "프로젝트 선택"
-msgstr "프로젝트 선택"
+#. Menu item that opens the project's settings
+#: app/entry/navigation/project-menu.tsx
+msgid "프로젝트 설정"
+msgstr "프로젝트 설정"
 
 #. Badge on a user-wide entry that a project entry of the same name replaces
 #: app/entry/settings/shared.tsx
@@ -6374,6 +6429,7 @@ msgstr "프로젝트 설정으로 대체됨"
 msgid "프로젝트 순서"
 msgstr "프로젝트 순서"
 
+#. Button that adds a project from a folder
 #. Button that adds a project from a folder
 #: app/entry/index.tsx
 #: app/entry/navigation/sidebar.tsx
@@ -6388,6 +6444,10 @@ msgstr "프로젝트 칸반 보드"
 msgid "프로젝트 폴더({root})가 없습니다. 옮기거나 지웠다면 이 프로젝트를 보관해 주십시오. 대화와 기억은 남습니다."
 msgstr "프로젝트 폴더({root})가 없습니다. 옮기거나 지웠다면 이 프로젝트를 보관해 주십시오. 대화와 기억은 남습니다."
 
+#: app/entry/navigation/sidebar.tsx
+msgid "프로젝트 폴더가 없습니다"
+msgstr "프로젝트 폴더가 없습니다"
+
 #: app/entry/chat/chat-composer.tsx
 msgid "프로젝트를 변경하지 않은 채 Plan을 만듭니다. 승인하면 보드에서 실행합니다"
 msgstr "프로젝트를 변경하지 않은 채 Plan을 만듭니다. 승인하면 보드에서 실행합니다"
@@ -6396,7 +6456,7 @@ msgstr "프로젝트를 변경하지 않은 채 Plan을 만듭니다. 승인하�
 msgid "프로젝트를 보관에서 꺼내지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
 msgstr "프로젝트를 보관에서 꺼내지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
 
-#: app/entry/index.tsx
+#: app/entry/navigation/project-menu.tsx
 #: app/entry/settings/settings-dialog.tsx
 msgid "프로젝트를 보관하지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
 msgstr "프로젝트를 보관하지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
@@ -6487,9 +6547,10 @@ msgstr "호환 공급자 요청에 실패했습니다."
 msgid "호환 공급자를 설정해 주십시오"
 msgstr "호환 공급자를 설정해 주십시오"
 
+#. Field label: the app's color theme
 #: app/entry/shared/theme.tsx
-msgid "화면 테마: {label}"
-msgstr "화면 테마: {label}"
+msgid "화면 테마"
+msgstr "화면 테마"
 
 #. Goal outcome status: waiting for a verifier to check it
 #: app/entry/chat/outcome-checklist.tsx
@@ -6500,11 +6561,6 @@ msgstr "확인 대기"
 #: app/entry/chat/work-trace-panel.tsx
 msgid "확인 전"
 msgstr "확인 전"
-
-#. Account connection status: still being checked
-#: app/entry/navigation/account-model-panel.tsx
-msgid "확인 중"
-msgstr "확인 중"
 
 #: app/entry/settings/pages/embedding.tsx
 msgid "확인 중 문제가 생겼습니다."
@@ -6525,7 +6581,7 @@ msgid "확인 필요 카드 {replanWaits}"
 msgstr "확인 필요 카드 {replanWaits}"
 
 #. Badge: blocked cards the planner did not replan, waiting for the user
-#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/board-surface.tsx
 msgid "확인 필요 카드 {waiting}"
 msgstr "확인 필요 카드 {waiting}"
 
@@ -6541,6 +6597,11 @@ msgstr "확인됨"
 #: app/entry/settings/pages/embedding.tsx
 msgid "확인하는 중입니다. 처음 확인할 때는 GPU용 모델(약 570MB)을 내려받습니다."
 msgstr "확인하는 중입니다. 처음 확인할 때는 GPU용 모델(약 570MB)을 내려받습니다."
+
+#. Badge on the status panel's button: conversations that wait for the user
+#: app/entry/chat/board/project-board.tsx
+msgid "확인할 대화 {attention}"
+msgstr "확인할 대화 {attention}"
 
 #: app/entry/chat/uncertain-runs.tsx
 msgid "확인할 목록이 바뀌었습니다. 새 목록을 확인해 주십시오."

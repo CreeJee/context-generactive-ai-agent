@@ -377,8 +377,8 @@ export function WorkTracePanel({ projectId, sessionId }: { projectId: string; se
           type="button"
           size="icon-sm"
           variant="outline"
-          className="fixed top-3 right-3 z-30"
           aria-label={t`Work Trace 열기`}
+          title={t`Work Trace 열기`}
           onClick={() => setOpen(true)}
         >
           <PanelRightOpenIcon />

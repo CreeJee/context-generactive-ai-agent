@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { ModelSelection } from "../providers/contracts.ts";
 
 /**
  * Conversations and who holds them, as the page reads them. This module imports no server code,
@@ -20,6 +21,8 @@ export const Session = Schema.Struct({
   worktreePath: Schema.NullOr(Schema.String),
   /** The branch it ran on, when that was recorded. */
   branch: Schema.NullOr(Schema.String),
+  /** The model this conversation runs on; null follows the app's selected model. */
+  model: Schema.NullOr(ModelSelection),
 });
 export type Session = typeof Session.Type;
 

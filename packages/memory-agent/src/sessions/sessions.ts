@@ -4,6 +4,7 @@ import { SecureRandom } from "effect/crypto";
 import { SqlClient, SqlError, SqlSchema } from "effect/sql";
 import { firstMessageTitle } from "./title.ts";
 import { Projects } from "../projects/projects.ts";
+import { ModelSelection } from "../providers/contracts.ts";
 import { Session } from "./contracts.ts";
 
 export { Session } from "./contracts.ts";
@@ -30,7 +31,12 @@ const SessionRow = Schema.Struct({
   imported_from: Schema.NullOr(Schema.String),
   worktree_path: Schema.NullOr(Schema.String),
   branch: Schema.NullOr(Schema.String),
+  model_selection: Schema.NullOr(Schema.String),
 });
+const decodeModel = Schema.decodeUnknownOption(Schema.fromJsonString(ModelSelection));
+/** The stored model; text that no longer reads as one counts as none. */
+const storedModel = (text: string | null): ModelSelection | null =>
+  text === null ? null : Option.getOrNull(decodeModel(text));
 function toSession(row: typeof SessionRow.Type): Session {
   return {
     id: row.id,
@@ -42,6 +48,7 @@ function toSession(row: typeof SessionRow.Type): Session {
     importedFrom: row.imported_from,
     worktreePath: row.worktree_path,
     branch: row.branch,
+    model: storedModel(row.model_selection),
   };
 }
 
@@ -60,6 +67,7 @@ const NewSession = Schema.Struct({
   agent: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   branch: Schema.NullOr(Schema.String),
+  modelSelection: Schema.NullOr(Schema.String),
 });
 
 const make = Effect.gen(function* () {
@@ -102,7 +110,7 @@ const make = Effect.gen(function* () {
   const columns = sql`sessions.id, sessions.project_id, sessions.title, sessions.created_at,
     sessions.agent, sessions.archived_at,
     (SELECT i.source FROM imported_sessions i WHERE i.session_id = sessions.id) AS imported_from,
-    sessions.worktree_path, sessions.branch`;
+    sessions.worktree_path, sessions.branch, sessions.model_selection`;
   const byId = SqlSchema.findOneOption({
     Request: Schema.String,
     Result: SessionRow,
@@ -112,9 +120,10 @@ const make = Effect.gen(function* () {
     Request: NewSession,
     Result: SessionRow,
     execute: (row) => sql`
-      INSERT INTO sessions (id, project_id, title, created_at, agent, worktree_path, branch)
+      INSERT INTO sessions (id, project_id, title, created_at, agent, worktree_path, branch,
+        model_selection)
       VALUES (${row.id}, ${row.projectId}, ${row.title}, ${row.createdAt}, ${row.agent},
-        ${row.worktreePath}, ${row.branch})
+        ${row.worktreePath}, ${row.branch}, ${row.modelSelection})
       RETURNING ${columns}`,
   });
   const list = SqlSchema.findAll({
@@ -132,12 +141,27 @@ const make = Effect.gen(function* () {
     execute: ({ id, archivedAt }) =>
       sql`UPDATE sessions SET archived_at = ${archivedAt} WHERE id = ${id} RETURNING ${columns}`,
   });
+  const storeModel = SqlSchema.findOneOption({
+    Request: Schema.Struct({ id: Schema.String, modelSelection: Schema.NullOr(Schema.String) }),
+    Result: SessionRow,
+    execute: ({ id, modelSelection }) =>
+      sql`UPDATE sessions SET model_selection = ${modelSelection} WHERE id = ${id} RETURNING ${columns}`,
+  });
+  const encodeModel = (model: ModelSelection | null) =>
+    model === null
+      ? Effect.succeed(null)
+      : Schema.encodeEffect(Schema.fromJsonString(ModelSelection))(model);
 
   return {
     get: (id: string) => Effect.flatMap(byId(id), found(id)),
 
     /** Fails with ProjectNotFound when the project is not registered. */
-    create: (projectId: string, title: string | null = null, agent: string | null = null) =>
+    create: (
+      projectId: string,
+      title: string | null = null,
+      agent: string | null = null,
+      model: ModelSelection | null = null,
+    ) =>
       Effect.gen(function* () {
         yield* projects.get(projectId);
         const row = yield* insert({
@@ -148,6 +172,7 @@ const make = Effect.gen(function* () {
           agent,
           worktreePath: null,
           branch: null,
+          modelSelection: yield* encodeModel(model),
         });
         return toSession(row);
       }),
@@ -173,6 +198,7 @@ const make = Effect.gen(function* () {
           agent: null,
           worktreePath: origin.worktreePath,
           branch: origin.branch,
+          modelSelection: null,
         });
         yield* sql`INSERT INTO imported_sessions (source, external_id, session_id)
           VALUES (${transcript.source}, ${transcript.externalId}, ${row.id})`;
@@ -197,6 +223,13 @@ const make = Effect.gen(function* () {
     setArchived: (id: string, archived: boolean) =>
       Effect.gen(function* () {
         const row = yield* archive({ id, archivedAt: archived ? yield* isoNow : null });
+        return yield* found(id)(row);
+      }),
+
+    /** Gives the conversation a model of its own, or with null lets it follow the app's again. */
+    setModel: (id: string, model: ModelSelection | null) =>
+      Effect.gen(function* () {
+        const row = yield* storeModel({ id, modelSelection: yield* encodeModel(model) });
         return yield* found(id)(row);
       }),
   };

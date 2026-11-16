@@ -1,6 +1,7 @@
 import { Effect, Match, Option, Predicate } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 import {
+  ActiveProvider,
   AgentChat,
   AppEvents,
   BoardAuthor,
@@ -40,6 +41,7 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
     const workflows = yield* Workflows;
     const actions = yield* KanbanBoardActions;
     const chat = yield* AgentChat;
+    const active = yield* ActiveProvider;
 
     /** Refuses a change while another page holds the session. */
     const checkHolder = (sessionId: string, holder: string | undefined) =>
@@ -88,7 +90,15 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
             onNone: () => Effect.void,
             onSome: (external) => checkAgent(projectId, external),
           });
-          const created = yield* sessions.create(projectId, title ?? null, agent ?? null);
+          // A conversation the app's own model answers starts on the model selected now.
+          const model = Option.isSome(Option.fromNullishOr(agent))
+            ? null
+            : // A provider that is not registered leaves the model unset; the run reports it.
+              yield* active.selected.pipe(
+                Effect.catchTag("ProviderUnavailable", () => Effect.succeed(null)),
+                Effect.orDie,
+              );
+          const created = yield* sessions.create(projectId, title ?? null, agent ?? null, model);
           yield* events.publishProject(projectId, "sessions");
           return created;
         }).pipe(
@@ -167,6 +177,18 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
             KanbanStorageFailed: kanbanRefusal.KanbanStorageFailed,
             WorkflowStorageError: kanbanRefusal.WorkflowStorageError,
             GoalScheduleStorageFailed: kanbanRefusal.GoalScheduleStorageFailed,
+            SqlError: kanbanRefusal.SqlError,
+            SchemaError: kanbanRefusal.SchemaError,
+          }),
+        ),
+      cardFolder: ({ params: { session, card } }) =>
+        sessions.get(session).pipe(
+          Effect.andThen(actions.cardFolder(session, card)),
+          Effect.map(Option.getOrNull),
+          Effect.catchTags({
+            SessionNotFound: kanbanRefusal.SessionNotFound,
+            KanbanStorageFailed: kanbanRefusal.KanbanStorageFailed,
+            WorkflowStorageError: kanbanRefusal.WorkflowStorageError,
             SqlError: kanbanRefusal.SqlError,
             SchemaError: kanbanRefusal.SchemaError,
           }),
@@ -283,6 +305,35 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
       continuePastUncertain: ({ params: { session }, headers, payload }) =>
         refusalsOnly(
           chat.continuePastUncertain(session, headers["x-session-holder"] ?? null, payload),
+        ),
+      setModel: ({ params: { session }, headers, payload: { model } }) =>
+        Effect.gen(function* () {
+          yield* checkHolder(session, headers["x-session-holder"]);
+          // A model of its own must be one its provider lists; none needs no check.
+          yield* Option.match(Option.fromNullishOr(model), {
+            onNone: () => Effect.void,
+            onSome: (chosen) => Effect.asVoid(active.checked(chosen)),
+          });
+          const changed = yield* sessions.setModel(session, model);
+          yield* events.publishProject(changed.projectId, "sessions");
+          yield* events.publishSession(session, "run-state");
+          return changed;
+        }).pipe(
+          Effect.catchTags(
+            {
+              SessionNotFound: () => Effect.fail({ error: "session_not_found" } as const),
+              ModelUnavailable: (unavailable) =>
+                Effect.fail({
+                  error: "model_unavailable",
+                  provider: unavailable.provider,
+                  model: unavailable.model,
+                  reasoningEffort: unavailable.reasoningEffort ?? null,
+                } as const),
+              ProviderUnavailable: () => Effect.fail({ error: "provider_unavailable" } as const),
+              ProviderOperationFailed: () => Effect.fail({ error: "model_list_failed" } as const),
+            },
+            (failure) => Effect.die(failure),
+          ),
         ),
       lease: ({ params: { session }, payload: { holder, action } }) =>
         refusalsOnly(chat.lease(session, holder, action)).pipe(

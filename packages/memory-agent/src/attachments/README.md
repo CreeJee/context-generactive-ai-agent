@@ -21,6 +21,8 @@
 - `maxDrawingBytes` — 그림으로 바꿀 SVG의 최대 크기 2MiB
 - `ModelImage` — 모델로 보낼 이미지 `{ path, mimeType }` 인터페이스
 - `modelImagesHook(attachments)` — `RunHook`을 만드는 Effect. run마다 하나 만든다. `request` 단계에서 history의 비-assistant 메시지 이미지 URL 파트를 inline data 이미지로 바꾼다. 첨부가 없으면 `[Attached image is unavailable.]` 텍스트로 바꾼다. 저장된 이미지는 바뀌지 않으므로 이미지마다 run에서 한 번만 읽고 base64로 바꾼다
+- `Attachments.linkStored(nodeId, attachmentIds)` — 이미 저장된 그림을 그 결과를 기록하는 node에 묶는다. 이미 지워진 id는 건너뛴다(`INSERT ... SELECT ... FROM attachments`)
+- `picturesIn(result)` — 도구 결과 JSON이 가리키는 그림의 첨부 id 목록(`preview.attachmentId`). 없으면 빈 배열이다
 - `DrawingPreviews` — `Context.Service`(`memory-agent/attachments/previews/DrawingPreviews`). `DrawingPreviews.layer`로 제공하며 `Attachments`와 `FileSystem`이 필요하다. API는 `withPreviews(project, tools)`
 - `DrawingPreview` — `{ attachmentId, mimeType }` 인터페이스. 도구 결과의 `preview` 필드 모양이다
 - `attachmentUrl(id)` — `/api/attachments/<id>` URL을 만든다
@@ -44,6 +46,7 @@
 - `DrawingPreviews`는 SVG를 도구와 같은 `resolveProjectPath`/`readFileBytesEffect({checkLeaf: true})` 검사로 다시 읽는다. 그래서 나중에 바꿔 끼운 링크는 거부된다
 - preview는 부가 정보다. 실패하면 `drawing_preview_unavailable` debug 로그만 남긴다. 도구 원래 결과의 다른 필드는 바꾸지 않고 `preview`만 덧붙인다
 - preview는 쓴 시점의 스냅샷이다. 노드가 불변이므로 파일이 나중에 수정되거나 삭제되어도 그림은 바뀌지 않는다
+- 도구 결과가 가리키는 그림은 그 결과를 기록하는 `tool_result` node에 묶인다(`linkStored`, `Recorder`가 부른다). 그림을 저장한 때부터 step이 끝나 결과를 기록할 때까지는 묶이지 않아 정리 대상이다
 - 저장된 transcript는 브라우저용 상대 URL(`/api/attachments/<id>`)을 유지한다. inline 데이터 변환은 모델로 가는 사본에만 적용한다. 같은 id는 dedupe 후 한 번씩 병렬로 읽는다
 
 ## Side Effects

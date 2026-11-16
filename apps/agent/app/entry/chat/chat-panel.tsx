@@ -14,6 +14,7 @@ import { useAtom, useAtomMount, useAtomSet } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
 import {
   type ComponentProps,
+  type ReactNode,
   useCallback,
   useEffect,
   useEffectEvent,
@@ -294,11 +295,14 @@ export function SessionView({
   imagesSupported,
   slash,
   sendingEnabled,
+  composerControls,
 }: {
   sessionId: string;
   imagesSupported: boolean;
   slash: SlashSupport;
   sendingEnabled: boolean;
+  /** Pickers for the composer's footer. */
+  composerControls?: ReactNode;
 }) {
   const { holder, lease, refused, continueHere } = useSessionLease(sessionId);
   const [syncRevision, setSyncRevision] = useState(0);
@@ -315,6 +319,7 @@ export function SessionView({
       imagesSupported={imagesSupported}
       slash={slash}
       sendingEnabled={sendingEnabled}
+      composerControls={composerControls}
     />
   );
 }
@@ -333,6 +338,7 @@ function ChatPanel({
   imagesSupported,
   slash,
   sendingEnabled,
+  composerControls,
 }: {
   sessionId: string;
   holder: string;
@@ -343,6 +349,7 @@ function ChatPanel({
   imagesSupported: boolean;
   slash: SlashSupport;
   sendingEnabled: boolean;
+  composerControls?: ReactNode;
 }) {
   const { t } = useLingui();
   const projectId = useProjectScope("chat");
@@ -1127,14 +1134,7 @@ function ChatPanel({
             onExecute={() => void executePlan()}
             kanbanRunning={kanbanRunning}
             boardTally={<BoardTally projectId={projectId} sessionId={sessionId} />}
-            boardAction={
-              <OpenBoardButton
-                projectId={projectId}
-                sessionId={sessionId}
-                holder={holder}
-                disabled={readOnly || backendRestartRequired}
-              />
-            }
+            boardAction={<OpenBoardButton projectId={projectId} sessionId={sessionId} />}
             boardSlot={
               <WorkflowBoard
                 projectId={projectId}
@@ -1187,6 +1187,7 @@ function ChatPanel({
               onPickQueued={pickQueued}
               onCancel={() => void cancel()}
               onClear={clearComposer}
+              controls={composerControls}
               onWorkflowMode={(mode) =>
                 run.workflow?.phase === "running"
                   ? setLeaving({ move: mode, revise: false })

@@ -63,19 +63,21 @@ vp run smoke-package                  # 실행 파일을 저장소 밖에서 띄
 
 ## 화면
 
-- 설정(사이드바 위 톱니바퀴):
+- 설정(사이드바 위 톱니바퀴): 왼쪽 메뉴는 일반 / 도구 / 기억 / 프로젝트 / 실행으로 묶입니다. 프로젝트를 고르는 줄은 프로젝트 묶음(권한, MCP, 에이전트, Skills)과 칸반 실행 쪽에서만 보입니다.
+  - 일반: 화면 테마(시스템·라이트·다크, 이 브라우저에 저장)와 문제 제보 화면으로 가는 링크. 긴 대화를 요약으로 보내기 시작하는 시점도 여기서 정합니다.
   - 웹 검색: Kagi 키 등록, 켜기/끄기, 키 삭제. 키는 OS 키체인에만 저장되고 다시 보여주지 않습니다. 켜면 모델이 필요할 때 검색과 페이지 읽기를 하고 호출마다 Kagi에 과금됩니다.
   - MCP: `~/.context-generactive-agent/mcp.json`(공통)과 `<프로젝트>/.mcp.json`에 적힌 서버 목록. "신뢰하고 시작"을 눌러야 시작하고, 설정이 바뀌면 다시 신뢰해야 합니다. MCP 도구 호출은 매번 승인 카드(또는 auto 모드 판정)를 거칩니다.
   - 에이전트: `agents.json`에 적힌 외부 ACP 에이전트(Codex 등). 대화 목록의 "새 대화" 옆 화살표로 그 에이전트와 직접 대화를 시작할 수도 있습니다(대화에 에이전트 이름 배지, 관련 기억을 찾아 함께 보냄). 신뢰하면 모델이 작업을 맡길 수 있고, 맡길 때마다 승인하며 에이전트의 권한 요청도 카드로 묻습니다. 연결이 연속 두 번 실패하면 멈추고 "다시 연결"로 재시도합니다.
   - Skills: 앱 기본 skill, `~/.agents/skills`(공통), `<프로젝트>/.agents/skills`의 skill 목록. 모델이 작업에 맞는 skill을 읽어 따르지만, skill 문구는 승인을 대신하지 않습니다. 기본 skill `draw`는 다이어그램, 차트, 와이어프레임, 아이콘을 SVG 파일로 그립니다(사진, 일러스트는 못 그림). 같은 이름의 skill을 공통이나 프로젝트에 두면 기본 skill 대신 쓰입니다.
   - 가져오기: Claude Code와 Codex CLI가 이 컴퓨터에 남긴 대화를 기억으로 옮깁니다. 발언뿐 아니라 도구 호출과 결과까지 옮겨서 옛 대화도 근거를 따라갈 수 있고, 시각은 그때 보낸 날짜 그대로입니다. "계속 가져오기"를 켜면 5분마다 새로 쌓인 대화를 이어서 읽습니다. 대화가 있던 폴더는 프로젝트로 자동 등록되고(그 폴더의 파일을 에이전트가 읽고 고칠 수 있게 됩니다), 없어진 폴더처럼 등록할 수 없는 것은 이유와 함께 보여줍니다.
-- 사이드바: ChatGPT 로그인 상태, 모델과 추론 강도, 프로젝트 선택과 추가(옆 버튼 → 대화상자), 선택한 프로젝트 설정(권한 모드 `매번 묻기`/`자동 판단`, 다른 프로젝트에서 이 기억 찾기, 목록에서 빼기), 대화 목록.
+- 사이드바: 프로젝트 추가(버튼 → 폴더 대화상자), 프로젝트별 대화 목록. 프로젝트 이름 옆 `+`로 그 프로젝트에 새 대화를 만들고, `…`에서 프로젝트 설정, 칸반 보드, 프로젝트 개선(사용 기록에서 반복된 정정을 찾아 개선 문서로 남김), 다른 프로젝트에서 이 기억 찾기, 목록에서 빼기(보관)를 합니다. 보관한 프로젝트는 목록 아래 "보관된 프로젝트"에서 되돌립니다. 외부 에이전트와 직접 하는 대화는 열린 대화에서 `/agent` 명령으로 시작합니다.
 - 프로젝트 목록에서 빼기: 사이드바에서만 사라지고 대화, 기억, 검색은 그대로 남습니다. 같은 폴더를 다시 추가하면 돌아옵니다. 가져오기가 폴더를 자동 등록하므로, 필요 없는 프로젝트는 목록에서 빼면 됩니다.
 - 대화 보관: 대화 행에 마우스를 올려 보관 버튼을 누르면 목록에서 빠지고, 목록 아래 "보관함"에서 복원합니다. 보관해도 기억 검색에는 계속 나옵니다. 답변 중이거나 다른 탭이 쓰는 대화는 보관되지 않습니다.
 - 기억: 답변이 끝나면 뒤에서 발언의 주제와 정정 또는 취소 관계를 정리합니다(선택한 모델을 가장 낮은 추론 강도로 사용). 나중에 "무엇으로 하기로 했지?"를 물으면 바뀐 결정과 이전 결정을 함께 답하고, 무엇을 정정한 것인지 불분명하면 되묻습니다.
+- 대화 헤더와 입력창 아래줄: 대화 위에 제목, 프로젝트 이름, BTW와 Work Trace 버튼이 있는 헤더가 있습니다. 입력창 아래줄의 모델 단추에서 이 대화의 모델과 추론 강도를 고르고(그 대화에만 저장되고 다른 대화는 바뀌지 않습니다), 같은 줄에서 프로젝트의 권한 모드를 고릅니다(전체 권한은 확인 창을 거칩니다). 새 대화가 처음 쓸 기본 모델은 사이드바 아래 계정 전환의 "계정 관리" 창에서 고릅니다.
 - 대화: 답변 스트리밍 마크다운([streamdown](https://streamdown.ai), 코드 하이라이트와 한글 강조), 도구 호출 카드(인자, 결과, 상태 배지).
 - 이미지 첨부: 붙여넣기, 끌어놓기, 첨부 버튼. 입력창 위 카드의 `#N`을 누르면 본문에 참조가 들어가고, 보낸 메시지에서는 `#N` 칩에 마우스를 올려 미리보거나 눌러서 크게 봅니다. 이미지를 못 읽는 모델을 고르면 첨부가 막힙니다.
-- Slash 명령: 입력창에 `/`를 치면 `/new`, `/agent`, `/skill`, `/recall`, `/mode`, `/model`, `/effort`(선택한 모델의 추론 강도), `/settings`, `/cancel`, `/compact`와 이 프로젝트에서 쓸 수 있는 skill 목록이 나옵니다. skill은 `/<이름> 요청`으로 바로 실행하고, 앱 명령과 이름이 같은 skill은 `/skill <이름>`으로 씁니다. ↑/↓로 고르고, Tab으로 채우고, Enter로 실행합니다.
+- Slash 명령: 입력창에 `/`를 치면 `/new`, `/agent`, `/skill`, `/recall`, `/mode`, `/model`, `/effort`(이 대화 모델의 추론 강도; `/model`과 `/effort`는 이 대화의 모델만 바꿉니다), `/settings`, `/cancel`, `/compact`와 이 프로젝트에서 쓸 수 있는 skill 목록이 나옵니다. skill은 `/<이름> 요청`으로 바로 실행하고, 앱 명령과 이름이 같은 skill은 `/skill <이름>`으로 씁니다. ↑/↓로 고르고, Tab으로 채우고, Enter로 실행합니다.
 - 컨텍스트: 입력창 아래 상태줄에 마지막 요청이 모델 컨텍스트를 얼마나 썼는지 보입니다. 대화가 컨텍스트의 25%를 넘으면 이미 답한 도구 출력을 비우고 앞 대화를 요약으로 보내며(요약은 답변이 끝난 뒤 미리 만들어 둠), 55%를 넘으면 오래된 메시지를 뺍니다. `/compact`는 기준과 상관없이 바로 줄입니다. 저장된 대화와 기억은 그대로입니다.
 - Esc: 입력 중인 글과 이미지를 비우고, 비어 있으면 실행 중인 답변을 멈춥니다. 중지는 서버에 취소를 요청하고, 실제로 멈췄는지 확인해 알려줍니다.
 - 답변 중 새로고침이나 탭 닫기는 답변을 멈추지 않습니다. 다시 열면 진행 중인 답변에 이어 붙습니다. 서버가 답변 중에 다시 시작되면 그 답변은 자동으로 다시 실행하지 않고, 끝나지 않았다고 알립니다.
@@ -95,35 +97,36 @@ UI 컴포넌트는 shadcn으로 추가합니다(`AGENT.md`).
 
 `app/routes/api/*`는 React Router flat routes이며 `/api` 접두사로 마운트됩니다. 상태를 바꾸는 요청은 교차 사이트 요청을 거부합니다.
 
-| 라우트                                       | 동작                                                                                 |
-| -------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `GET/POST /api/auth`                         | 로그인 상태 조회, `login`, `cancel`, `logout`                                        |
-| `GET /api/models`                            | 계정에서 쓸 수 있는 모델 목록과 현재 선택                                            |
-| `POST /api/models/:model`                    | 모델과 추론 강도 선택(없는 모델은 자동 대체 없이 오류)                               |
-| `GET/POST /api/projects`                     | 프로젝트 목록(`hidden=1`이면 보관한 프로젝트), 경로로 추가                           |
-| `POST /api/projects/pick`                    | 앱이 도는 컴퓨터의 폴더 선택 창을 열고 고른 경로를 돌려줌(등록은 하지 않음)          |
-| `GET/POST /api/projects/:project/agents`     | 외부 ACP 에이전트 목록과 연결 상태, `trust`, `reconnect`                             |
-| `GET /api/projects/:project/skills`          | 이 프로젝트에서 쓸 수 있는 skill과 읽지 못한 폴더                                    |
-| `GET/POST /api/projects/:project/mcp`        | MCP 서버 목록과 상태, `{scope, name, trusted}`로 신뢰/중지                           |
-| `POST /api/projects/:project`                | `crossRecallExcluded`, `permissionMode`(`ask`/`auto`), `hidden`(보관과 해제) 변경    |
-| `GET/POST /api/sessions`                     | 프로젝트별 대화 목록(`archived=1`이면 보관함), 새 대화(`agent`로 외부 에이전트 직접) |
-| `GET /api/sessions/:session?holder=`         | 진행 중인 run, 마지막 run의 끝난 방식, 이 탭의 소유 여부, 컨텍스트 사용량            |
-| `POST /api/sessions/:session`                | 보관·복원, 삭제, workflow 단계·동작(답변 중 409, 다른 탭 사용 중 423)                |
-| `POST /api/sessions/:session/lease`          | 탭의 소유권 얻기, 갱신(`claim`), 놓기(`release`)                                     |
-| `POST /api/sessions/:session/cancel`         | 진행 중인 run 취소(소유 탭만), 실제로 멈췄는지 응답                                  |
-| `POST /api/sessions/:session/compact`        | `/compact`: 앞 대화 요약, 이미 답한 도구 출력 비우기(답변 중 409)                    |
-| `GET/POST /api/sessions/:session/queue`      | 대기열 목록, 답변 중 메시지 넣기(`queue`/`steer`)                                    |
-| `POST /api/sessions/:session/queue/:message` | 대기 메시지 편집 내용 저장, 저장, 제거, 확인 후 보내기                               |
-| `GET /api/sessions/:session/subagents`       | 서브에이전트 목록과 상태                                                             |
-| `GET /api/sessions/:session/approvals`       | run을 멈추지 못하는 승인 대기(서브에이전트, 외부 에이전트)                           |
-| `GET /api/sessions/:session/subagents/:id`   | 서브에이전트 대화 기록                                                               |
-| `POST .../approvals/:approval`               | 그 호출 승인/거부 `{approved}`(소유 탭만)                                            |
-| `GET /api/sessions/:session/messages?limit=` | 최근 메시지 한 쪽(`before`로 이전 쪽), 진행 중인 run, 대기 중인 승인                 |
-| `POST /api/sessions/:session/runs`           | 채팅 실행(SSE), 승인 재개 포함(소유 탭만)                                            |
-| `GET .../runs/:run/events?after=`            | 진행 중이거나 끝난 run의 답변을 로그에서 `after` 다음부터 다시 읽기                  |
-| `GET/POST /api/settings/kagi`                | Kagi 상태, `register`, `enable`, `disable`, `remove`                                 |
-| `POST /api/attachments`                      | 이미지 원본 바이트 업로드(png/jpeg/gif/webp, 20 MiB 이하)                            |
-| `GET /api/attachments/:attachment`           | 저장된 이미지(다른 사이트 삽입 차단)                                                 |
+| 라우트                                       | 동작                                                                                                                 |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `GET/POST /api/auth`                         | 로그인 상태 조회, `login`, `cancel`, `logout`                                                                        |
+| `GET /api/models`                            | 계정에서 쓸 수 있는 모델 목록과 현재 선택                                                                            |
+| `POST /api/models/:model`                    | 모델과 추론 강도 선택(없는 모델은 자동 대체 없이 오류)                                                               |
+| `GET/POST /api/projects`                     | 프로젝트 목록(`hidden=1`이면 보관한 프로젝트), 경로로 추가                                                           |
+| `POST /api/projects/pick`                    | 앱이 도는 컴퓨터의 폴더 선택 창을 열고 고른 경로를 돌려줌(등록은 하지 않음)                                          |
+| `GET/POST /api/projects/:project/agents`     | 외부 ACP 에이전트 목록과 연결 상태, `trust`, `reconnect`                                                             |
+| `GET /api/projects/:project/skills`          | 이 프로젝트에서 쓸 수 있는 skill과 읽지 못한 폴더                                                                    |
+| `GET/POST /api/projects/:project/mcp`        | MCP 서버 목록과 상태, `{scope, name, trusted}`로 신뢰/중지                                                           |
+| `POST /api/projects/:project`                | `crossRecallExcluded`, `permissionMode`(`ask`/`auto`), `hidden`(보관과 해제) 변경                                    |
+| `GET/POST /api/sessions`                     | 프로젝트별 대화 목록(`archived=1`이면 보관함), 새 대화(`agent`로 외부 에이전트 직접, 아니면 그때 선택된 모델로 시작) |
+| `GET /api/sessions/:session?holder=`         | 진행 중인 run, 마지막 run의 끝난 방식, 이 탭의 소유 여부, 컨텍스트 사용량                                            |
+| `POST /api/sessions/:session`                | 보관·복원, 삭제, workflow 단계·동작(답변 중 409, 다른 탭 사용 중 423)                                                |
+| `POST /api/sessions/:session/lease`          | 탭의 소유권 얻기, 갱신(`claim`), 놓기(`release`)                                                                     |
+| `POST /api/sessions/:session/cancel`         | 진행 중인 run 취소(소유 탭만), 실제로 멈췄는지 응답                                                                  |
+| `POST /api/sessions/:session/model`          | 대화의 모델 바꾸기(`model: null`이면 앱의 선택된 모델을 다시 따름), 소유 탭만(다른 탭 423)                           |
+| `POST /api/sessions/:session/compact`        | `/compact`: 앞 대화 요약, 이미 답한 도구 출력 비우기(답변 중 409)                                                    |
+| `GET/POST /api/sessions/:session/queue`      | 대기열 목록, 답변 중 메시지 넣기(`queue`/`steer`)                                                                    |
+| `POST /api/sessions/:session/queue/:message` | 대기 메시지 편집 내용 저장, 저장, 제거, 확인 후 보내기                                                               |
+| `GET /api/sessions/:session/subagents`       | 서브에이전트 목록과 상태                                                                                             |
+| `GET /api/sessions/:session/approvals`       | run을 멈추지 못하는 승인 대기(서브에이전트, 외부 에이전트)                                                           |
+| `GET /api/sessions/:session/subagents/:id`   | 서브에이전트 대화 기록                                                                                               |
+| `POST .../approvals/:approval`               | 그 호출 승인/거부 `{approved}`(소유 탭만)                                                                            |
+| `GET /api/sessions/:session/messages?limit=` | 최근 메시지 한 쪽(`before`로 이전 쪽), 진행 중인 run, 대기 중인 승인                                                 |
+| `POST /api/sessions/:session/runs`           | 채팅 실행(SSE), 승인 재개 포함(소유 탭만)                                                                            |
+| `GET .../runs/:run/events?after=`            | 진행 중이거나 끝난 run의 답변을 로그에서 `after` 다음부터 다시 읽기                                                  |
+| `GET/POST /api/settings/kagi`                | Kagi 상태, `register`, `enable`, `disable`, `remove`                                                                 |
+| `POST /api/attachments`                      | 이미지 원본 바이트 업로드(png/jpeg/gif/webp, 20 MiB 이하)                                                            |
+| `GET /api/attachments/:attachment`           | 저장된 이미지(다른 사이트 삽입 차단)                                                                                 |
 
 ## 구조
 

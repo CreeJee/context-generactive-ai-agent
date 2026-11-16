@@ -2,17 +2,22 @@
 
 ## Overview
 
-`apps/agent` 프론트엔드(React)의 칸반 보드 UI 디렉터리다. 한 대화의 Plan(세션 보드 시트 `BoardSheet`, `apps/agent/app/entry/chat/board-panel.tsx`) 또는 프로젝트의 모든 실행 중 Plan(`ProjectBoard`, `apps/agent/app/entry/index.tsx`의 `App`이 렌더)을 같은 7개 상태 열에 보여 준다. 카드 드래그(@dnd-kit), 카드 peek 패널, 카드 편집·이동·다른 대화로 옮기기를 맡는다. 드롭 규칙, 낙관적 대기 이동, 보류 사유 문구 같은 순수 로직은 `board-moves.ts`, `hold-reason.ts`에 있다. 서버 호출은 `apps/agent/app/entry/queries`의 React Query mutation/query 훅에 맡긴다.
+`apps/agent` 프론트엔드(React)의 칸반 보드 UI 디렉터리다. 한 대화의 Plan(세션 보드 `SessionBoard`, `apps/agent/app/entry/chat/board-panel.tsx`) 또는 프로젝트의 모든 실행 중 Plan(`ProjectBoard`)을 같은 7개 상태 열에 보여 준다. 두 보드 모두 `apps/agent/app/entry/index.tsx`의 `App`이 사이드바 옆 본문 영역(`SidebarInset`)에 그린다. 보드가 열려도 대화 화면은 언마운트하지 않고 숨기기만 한다. 카드 드래그(@dnd-kit), 카드 peek 패널, 카드 편집·이동·다른 대화로 옮기기를 맡는다. 드롭 규칙, 낙관적 대기 이동, 보류 사유 문구 같은 순수 로직은 `board-moves.ts`, `hold-reason.ts`에 있다. 서버 호출은 `apps/agent/app/entry/queries`의 React Query mutation/query 훅에 맡긴다.
 
 ## Interface
 
 - `BoardSurface` — 하나 또는 여러 Plan의 열, 카드 peek, 거절 알림, 실행 중 카드 변경 요청 프롬프트, 다른 대화로 옮기기 확인을 그리는 공용 보드 컴포넌트다. props는 projectId, holder, boards, shown, peek, onPeek, adding, onDraggingChange, className 등이다
+- `BoardFrame` — 본문 영역에 그리는 보드의 틀이다(Dialog가 아니다). 제목 줄(앞자리 `leading`, 도구 `tools`, "보드 닫기" 버튼), 그 아래의 상태 `header`, 나머지를 채우는 보드(`children`)를 그린다. 보드 안에서 Esc를 누르면 `onEscape`를 부르고, 보드를 닫을지는 보드가 정한다. 세션 보드와 프로젝트 보드가 함께 쓴다
+- `SessionBoard` — 한 대화의 보드다(`board-panel.tsx`). 보드와 판단, 칸반 루프를 스스로 읽어 `BoardFrame`에 그리므로 페이지는 대화만 넘긴다. 다른 창이 대화를 쓰는지는 알 수 없어 `disabled` 없이 그리고, 서버의 거절을 알림으로 보인다
 - `SurfaceBoard` — 보드 위 한 Plan의 묶음이다(sessionId, label, view, plan, decisions, loop, rank). label과 rank는 Plan 하나만 보일 때 null이다
 - `ActiveKanban` / `BoardPlan` — `KanbanView`의 active 변형과 `BoardView["plan"]`의 non-null 타입 별칭
+- `PlannerStalledBadge` / `ReplanWaitBadge` — "자동 Plan 작성 멈춤"과 "확인 필요 카드" 배지다. 세션 보드와 프로젝트 보드가 함께 쓰므로 문구와 설명을 이 한 곳에서 정의한다
+- `mergeStateLabel` / `GoalMergeStatus` / `mergeFailed` — Goal의 merge 상태(`GoalMergeState`)를 문구로 바꾸고(`mergeStateLabel`), 상태 배지로 그리고(`GoalMergeStatus`), 사람이 손을 써야 하는 실패인지 판정한다(`mergeFailed`). 배지는 세션 보드 머리줄, Goal 스케줄 패널, 프로젝트 보드 대화 줄에 나온다. 실패 상태는 빨간 배지다. 만들어진 PR의 주소가 `https://`로 시작할 때만 "PR 열기" 링크를 그리고, 아니면 주소를 글자로 보인다
+- `goalDecisionCardId` — Goal 수준 판단 요청이 카드 id로 갖는 `"@goal"`이다(memory-agent의 `goalDecisionCardId`와 같은 값)
 - `errorText` / `editErrorText` — `ApiErrorCode`(또는 `isApiError` Error)를 한국어 안내 문구로 바꾼다. 모르는 코드는 "보드를 바꾸지 못했습니다."로 떨어진다
-- `ProjectBoard` — 프로젝트의 모든 실행 중 Plan을 우선순위 트리 순서로 한 보드에 보여 준다. `useProjectBoardsQuery`, `useDecisionInboxQuery`, `useGoalOrderMutation`을 쓰고 `BoardSurface`를 렌더한다
-- `KanbanBoard` — 상태 열 7개와 dnd-kit 드래그(마우스, 터치 홀드, 그립 키보드), j/k/h/l·화살표 포커스 이동, 열 접기를 맡는다. 드롭 결과는 onReorder, onSend, onAskChange, onRefused 콜백으로 부모에 넘긴다
-- `CardPeek` — 오른쪽 Sheet peek 패널이다. 카드 상세, DecisionPrompt, 보류 사유와 검증 의견, 편집기, 새 카드 폼, 다른 대화로 옮기기 Select, Hold/Release/Requeue 버튼을 보여 준다. 카드 상세는 카드가 위하는 Goal outcome id를 보여 준다. outcome은 계획자가 정하므로 편집기에는 없다
+- `ProjectBoard` — 프로젝트의 모든 실행 중 Plan을 우선순위 트리 순서로 한 보드에 보여 준다. `useProjectBoardsQuery`, `useDecisionInboxQuery`, `useGoalOrderMutation`을 쓰고 `BoardSurface`를 렌더한다. 사람을 기다리는 대화(멈춘 루프, 멈춘 Plan 작성, 일시 중지, 실패한 merge, 확인 필요 카드, Goal 수준 판단)가 있으면 상태 패널이 펼쳐진 채로 열린다. 사용자가 접거나 펴면 그 뒤로는 그 선택을 따른다. 대화 줄에서 Goal 수준 판단에 답하고, "카드 추가"는 머리줄에 있다
+- `KanbanBoard` — 상태 열 7개와 dnd-kit 드래그(마우스, 터치 홀드, 그립 키보드), j/k/h/l·화살표 포커스 이동, 열 접기를 맡는다. 패널에 열린 카드는 `selectedKey`로 받아 테두리로 표시한다. 드롭 결과는 onReorder, onSend, onAskChange, onRefused 콜백으로 부모에 넘긴다
+- `CardPeek` — 보드 오른쪽 칸에 그리는 카드 패널이다(Sheet가 아니다). 카드 상세, DecisionPrompt, 보류 사유와 검증 의견, 편집기, 새 카드 폼, 다른 대화로 옮기기 Select, Hold/Release/Requeue 버튼을 보여 준다. 카드 상세는 카드가 위하는 Goal outcome id를 보여 준다. outcome은 계획자가 정하므로 편집기에는 없다. 승인을 기다리는 카드는 승인과 거절(확인 한 번 뒤 카드 취소와 같은 요청)을 둔다. 칸반 루프가 센 연속 실패, Plan 재작성, 충돌 해결 횟수는 하나라도 0이 아니면 "실행 기록"으로 보인다. 편집기에서 의존 카드는 같은 Plan의 카드를 제목으로 골라 넣고, 경계, 위험, 필요한 근거, 사람 판단은 "추가 조건"에 접힌다(값이 있으면 펼쳐서 연다). 시작했고 끝나지 않은 카드(in_progress, verify, human_decision, blocked)는 작업 폴더와 브랜치를 따로 읽어 보인다(차례 실행 모드는 브랜치 없음)
 - `Peek` — peek 내용을 나타내는 TaggedEnum이다: `New` 또는 `Card{cardId, editing}`
 - `TransferTarget` — 카드를 옮길 수 있는 같은 프로젝트의 다른 대화 정보(sessionId, label)
 - `CardFace` / `CardSignals` — 보드와 드래그 오버레이가 함께 쓰는 카드 앞면이다. CardSignals는 판단 대기, 변경 요청 대기, 요청 중, 사유, 아직 끝나지 않은 선행 카드 제목, 그룹을 담는다
@@ -38,6 +43,7 @@
 - 순서 바꾸기는 같은 Plan, 같은 열 안에서만 한다. 다른 대화의 카드 위 드롭은 `foreignCardDrop`으로 거절한다. Goal 순서는 상태 패널에서 바꾼다
 - 다른 대화로 옮기기(Transfer)는 `canTransfer`가 참인 상태(backlog, ready, blocked)에서만 UI에 노출된다. 옮긴 카드는 그 대화 Plan의 새 카드가 되고 의존은 끊긴다(UI 문구)
 - `withPending`은 서버 응답 전 요청만 화면에 반영한다. 거절되면 pending이 사라지므로 카드는 서버 위치로 돌아간다. Leaving 상태의 카드는 실제로 옮겨질 때까지 제자리에 있다
+- 보드와 카드 패널은 Sheet나 Dialog를 쓰지 않는다. 본문 영역의 일반 요소(`section`, `aside`)로 그려서 사이드바와 다른 패널을 그대로 쓸 수 있다. 그래서 집은 카드의 화살표 키는 문서까지 바로 가고, `KanbanBoard`가 다시 보내지 않는다
 - `BoardSurface`는 드롭과 이동용 mutation(`request`)과 peek 액션용 mutation(`action`)을 따로 둔다. 그래서 peek 액션의 pending은 peek만 막고 보드는 막지 않는다. 이 분리를 유지해야 한다
 - in_progress 카드에 대한 `EditCard`는 보드 편집이 아니라 `BoardIntent.ChangeRequest`로 보낸다. `CancelCard`는 항상 `BoardIntent.Cancel` intent로 보낸다. AddCard, MoveCard, ClosePlan은 `useBoardsEditMutation`으로 보낸다
 - `inProjectOrder`는 rank가 있는 항목을 rank 오름차순으로 먼저 놓고, rank가 null인 항목을 뒤에 놓는다. 같은 rank 안에서는 원래 인덱스 순서를 지킨다(안정 정렬)
@@ -52,7 +58,7 @@
 - `BoardSurface`: 거절 알림을 `Effect.runFork(Effect.sleep("5 seconds"))` 타이머로 5초 뒤 지운다. notice가 바뀌거나 언마운트되면 `Fiber.interrupt`로 타이머를 중단한다
 - `ProjectBoard`: `useProjectBoardsQuery`, `useDecisionInboxQuery`로 서버를 조회하고, `useGoalOrderMutation`으로 Goal 순서를 바꾸는 요청을 보낸다(그래프 근거)
 - `KanbanBoard`: jotai `atomWithStorage("context-agent-board-collapsed-columns")`로 접은 열 목록을 브라우저 저장소(localStorage)에 브라우저별로 저장한다
-- `CardPeek`: `DecisionPrompt`를 렌더하고 onSubmit, onIntent, onTransfer 콜백으로 부모의 서버 요청을 시작한다. 자체 네트워크 호출은 없다
+- `CardPeek`: `DecisionPrompt`를 렌더하고 onSubmit, onIntent, onTransfer 콜백으로 부모의 서버 요청을 시작한다. 카드 작업 폴더는 `useCardFolderQuery`로 서버에서 직접 읽는다(카드가 폴더를 가질 수 있는 상태일 때만 요청한다)
 - `board-moves.ts`, `hold-reason.ts`, `card-face.tsx`는 순수 함수와 표시 컴포넌트이고 부수 효과가 없다
 
 ## Verification

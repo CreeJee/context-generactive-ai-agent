@@ -643,10 +643,17 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     ),
     evidence: [refused],
   });
-  /** On a kanban board the session's chat is the planner, so it runs on the planner's model. */
+  /**
+   * The model a session's chat runs on. On a kanban board the chat is the planner, so it runs on
+   * the planner's model; otherwise on the conversation's own model, or the app's selected one.
+   */
   const sessionModel = (sessionId: string) =>
     Effect.flatMap(kanbanBoard(sessionId), (board) =>
-      board ? active.selectedFor("planner") : active.selected,
+      board
+        ? active.selectedFor("planner")
+        : Effect.flatMap(sessions.get(sessionId), (session) =>
+            session.model === null ? active.selected : Effect.succeed(session.model),
+          ),
     );
   const workTrace = yield* WorkTraceStore;
   // A delete a crash left unfinished stops the conversation's boards first, as asking for it does.

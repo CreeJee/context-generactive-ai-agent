@@ -47,6 +47,20 @@ const make = Effect.gen(function* () {
   /** The model a role runs on: its own when the user chose one, else the selected model. */
   const selectedFor = (role: AgentRole) =>
     Effect.filterOrElse(chosenFor(role), Predicate.isNotNull, () => selected);
+  /** Fails unless the selection's provider lists that model with that effort. */
+  const checked = Effect.fn("ActiveProvider.checked")(function* (selection: ModelSelection) {
+    const { models } = yield* registry.configurationOf(selection);
+    yield* Effect.fromOption(
+      Arr.findFirst(
+        yield* models.list,
+        (model) =>
+          model.id === selection.model &&
+          model.supportedReasoningEfforts.includes(selection.reasoningEffort),
+      ),
+      () => ModelUnavailable.make(selection),
+    );
+    return selection;
+  });
   /**
    * Saves a role's model after checking the provider lists it with that effort. null clears it: a
    * Goal's role goes back to the selected model and the skill router is off. The global selection
@@ -56,18 +70,7 @@ const make = Effect.gen(function* () {
     role: ModelRole,
     selection: ModelSelection | null,
   ) {
-    if (selection !== null) {
-      const { models } = yield* registry.configurationOf(selection);
-      yield* Effect.fromOption(
-        Arr.findFirst(
-          yield* models.list,
-          (model) =>
-            model.id === selection.model &&
-            model.supportedReasoningEfforts.includes(selection.reasoningEffort),
-        ),
-        () => ModelUnavailable.make(selection),
-      );
-    }
+    if (selection !== null) yield* checked(selection);
     yield* config.update({ [roleModelKeys[role]]: selection ?? undefined });
     return selection;
   });
@@ -101,6 +104,7 @@ const make = Effect.gen(function* () {
     chosenFor,
     selectedFor,
     chooseFor,
+    checked,
     resolve,
     models: (selection: ModelSelection) =>
       Effect.map(resolve(selection), ({ services }) => services.models),

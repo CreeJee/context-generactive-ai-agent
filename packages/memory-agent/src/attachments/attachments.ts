@@ -406,6 +406,21 @@ const make = Effect.gen(function* () {
             ON CONFLICT DO NOTHING`),
       }),
 
+    /**
+     * Ties stored pictures to the node that records the result naming them, so cleanup keeps them.
+     * An id whose picture is already gone is skipped: the insert reads from `attachments`.
+     */
+    linkStored: (nodeId: string, attachmentIds: readonly string[]) =>
+      Effect.forEach(
+        attachmentIds,
+        (attachmentId, position) =>
+          sql`
+            INSERT INTO node_attachments (node_id, position, attachment_id)
+            SELECT ${nodeId}, ${position}, id FROM attachments WHERE id = ${attachmentId}
+            ON CONFLICT DO NOTHING`,
+        { discard: true },
+      ),
+
     forNode: (nodeId: string) =>
       Effect.map(selectForNode(nodeId), (rows) => rows.map(toAttachment)),
 

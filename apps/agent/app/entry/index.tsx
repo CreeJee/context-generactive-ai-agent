@@ -6,6 +6,7 @@ import { isTruthy } from "../truthy.ts";
 import {
   useAccountsQuery,
   useAuthQuery,
+  useCatalogQuery,
   useCompatibleAccountsQuery,
   useHiddenProjectsQuery,
   useModelsQuery,
@@ -20,13 +21,12 @@ import {
 } from "./queries/mutations/global";
 import {
   useCreateSessionMutation,
-  useCrossRecallMutation,
-  useHideProjectMutation,
   usePermissionModeMutation,
   useRestoreProjectMutation,
   SessionLifecycleChange,
   useSessionLifecycleMutation,
 } from "./queries/mutations/project";
+import { useSessionModelMutation } from "./queries/mutations/session";
 import {
   useAgentsQuery,
   useAllProjectSessions,
@@ -72,35 +72,39 @@ import {
   archiveErrorMessage,
   projectErrorMessage,
   refusalOf,
-  type ApiError,
   type ModelSelection,
   type PendingLifecycle,
   type ProviderId,
 } from "./api";
+import { ChatHeader } from "./chat/chat-header";
+import { SessionModelPicker } from "./chat/model-picker";
 import { SessionView, type SlashSupport } from "./chat/chat-panel";
 import { AppEventsProvider, SessionEventsProvider } from "./events/providers";
-import { ThemeSelect } from "./shared/theme";
+import { ThemeSync } from "./shared/theme";
 import { pageHolder } from "./session/session-lease";
+import { sourceOf } from "./settings/model-selection-field";
 import { openSettingsOverlay } from "./settings/open-settings";
-import { errorMessage } from "./settings/shared";
+import { PermissionModeSelect } from "./settings/permission-mode-select";
 import {
+  ArchivedProjects,
   ModelSection,
   OpenFolderButton,
-  ProjectSection,
   SessionSection,
+  sessionLabel,
 } from "./navigation/sidebar";
 import { DecisionInbox } from "./navigation/decision-inbox";
-import { ProjectBoardButton } from "./navigation/project-board-button";
+import { ProjectMenu } from "./navigation/project-menu";
 import { boardCardKey, parseBoardCardKey } from "./chat/board/board-moves";
 import { ProjectBoard } from "./chat/board/project-board";
-import { AccountModelPanel } from "./navigation/account-model-panel";
+import { SessionBoard } from "./chat/board-panel";
 import { AccountManager } from "./navigation/account-profiles";
 import { CompatibleAccounts } from "./navigation/compatible-accounts";
 import { AccountSwitcher } from "./navigation/account-switcher";
 import { WorkTracePanel } from "./chat/work-trace-panel";
 import { BtwPanel } from "./chat/btw-panel";
-import { ReportLink, reportHref } from "./report/report-link";
+import { reportHref } from "./report/report-link";
 import { RetryButton } from "./shared/load-failed";
+import { useHydrated } from "./shared/use-hydrated";
 import { ModelDownloadList } from "./shared/model-downloads";
 import { effortChoices, providerLabels } from "./navigation/providers";
 
@@ -136,6 +140,12 @@ function SidebarReopen() {
       <SidebarTrigger aria-label={t`사이드바 펼치기`} title={t`사이드바 펼치기 (⌘B)`} />
     </div>
   );
+}
+
+/** Room in a board's title row for the button that reopens the sidebar, while that button shows. */
+function ReopenRoom() {
+  const { open, isMobile } = useSidebar();
+  return open && !isMobile ? null : <span aria-hidden className="w-8 shrink-0" />;
 }
 
 function Placeholder({
@@ -188,7 +198,14 @@ export function App() {
   const projects = projectsQuery.data ?? [];
   const hiddenProjects = useHiddenProjectsQuery().data ?? [];
   const [
-    { project: projectId, session: sessionId, boards: boardsOpen, boardCard: boardCardKeyParam },
+    {
+      project: projectId,
+      session: sessionId,
+      board: boardOpen,
+      card: cardParam,
+      boards: boardsOpen,
+      boardCard: boardCardKeyParam,
+    },
     setLocation,
   ] = useQueryStates(locationParsers);
   const addProjectMutation = useAddProjectMutation();
@@ -197,16 +214,32 @@ export function App() {
   const [accountsOpen, setAccountsOpen] = useState(false);
   const [switchError, setSwitchError] = useState<string | null>(null);
   const permissionMutation = usePermissionModeMutation(projectId ?? "");
-  const crossRecallMutation = useCrossRecallMutation(projectId ?? "");
-  const hideProjectMutation = useHideProjectMutation();
   const restoreProjectMutation = useRestoreProjectMutation();
-  const createSessionMutation = useCreateSessionMutation(projectId ?? "");
+  const createSessionMutation = useCreateSessionMutation();
   const lifecycleMutation = useSessionLifecycleMutation(pageHolder);
   const sessionsQuery = useProjectSessionsQuery(projectId);
   const sessions = sessionsQuery.data?.active ?? [];
   /** One group per listed project: its conversations, read with each project's own query key. */
   const groups = useAllProjectSessions(
     projects.map((project) => ({ id: project.id, name: project.name })),
+  );
+  // An archived conversation can still be opened by its address, so its group's archive is read too.
+  const openSession =
+    groups
+      .flatMap((group) => [...group.sessions, ...group.archived])
+      .find((session) => session.id === sessionId) ?? null;
+  const hydrated = useHydrated();
+  const openProject = projects.find((item) => item.id === projectId);
+  /** The model the open conversation runs on: its own, or else the app's selected one. */
+  const sessionSelection = openSession?.model ?? selection;
+  const sessionCatalog = useCatalogQuery(
+    sessionSelection === null ? null : sourceOf(sessionSelection),
+  );
+  const sessionModels = sessionCatalog.data?.models ?? [];
+  const sessionModelMutation = useSessionModelMutation(
+    projectId ?? "",
+    sessionId ?? "",
+    pageHolder(),
   );
   /**
    * Conversations at work now, per project: the groups lead with them and badge their count.
@@ -225,13 +258,12 @@ export function App() {
     void projectsQuery.refetch();
   };
   const [archiveError, setArchiveError] = useState<string | null>(null);
-  const [projectError, setProjectError] = useState<string | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
-  const projectBusy =
-    permissionMutation.isPending ||
-    crossRecallMutation.isPending ||
-    hideProjectMutation.isPending ||
-    restoreProjectMutation.isPending;
+  /** The groups the list draws: each carries whether its project's folder is gone. */
+  const listed = groups.map((group) => ({
+    ...group,
+    folderMissing: projects.find((item) => item.id === group.projectId)?.folderMissing === true,
+  }));
   const agentsQuery = useAgentsQuery(projectId);
   const skillsQuery = useSkillsQuery(projectId ?? "", projectId !== null);
   const slashAgents = isTruthy(agentsQuery.data) ? usableAgents(agentsQuery.data) : [];
@@ -252,7 +284,6 @@ export function App() {
   }, [projects, projectsQuery.data, setLocation]);
 
   const signedIn = signedInAuth(auth[provider]);
-  const providerName = t(providerLabels[provider]);
   const selectedSignedIn = selection !== null && signedInAuth(auth[selection.provider]);
   useEffect(() => {
     const selected =
@@ -325,7 +356,6 @@ export function App() {
     void setLocation({ ...leaveProject, project: id }, { history: "push" });
   useEffect(() => {
     setArchiveError(null);
-    setProjectError(null);
   }, [projectId]);
 
   const refreshPendingLifecycle = (pending: PendingLifecycle) => {
@@ -416,7 +446,7 @@ export function App() {
     );
 
   const openSettings = () =>
-    openSettingsOverlay({ project: projects.find((item) => item.id === projectId) ?? null });
+    openSettingsOverlay({ projectId, reportLink: reportHref(projectId, sessionId) });
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const selectModel = (model: string, effort?: string) =>
@@ -435,20 +465,17 @@ export function App() {
     );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  /** Runs one project change from the sidebar; a refusal shows under the project controls. */
-  const changeProject = <A,>(input: {
-    readonly change: () => Promise<A>;
-    readonly failed: (refusal: ApiError | null) => string;
-    readonly done?: () => void;
-  }) =>
+  /** Releases an archived project back into the list; a refusal shows above the list. */
+  const restoreProject = (id: string) =>
     runUiEffect(
-      Effect.gen(function* () {
-        setProjectError(null);
-        yield* uiPromise(input.change);
-        input.done?.();
-      }).pipe(
-        Effect.catchTag("UnknownError", (failure) =>
-          Effect.sync(() => setProjectError(input.failed(refusalOf(failure.cause)))),
+      uiPromise(() => restoreProjectMutation.mutateAsync(id)).pipe(
+        Effect.flatMap(() => Effect.sync(() => setArchiveError(null))),
+        Effect.catchTag("UnknownError", () =>
+          Effect.sync(() =>
+            setArchiveError(
+              t`프로젝트를 보관에서 꺼내지 못했습니다. 잠시 뒤 다시 시도해 주십시오.`,
+            ),
+          ),
         ),
       ),
     );
@@ -478,13 +505,17 @@ export function App() {
     );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const createSession = (agent?: string) =>
+  const createSession = (targetProjectId: string, agent?: string) =>
     runUiEffect(
       Effect.gen(function* () {
-        if (!isTruthy(projectId)) return;
-        const session = yield* uiPromise(() => createSessionMutation.mutateAsync(agent));
+        const session = yield* uiPromise(() =>
+          createSessionMutation.mutateAsync({ projectId: targetProjectId, agent }),
+        );
         setArchiveError(null);
-        void setLocation({ session: session.id }, { history: "push" });
+        void setLocation(
+          { ...leaveProject, project: targetProjectId, session: session.id },
+          { history: "push" },
+        );
       }).pipe(
         Effect.catchTag("UnknownError", () =>
           Effect.sync(() =>
@@ -494,14 +525,13 @@ export function App() {
       ),
     );
 
-  // `/effort` changes the model the sidebar shows, as the sidebar's effort selector does.
-  const shownSelection = selection?.provider === provider ? selection : null;
-  const shownModel = models.find((model) => model.id === shownSelection?.model);
+  // `/model` and `/effort` change the open conversation's model, as its footer picker does.
+  const sessionModel = sessionModels.find((model) => model.id === sessionSelection?.model);
   const slashEfforts =
-    shownSelection === null || shownModel === undefined
+    sessionSelection === null || sessionModel === undefined
       ? []
-      : effortChoices(shownSelection, shownModel).map((choice) =>
-          choice.id === shownSelection.reasoningEffort
+      : effortChoices(sessionSelection, sessionModel).map((choice) =>
+          choice.id === sessionSelection.reasoningEffort
             ? {
                 ...choice,
                 label: t({
@@ -515,7 +545,7 @@ export function App() {
   const slash: SlashSupport = {
     context: {
       agents: slashAgents,
-      models: models.map((model) => ({ id: model.id, label: model.displayName })),
+      models: sessionModels.map((model) => ({ id: model.id, label: model.displayName })),
       efforts: slashEfforts,
       skills: slashSkills,
     },
@@ -523,8 +553,16 @@ export function App() {
     run: (command) =>
       runUiEffect(
         Match.valueTags(command, {
-          new: () => uiPromise(() => createSession()),
-          agent: ({ agent }) => uiPromise(() => createSession(agent)),
+          new: () =>
+            uiPromise(() => createSession(projectId ?? "")).pipe(
+              Effect.when(Effect.succeed(isTruthy(projectId))),
+              Effect.asVoid,
+            ),
+          agent: ({ agent }) =>
+            uiPromise(() => createSession(projectId ?? "", agent)).pipe(
+              Effect.when(Effect.succeed(isTruthy(projectId))),
+              Effect.asVoid,
+            ),
           settings: () => Effect.sync(openSettings),
           report: () => Effect.sync(() => window.location.assign(reportHref(projectId, sessionId))),
           mode: ({ mode }) =>
@@ -532,11 +570,27 @@ export function App() {
               Effect.when(Effect.succeed(isTruthy(projectId))),
               Effect.asVoid,
             ),
-          model: ({ model }) => uiPromise(() => selectModel(model)),
-          effort: ({ effort }) =>
-            shownSelection === null
+          model: ({ model }) => {
+            const chosen = sessionModels.find((candidate) => candidate.id === model);
+            return sessionSelection === null || chosen === undefined
               ? Effect.void
-              : uiPromise(() => selectModel(shownSelection.model, effort)),
+              : uiPromise(() =>
+                  sessionModelMutation.mutateAsync({
+                    ...sourceOf(sessionSelection),
+                    model: chosen.id,
+                    reasoningEffort: chosen.defaultReasoningEffort,
+                  }),
+                ).pipe(Effect.asVoid);
+          },
+          effort: ({ effort }) =>
+            sessionSelection === null
+              ? Effect.void
+              : uiPromise(() =>
+                  sessionModelMutation.mutateAsync({
+                    ...sessionSelection,
+                    reasoningEffort: effort,
+                  }),
+                ).pipe(Effect.asVoid),
         }),
       ),
   };
@@ -560,22 +614,54 @@ export function App() {
   })
     // Local history does not depend on the provider's remote model catalogue.
     // Keep model/auth readiness on mutations, not on mounting the session reader.
-    .with({ projectId: P.string, sessionId: P.string }, ({ sessionId: id }) => (
-      <SessionView
-        key={id}
-        sessionId={id}
-        slash={slash}
-        sendingEnabled={selectedSignedIn}
-        imagesSupported={
-          selection !== null &&
-          sessions.find((session) => session.id === id)?.agent == null &&
-          ((modelQueries[selection.provider].data?.models ?? [])
-            .find((model) => model.id === selection.model)
-            ?.capabilities.inputModalities.includes("image") ??
-            false)
-        }
-      />
-    ))
+    .with(
+      { projectId: P.string, sessionId: P.string },
+      ({ projectId: openProjectId, sessionId: id }) => (
+        <div className="flex h-full min-h-0 flex-col">
+          <ChatHeader
+            title={openSession === null ? t`제목 없는 대화` : sessionLabel(hydrated)(openSession)}
+            projectName={projects.find((item) => item.id === openProjectId)?.name ?? null}
+          >
+            {selection && <BtwPanel key={id} projectId={openProjectId} sessionId={id} />}
+            <WorkTracePanel key={id} projectId={openProjectId} sessionId={id} />
+          </ChatHeader>
+          <div className="min-h-0 flex-1">
+            <SessionView
+              key={id}
+              sessionId={id}
+              slash={slash}
+              sendingEnabled={
+                sessionSelection !== null && signedInAuth(auth[sessionSelection.provider])
+              }
+              imagesSupported={
+                openSession?.agent == null &&
+                (sessionModel?.capabilities.inputModalities.includes("image") ?? false)
+              }
+              composerControls={
+                <>
+                  {openSession !== null && openSession.agent === null && (
+                    <SessionModelPicker
+                      projectId={openProjectId}
+                      sessionId={id}
+                      holder={pageHolder()}
+                      model={sessionSelection}
+                      disabled={false}
+                    />
+                  )}
+                  {openProject !== undefined && (
+                    <PermissionModeSelect
+                      project={openProject}
+                      size="sm"
+                      onError={setArchiveError}
+                    />
+                  )}
+                </>
+              }
+            />
+          </div>
+        </div>
+      ),
+    )
     .with({ selection: null, signedIn: false, authFailed: true }, () => (
       <Placeholder
         icon={<LogInIcon />}
@@ -659,21 +745,25 @@ export function App() {
       <Placeholder
         icon={<FolderIcon />}
         title={t`새 대화를 시작해 주십시오`}
-        description={t`왼쪽의 새 대화 버튼을 눌러 주십시오.`}
+        description={t`왼쪽에서 프로젝트 이름 옆의 + 버튼을 눌러 주십시오.`}
       />
     ))
     .exhaustive();
+  // One board per URL: the project board wins when both are named.
+  const projectBoardShown = boardsOpen === true || boardCardKeyParam !== null;
+  const sessionBoardShown = !projectBoardShown && (boardOpen === true || cardParam !== null);
+  const boardCoversChat =
+    isTruthy(projectId) && (projectBoardShown || (isTruthy(sessionId) && sessionBoardShown));
 
   return (
     <AppEventsProvider>
+      <ThemeSync />
       <SessionEventsProvider projectId={projectId} sessionId={sessionId}>
         <SidebarProvider className="h-dvh" style={{ "--sidebar-width": "18rem" }}>
           <Sidebar>
             <SidebarHeader>
               <div className="flex items-center gap-1 pl-1">
                 <span className="min-w-0 flex-1 truncate text-sm font-semibold">Context Agent</span>
-                <ReportLink projectId={projectId} sessionId={sessionId} />
-                <ThemeSelect />
                 <Button
                   variant="ghost"
                   size="icon-sm"
@@ -690,110 +780,78 @@ export function App() {
               </div>
             </SidebarHeader>
             <SidebarSeparator />
-            <div className="min-h-0 shrink overflow-y-auto overscroll-contain">
-              <AccountModelPanel
-                provider={provider}
-                auth={auth[provider]}
-                selection={selection}
-                modelName={
-                  selection !== null
-                    ? modelQueries[selection.provider].data?.models.find(
-                        (model) => model.id === selection.model,
-                      )?.displayName
-                    : undefined
-                }
-              >
-                {signedIn ? (
-                  <ModelSection
-                    models={models}
-                    selection={selection?.provider === provider ? selection : null}
-                    busy={modelMutation.isPending}
-                    error={modelError}
-                    onSelect={(model, effort) => void selectModel(model, effort)}
-                  />
-                ) : (
-                  <div className="flex flex-col gap-2 px-4 py-3 text-xs text-muted-foreground">
-                    <Trans comment="{providerName} is the model provider's name, such as ChatGPT">
-                      {providerName} 계정을 연결하면 모델을 고를 수 있습니다.
-                    </Trans>
-                    <Button variant="outline" size="sm" onClick={() => setAccountsOpen(true)}>
-                      <Trans comment="Button that opens account management to connect an account">
-                        계정 연결
-                      </Trans>
-                    </Button>
-                  </div>
-                )}
-              </AccountModelPanel>
-              <ProjectSection
-                projects={projects}
-                hiddenProjects={hiddenProjects}
-                projectId={projectId}
-                onSelect={selectProject}
-                onAdd={addProject}
-                onPickFolder={api.pickFolder}
-                busy={projectBusy}
-                error={projectError}
-                onRestore={(restoredId) =>
-                  void changeProject({
-                    change: () => restoreProjectMutation.mutateAsync(restoredId),
-                    failed: () =>
-                      t`프로젝트를 보관에서 꺼내지 못했습니다. 잠시 뒤 다시 시도해 주십시오.`,
-                    done: () => selectProject(restoredId),
-                  })
-                }
-                onCrossRecall={(allowed) =>
-                  void changeProject({
-                    change: () => crossRecallMutation.mutateAsync(!allowed),
-                    failed: errorMessage,
-                  })
-                }
-                onHide={(hiddenId) =>
-                  void changeProject({
-                    change: () => hideProjectMutation.mutateAsync(hiddenId),
-                    failed: () => t`프로젝트를 보관하지 못했습니다. 잠시 뒤 다시 시도해 주십시오.`,
-                    done: () => {
-                      const left = projects.filter((project) => project.id !== hiddenId);
-                      void setLocation({ ...leaveProject, project: left.at(0)?.id ?? null });
-                    },
-                  })
-                }
-              />
-            </div>
-            <SidebarSeparator />
-            {projectId && (
-              <SidebarGroup>
-                <SidebarMenu>
-                  <DecisionInbox
-                    projectId={projectId}
-                    holder={pageHolder()}
-                    onOpenCard={(session, card) =>
-                      void setLocation({ ...leaveProjectBoard, session, card }, { history: "push" })
+            <SidebarGroup>
+              <SidebarMenu>
+                <DecisionInbox
+                  projects={projects.map((project) => ({ id: project.id, name: project.name }))}
+                  holder={pageHolder()}
+                  onOpenCard={(project, session, card) =>
+                    void setLocation(
+                      { ...leaveProject, project, session, card },
+                      { history: "push" },
+                    )
+                  }
+                />
+              </SidebarMenu>
+            </SidebarGroup>
+            <SessionSection
+              groups={listed}
+              working={working}
+              loading={sessionsLoading}
+              failed={sessionsFailed}
+              onRetry={retrySessions}
+              projectId={projectId}
+              sessionId={sessionId}
+              archiveError={archiveError}
+              onCreate={(target) => void createSession(target)}
+              onArchive={archiveSession}
+              onDelete={deleteSession}
+              onRestore={restoreSession}
+              header={
+                <OpenFolderButton
+                  projects={projects}
+                  onAdd={addProject}
+                  onSelect={selectProject}
+                  onPickFolder={api.pickFolder}
+                  label={t({
+                    message: "프로젝트 추가",
+                    comment: "Button that adds a project from a folder",
+                  })}
+                />
+              }
+              projectActions={(id) => {
+                const project = projects.find((item) => item.id === id);
+                return project === undefined ? null : (
+                  <ProjectMenu
+                    project={project}
+                    onOpenBoard={() =>
+                      void setLocation(
+                        { ...leaveProject, project: id, boards: true },
+                        { history: "push" },
+                      )
                     }
+                    onOpenSettings={() =>
+                      openSettingsOverlay({
+                        projectId: id,
+                        initialPage: "permission",
+                        reportLink: reportHref(projectId, sessionId),
+                      })
+                    }
+                    onHidden={() => {
+                      if (id !== projectId) return;
+                      const left = projects.filter((item) => item.id !== id);
+                      void setLocation({ ...leaveProject, project: left.at(0)?.id ?? null });
+                    }}
+                    onProblem={setArchiveError}
                   />
-                  <ProjectBoardButton
-                    projectId={projectId}
-                    onOpen={() => void setLocation({ boards: true }, { history: "push" })}
-                  />
-                </SidebarMenu>
-              </SidebarGroup>
-            )}
-            {projectId && (
-              <SessionSection
-                groups={groups}
-                working={working}
-                loading={sessionsLoading}
-                failed={sessionsFailed}
-                onRetry={retrySessions}
-                projectId={projectId}
-                sessionId={sessionId}
-                archiveError={archiveError}
-                onCreate={(agent) => void createSession(agent)}
-                onArchive={archiveSession}
-                onDelete={deleteSession}
-                onRestore={restoreSession}
-                agents={slashAgents}
-              />
-            )}
+                );
+              }}
+            />
+            <ArchivedProjects
+              projects={hiddenProjects}
+              onRestore={(restoredId) => void restoreProject(restoredId)}
+            />
+
             <SidebarSeparator />
             <SidebarFooter>
               <ModelDownloadList className="px-2 pb-2" />
@@ -823,6 +881,15 @@ export function App() {
                   </Trans>
                 </SheetDescription>
               </SheetHeader>
+              {signedIn && (
+                <ModelSection
+                  models={models}
+                  selection={selection?.provider === provider ? selection : null}
+                  busy={modelMutation.isPending}
+                  error={modelError}
+                  onSelect={(model, effort) => void selectModel(model, effort)}
+                />
+              )}
               <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
                 <AccountManager
                   auth={{ openai: auth.openai, anthropic: auth.anthropic }}
@@ -835,34 +902,42 @@ export function App() {
           </Sheet>
           <SidebarInset className="min-w-0">
             <SidebarReopen />
-            {main}
+            {/* The conversation stays mounted under an open board, so its lease, run and draft go on. */}
+            <div className={boardCoversChat ? "hidden" : "contents"}>{main}</div>
+            {projectId && projectBoardShown && (
+              <ProjectBoard
+                projectId={projectId}
+                holder={pageHolder()}
+                leading={<ReopenRoom />}
+                peek={boardCardKeyParam === null ? null : parseBoardCardKey(boardCardKeyParam)}
+                onPeek={(card) =>
+                  void setLocation({
+                    boards: true,
+                    boardCard: card === null ? null : boardCardKey(card),
+                  })
+                }
+                onOpenSession={(session) =>
+                  void setLocation(
+                    { ...leaveProjectBoard, session, board: true, card: null },
+                    { history: "push" },
+                  )
+                }
+                onClose={() => void setLocation({ boards: null, boardCard: null })}
+              />
+            )}
+            {projectId && sessionId && sessionBoardShown && (
+              <SessionBoard
+                key={sessionId}
+                projectId={projectId}
+                sessionId={sessionId}
+                holder={pageHolder()}
+                leading={<ReopenRoom />}
+                peekCardId={cardParam}
+                onPeek={(card) => void setLocation({ ...leaveProjectBoard, board: true, card })}
+                onClose={() => void setLocation({ board: null, card: null })}
+              />
+            )}
           </SidebarInset>
-          {projectId && sessionId && selection && (
-            <BtwPanel key={sessionId} projectId={projectId} sessionId={sessionId} />
-          )}
-          {projectId && sessionId && (
-            <WorkTracePanel key={sessionId} projectId={projectId} sessionId={sessionId} />
-          )}
-          {projectId && (boardsOpen === true || boardCardKeyParam !== null) && (
-            <ProjectBoard
-              projectId={projectId}
-              holder={pageHolder()}
-              peek={boardCardKeyParam === null ? null : parseBoardCardKey(boardCardKeyParam)}
-              onPeek={(card) =>
-                void setLocation({
-                  boards: true,
-                  boardCard: card === null ? null : boardCardKey(card),
-                })
-              }
-              onOpenSession={(session) =>
-                void setLocation(
-                  { ...leaveProjectBoard, session, board: true, card: null },
-                  { history: "push" },
-                )
-              }
-              onClose={() => void setLocation({ boards: null, boardCard: null })}
-            />
-          )}
         </SidebarProvider>
       </SessionEventsProvider>
     </AppEventsProvider>

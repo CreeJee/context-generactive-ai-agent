@@ -210,6 +210,14 @@ describe("provider-neutral contracts", () => {
       expect(Result.isFailure(unlisted) && unlisted.failure._tag).toBe("ModelUnavailable");
       expect(yield* active.chosenFor("verifier")).toBeNull();
 
+      expect(yield* active.checked(planner)).toEqual(planner);
+      const uncheckedEffort = yield* Effect.result(
+        active.checked({ ...planner, reasoningEffort: "max" }),
+      );
+      expect(Result.isFailure(uncheckedEffort) && uncheckedEffort.failure._tag).toBe(
+        "ModelUnavailable",
+      );
+
       yield* active.chooseFor("planner", null);
       expect(yield* active.chosenFor("planner")).toBeNull();
     }).pipe(withTestPlatform),
