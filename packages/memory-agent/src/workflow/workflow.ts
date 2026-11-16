@@ -78,7 +78,7 @@ import {
   type CardTransition,
   type UserChangeRequest,
 } from "./board-edit.ts";
-import { acknowledgedRunSql, resolvedRunSql } from "./run-bindings.ts";
+import { acknowledgedRunSql, endedWithKnownEffectsSql, resolvedRunSql } from "./run-bindings.ts";
 import { logFailure } from "../runtime/logged-failures.ts";
 
 export {
@@ -670,9 +670,11 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
           WHERE b.session_id = ${sessionId} AND b.run_id <> ${caller}
             AND (r.status IS NULL OR r.status <> 'completed')
             AND NOT ${sql.literal(resolvedRunSql("b", "r"))} LIMIT 1`)) ||
+        // A run with no binding, such as a plain chat turn before the Goal, records no owner
+        // operation and has nothing the user can continue past, so it stops fencing once it ended.
         (yield* exists(sql`
           SELECT r.run_id FROM chat_runs r WHERE r.thread_id = ${sessionId} AND r.run_id <> ${caller}
-            AND r.status <> 'completed'
+            AND r.status <> 'completed' AND NOT ${sql.literal(endedWithKnownEffectsSql("r"))}
             AND NOT EXISTS (SELECT 1 FROM workflow_run_bindings b
               WHERE b.run_id = r.run_id AND ${sql.literal(resolvedRunSql("b", "r"))}) LIMIT 1`))
       )

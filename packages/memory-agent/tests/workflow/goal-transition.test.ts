@@ -353,6 +353,28 @@ testAgent()("explicit new Goal transition", (it) => {
     }),
   );
 
+  // A chat run that failed before the Goal bound any run once held every later new Goal back: it
+  // has no binding, so neither its known effects nor the user's acknowledgement could settle it.
+  // A run waiting on the user's answer still holds it back.
+  it.effect.each([
+    { status: "failed", expected: applied },
+    { status: "aborted", expected: applied },
+    { status: "interrupted", expected: refused("run_outcome_uncertain") },
+  ] as const)("an unbound $status run", ({ status, expected }) =>
+    Effect.gen(function* () {
+      const f = yield* withInvokingRun();
+      yield* startRun(f.session, `${f.session}:unbound`, status);
+      yield* Expected.$match(expected, {
+        applied: () =>
+          Effect.map(f.request(), (result) =>
+            expect(result).toEqual({ status: "accepted", runId: f.invoking }),
+          ),
+        refused: ({ reason }) =>
+          Effect.map(Effect.flip(f.request()), (error) => expect(error).toMatchObject({ reason })),
+      });
+    }),
+  );
+
   // A failed or cancelled card agent once held every later new Goal back, since nothing a user
   // could do settled its task further.
   it.effect.each([
