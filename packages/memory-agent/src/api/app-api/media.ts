@@ -25,16 +25,16 @@ export const GeneratedImage = Schema.Struct({ ...ImageMediaAsset.fields, url: Sc
 export type GeneratedImage = typeof GeneratedImage.Type;
 
 /** The user must approve first; a run on another provider carries the approval to give back. */
-const ApprovalRequired = refusalWith({
+export const ApprovalRequired = refusalWith({
   reason: Schema.optionalKey(ImageApprovalReason),
   approval: Schema.optionalKey(CrossProviderMediaRunApproval),
 })(409, ["image_approval_required"]);
 
 /** No image route can run the request; `reason` says why. */
-const RouteUnavailable = appRefusal(422, ["image_route_unavailable"]);
+export const RouteUnavailable = appRefusal(422, ["image_route_unavailable"]);
 
 /** The image provider failed the run. */
-const ExecutionFailed = appRefusal(502, ["image_execution_failed"]);
+export const ExecutionFailed = appRefusal(502, ["image_execution_failed"]);
 
 /** Every refusal of the group, for `appRefusalStatus`. */
 export const mediaRefusals = [ApprovalRequired, RouteUnavailable, ExecutionFailed];

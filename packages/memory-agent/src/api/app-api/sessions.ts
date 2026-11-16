@@ -36,6 +36,13 @@ import { UnknownStepOutcome } from "../../workflow/step-outcomes.ts";
 import { sessionHolderHeaders } from "../chat-api.ts";
 import { appRefusalFields, refusalWith, SameSite } from "../refusal.ts";
 import {
+  ApprovalRequired,
+  ExecutionFailed,
+  GeneratedImage,
+  GenerateImage,
+  RouteUnavailable,
+} from "./media.ts";
+import {
   ModelListFailed,
   ModelUnavailable,
   ProviderUnavailable,
@@ -287,6 +294,9 @@ const SessionStorageFailed = appRefusal(500, [
   "worktree_failed",
 ]);
 
+/** A generated image is made and stored, but writing it into the conversation failed. */
+const ImageRecordFailed = appRefusal(500, ["image_record_failed"]);
+
 /** Every refusal of the group, for `appRefusalStatus`. */
 export const sessionsRefusals = [
   UnknownProject,
@@ -312,6 +322,7 @@ export const sessionsRefusals = [
   UnknownSubagent,
   ApprovalNotPending,
   SessionStorageFailed,
+  ImageRecordFailed,
 ];
 
 const session = { session: Schema.String };
@@ -530,6 +541,26 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
       payload: Schema.Struct({ model: Schema.NullOr(ModelSelection) }),
       success: Session,
       error: [SessionInUse, UnknownSession, ModelUnavailable, ProviderUnavailable, ModelListFailed],
+    }),
+    /**
+     * A paid image made from the user's prompt as written and kept in the conversation as the
+     * prompt, a `generate_image` call and its result. The page asks the user before it calls.
+     */
+    HttpApiEndpoint.post("generateImage", "/api/sessions/:session/images", {
+      params: session,
+      headers: sessionHolderHeaders,
+      payload: GenerateImage,
+      success: GeneratedImage,
+      error: [
+        SessionInUse,
+        UnknownSession,
+        RunInProgress,
+        SelectedProviderUnavailable,
+        ApprovalRequired,
+        RouteUnavailable,
+        ExecutionFailed,
+        ImageRecordFailed,
+      ],
     }),
     /** Abandons approvals whose continuation was lost; the gated tools never run. */
     HttpApiEndpoint.post("discardInterrupts", "/api/sessions/:session/interrupts/discard", {

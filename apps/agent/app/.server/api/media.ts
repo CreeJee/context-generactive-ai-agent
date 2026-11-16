@@ -1,7 +1,24 @@
 import { Effect, Struct } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
-import { ActiveProvider, ImageMediaWorkflow } from "memory-agent";
+import {
+  ActiveProvider,
+  ImageMediaWorkflow,
+  type ImageMediaApprovalRequired,
+  type ImageMediaUnavailable,
+} from "memory-agent";
 import { AppApi } from "memory-agent/app-api";
+
+/** What an image generation's failures answer, for the media route and a conversation's. */
+export const imageGenerationRefusals = {
+  ImageMediaApprovalRequired: (failure: ImageMediaApprovalRequired) =>
+    Effect.fail({
+      error: "image_approval_required",
+      ...Struct.pick(failure, ["reason", "approval"]),
+    } as const),
+  ImageMediaUnavailable: ({ reason }: ImageMediaUnavailable) =>
+    Effect.fail({ error: "image_route_unavailable", reason } as const),
+  ImageMediaExecutionFailed: () => Effect.fail({ error: "image_execution_failed" } as const),
+};
 
 /** The media group of `AppApi` (`/api/media/*`): paid generation, deliberately outside chat tools. */
 export const MediaApiHandlers = HttpApiBuilder.group(
@@ -27,20 +44,7 @@ export const MediaApiHandlers = HttpApiBuilder.group(
           signal,
         });
         return { ...asset, url: `/api/attachments/${encodeURIComponent(asset.attachment.id)}` };
-      }).pipe(
-        Effect.scoped,
-        Effect.catchTags({
-          ImageMediaApprovalRequired: (failure) =>
-            Effect.fail({
-              error: "image_approval_required",
-              ...Struct.pick(failure, ["reason", "approval"]),
-            } as const),
-          ImageMediaUnavailable: ({ reason }) =>
-            Effect.fail({ error: "image_route_unavailable", reason } as const),
-          ImageMediaExecutionFailed: () =>
-            Effect.fail({ error: "image_execution_failed" } as const),
-        }),
-      ),
+      }).pipe(Effect.scoped, Effect.catchTags(imageGenerationRefusals)),
     );
   }),
 );

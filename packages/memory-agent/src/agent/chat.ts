@@ -2566,6 +2566,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         Effect.catchTags({
           SessionNotFound: unknownSession,
           NodeStoreFailed: imageNotRecorded,
+          SecretRedactionFailed: imageNotRecorded,
+          NoSuchElementError: imageNotRecorded,
           SqlError: imageNotRecorded,
           SchemaError: imageNotRecorded,
         }),
