@@ -375,8 +375,8 @@ export function App() {
     runUiEffect(
       Effect.gen(function* () {
         const result = yield* uiPromise(() =>
-          lifecycleMutation(rowProjectId).mutateAsync(
-            SessionLifecycleChange.archive({ sessionId: id }),
+          lifecycleMutation.mutateAsync(
+            SessionLifecycleChange.archive({ projectId: rowProjectId, sessionId: id }),
           ),
         );
         if (!Predicate.isTagged(result, "completed")) return refreshPendingLifecycle(result);
@@ -396,8 +396,8 @@ export function App() {
     runUiEffect(
       Effect.gen(function* () {
         const result = yield* uiPromise(() =>
-          lifecycleMutation(rowProjectId).mutateAsync(
-            SessionLifecycleChange.delete({ sessionId: id }),
+          lifecycleMutation.mutateAsync(
+            SessionLifecycleChange.delete({ projectId: rowProjectId, sessionId: id }),
           ),
         );
         if (!Predicate.isTagged(result, "completed")) return refreshPendingLifecycle(result);
@@ -417,8 +417,8 @@ export function App() {
     runUiEffect(
       Effect.gen(function* () {
         const result = yield* uiPromise(() =>
-          lifecycleMutation(rowProjectId).mutateAsync(
-            SessionLifecycleChange.restore({ sessionId: id }),
+          lifecycleMutation.mutateAsync(
+            SessionLifecycleChange.restore({ projectId: rowProjectId, sessionId: id }),
           ),
         );
         if (!Predicate.isTagged(result, "completed")) return refreshPendingLifecycle(result);

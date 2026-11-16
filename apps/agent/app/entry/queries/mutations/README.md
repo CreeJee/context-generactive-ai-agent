@@ -17,7 +17,7 @@
 - `useImageGenerationEnabledMutation` / `useCrossProviderConsentMutation` / `useKagiMutation` / `useImportMutation` / `useEmbeddingMutation` / `useAddProjectMutation` — 설정 쓰기 후 해당 global 쿼리를 무효화한다.
 - `useGoalOrderMutation(projectId)` — `api.moveGoal`로 대화 Goal 순서를 바꾼다. 성공하면 project kanban 캐시에 쓰고, 끝나면 boards를 무효화한다.
 - `AgentChange` / `useExternalAgentMutation(projectId)` — 외부 에이전트 trust와 reconnect용 tagged enum과 그 mutation
-- `SessionLifecycleChange` / `useSessionLifecycleMutation` — 대화 archive·restore·delete. holder는 `() => string` thunk이고 dual arity는 2다. 사이드바가 다른 프로젝트의 대화도 다루므로 첫 인자가 holder면 `(projectId)`를 돌려주고, 첫 인자가 projectId면 holder를 함께 받는다. 성공하면 그 프로젝트의 sessions 키를 무효화한다.
+- `SessionLifecycleChange` / `useSessionLifecycleMutation` — 대화 archive·restore·delete. holder는 `() => string` thunk다. 사이드바가 다른 프로젝트의 대화도 다루므로 각 변경이 `projectId`와 `sessionId`를 함께 담는다. 훅은 렌더 중에만 부를 수 있어서, 프로젝트를 훅 인자가 아니라 변경 값으로 받는다. 성공하면 그 변경의 프로젝트 sessions 키를 무효화한다.
 - `useMcpMutation` (신뢰·로그인·로그인 취소·로그아웃) / `useProtectedBranchesMutation` / `usePermissionModeMutation` / `useCrossRecallMutation` / `useHideProjectMutation` / `useCreateSessionMutation` — 프로젝트 단위 설정과 세션 생성 mutation
 - `useRestoreProjectMutation` — `api.restoreProject`로 보관한 프로젝트를 목록에 되돌린다. 성공하면 projects 키를 무효화하고, 그 아래의 보관 목록도 함께 다시 읽는다.
 - `KanbanAction` — 칸반 동작 tagged enum: `Start`, `RestartLoop`, `Intent{intent: BoardIntent}`, `SetDependencies{dependsOn}`

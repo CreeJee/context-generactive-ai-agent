@@ -1,4 +1,4 @@
-import { Data, Function as EffectFunction } from "effect";
+import { Data } from "effect";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type ExternalAgentView, type McpCommand } from "../../api";
 import { projectQueries } from "../project";
@@ -106,25 +106,22 @@ export function useCreateSessionMutation() {
   });
 }
 
-/** What the sidebar asks of one conversation. */
+/**
+ * What the sidebar asks of one conversation. The sidebar lists other projects' conversations, so
+ * a change names its project as well as its session.
+ */
 export type SessionLifecycleChange = Data.TaggedEnum<{
-  archive: { readonly sessionId: string };
-  restore: { readonly sessionId: string };
-  delete: { readonly sessionId: string };
+  archive: { readonly projectId: string; readonly sessionId: string };
+  restore: { readonly projectId: string; readonly sessionId: string };
+  delete: { readonly projectId: string; readonly sessionId: string };
 }>;
 export const SessionLifecycleChange = Data.taggedEnum<SessionLifecycleChange>();
 
-export const useSessionLifecycleMutation: {
-  (holder: () => string): (projectId: string) => ReturnType<typeof useSessionLifecycleMutationBody>;
-} & typeof useSessionLifecycleMutationBody = EffectFunction.dual(
-  2,
-  useSessionLifecycleMutationBody,
-);
 /**
- * The sidebar lists other projects' conversations, so a change names its project as well as its
- * session; the dual form takes the holder first and the project at the change site.
+ * One mutation for every project's conversations: the project comes with each change, not with
+ * the hook, because a hook can only be called while the page renders.
  */
-function useSessionLifecycleMutationBody(projectId: string, holder: () => string) {
+export function useSessionLifecycleMutation(holder: () => string) {
   const client = useQueryClient();
   return useMutation<
     Awaited<ReturnType<typeof api.setArchived>> | Awaited<ReturnType<typeof api.deleteSession>>,
@@ -137,7 +134,7 @@ function useSessionLifecycleMutationBody(projectId: string, holder: () => string
       restore: ({ sessionId }) => api.setArchived(sessionId, holder(), false),
       delete: ({ sessionId }) => api.deleteSession(sessionId, holder()),
     }),
-    onSuccess: () =>
+    onSuccess: (_result, { projectId }) =>
       client.invalidateQueries({ queryKey: projectQueries.sessions(projectId).queryKey }),
   });
 }
