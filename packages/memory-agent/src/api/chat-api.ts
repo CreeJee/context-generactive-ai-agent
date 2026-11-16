@@ -38,12 +38,7 @@ const BadRequest = chatRefusal(400, [
   "invalid_stream_offset",
 ]);
 const Unauthorized = chatRefusal(401, ["login_required"]);
-const NotFound = chatRefusal(404, [
-  "session_not_found",
-  "project_not_found",
-  "run_not_found",
-  "btw_not_found",
-]);
+const NotFound = chatRefusal(404, ["session_not_found", "project_not_found", "run_not_found"]);
 const Conflict = chatRefusal(409, [
   "report_requires_local_model",
   "run_in_progress",
@@ -257,28 +252,4 @@ export class ChatGroup extends HttpApiGroup.make("chat").add(
   }),
 ) {}
 
-/** A side question the BTW panel asks. A BTW run has no approvals, so nothing resumes it. */
-export const BtwQuestion = Schema.Struct({ runId: Schema.String, message: UserMessage });
-export type BtwQuestion = typeof BtwQuestion.Type;
-
-/** BTW threads: side questions about a session, kept apart from its conversation. */
-export class BtwGroup extends HttpApiGroup.make("btw").add(
-  /** The thread's messages, oldest first. */
-  HttpApiEndpoint.get("messages", "/api/btw/:thread/messages", {
-    params: { thread: Schema.String },
-    success: Schema.Array(ChatMessage),
-    error: refusals,
-  }),
-  /**
-   * Asks a side question and streams its run's events. Closing the panel stops the stream, not the
-   * run: the answer is saved to the thread when it ends.
-   */
-  HttpApiEndpoint.post("ask", "/api/btw/:thread/runs", {
-    params: { thread: Schema.String },
-    payload: BtwQuestion,
-    success: RunEvents,
-    error: refusals,
-  }).middleware(SameSite),
-) {}
-
-export class ChatApi extends HttpApi.make("chat").add(ChatGroup).add(BtwGroup) {}
+export class ChatApi extends HttpApi.make("chat").add(ChatGroup) {}

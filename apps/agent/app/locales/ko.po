@@ -4522,10 +4522,6 @@ msgstr "의존 카드"
 msgid "의존 카드가 아직 끝나지 않았습니다."
 msgstr "의존 카드가 아직 끝나지 않았습니다."
 
-#: app/entry/chat/refusals.ts
-msgid "이 BTW는 삭제되었습니다."
-msgstr "이 BTW는 삭제되었습니다."
-
 #: app/entry/chat/board-panel.tsx
 msgid "이 Goal보다 먼저 merge될 Goal"
 msgstr "이 Goal보다 먼저 merge될 Goal"

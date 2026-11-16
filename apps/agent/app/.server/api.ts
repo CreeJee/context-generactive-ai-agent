@@ -7,11 +7,10 @@ import {
   HttpServerResponse,
 } from "effect/http";
 import { HttpApiBuilder } from "effect/http-api";
-import { type AgentChat, BtwApiHandlers, type BtwChat, ChatApiHandlers } from "memory-agent";
+import { type AgentChat, ChatApiHandlers } from "memory-agent";
 import { AppApi, NoStore } from "memory-agent/app-api";
 import { ChatApi, SameSite } from "memory-agent/chat-api";
 import { agent } from "./agent.ts";
-import { BtwThreadsApiHandlers } from "./api/btw.ts";
 import { EventsApiHandlers } from "./api/events.ts";
 import { MediaApiHandlers } from "./api/media.ts";
 import { ProjectsApiHandlers } from "./api/projects.ts";
@@ -42,11 +41,9 @@ const NoStoreLive = Layer.succeed(NoStore, (httpEffect) =>
 );
 
 /** The chat API's routes, answered by the agent whose services `services` gives. */
-export const chatApiRoutes = <E>(
-  services: Effect.Effect<Context.Context<AgentChat | BtwChat>, E>,
-) =>
+export const chatApiRoutes = <E>(services: Effect.Effect<Context.Context<AgentChat>, E>) =>
   HttpApiBuilder.layer(ChatApi).pipe(
-    Layer.provide(Layer.merge(ChatApiHandlers, BtwApiHandlers)),
+    Layer.provide(ChatApiHandlers),
     Layer.provide(SameSiteLive),
     Layer.provide(Layer.effectContext(services)),
     Layer.provide(HttpServer.layerServices),
@@ -63,7 +60,6 @@ const appApiRoutes = HttpApiBuilder.layer(AppApi).pipe(
       ModelsApiHandlers,
       SessionsApiHandlers,
       TraceApiHandlers,
-      BtwThreadsApiHandlers,
       ReportsApiHandlers,
       MediaApiHandlers,
       EventsApiHandlers,

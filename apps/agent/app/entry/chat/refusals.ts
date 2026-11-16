@@ -14,7 +14,6 @@ export const refusalTexts = {
   session_not_found: msg`대화를 찾을 수 없습니다.`,
   project_not_found: msg`프로젝트를 찾을 수 없습니다.`,
   run_not_found: msg`이어서 읽을 답변을 찾을 수 없습니다.`,
-  btw_not_found: msg`이 BTW는 삭제되었습니다.`,
   report_requires_local_model: msg`제보 대화는 외부 에이전트가 아닌 선택한 모델로만 답합니다. 대화 상대를 모델로 바꿔 주십시오.`,
   run_in_progress: msg`이 대화가 아직 답하는 중입니다.`,
   external_agent_unavailable: msg`선택한 외부 에이전트를 지금 쓸 수 없습니다. 설정에서 연결 상태를 확인해 주십시오.`,

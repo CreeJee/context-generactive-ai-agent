@@ -120,8 +120,7 @@ const make = Effect.gen(function* () {
   const crypto = yield* SecureRandom.SecureRandom;
   /**
    * One chat conversation of a project: a row of `sessions` that is not a report conversation
-   * (`report_sessions`) and not a BTW side thread (which is not a `sessions` row at all). A run's
-   * subagent threads are not `sessions` rows either.
+   * (`report_sessions`). A run's subagent threads are not `sessions` rows either.
    */
   const targetOf = SqlSchema.findOneOption({
     Request: Schema.String,
