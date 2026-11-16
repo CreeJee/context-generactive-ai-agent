@@ -1,15 +1,14 @@
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup } from "effect/http-api";
 import {
   CrossProviderMediaRunApproval,
   ImageApprovalReason,
   ImageMediaAsset,
 } from "../../providers/image-media-contracts.ts";
-import { appRefusalFields, refusalWith, SameSite } from "../refusal.ts";
+import { appRefusalFields, refusalWith } from "../refusal.ts";
 
 const appRefusal = refusalWith(appRefusalFields);
 
-/** A direct image generation; it runs under the chat model the app has selected. */
+/** A direct image generation for a conversation; it runs under the conversation's chat model. */
 export const GenerateImage = Schema.Struct({
   prompt: Schema.NonEmptyString,
   /** The user agreed to a paid generation. */
@@ -38,15 +37,3 @@ export const ExecutionFailed = appRefusal(502, ["image_execution_failed"]);
 
 /** Every refusal of the group, for `appRefusalStatus`. */
 export const mediaRefusals = [ApprovalRequired, RouteUnavailable, ExecutionFailed];
-
-/** Media the page asks for directly, outside the chat's tools (`/api/media/*`). */
-export class MediaGroup extends HttpApiGroup.make("media")
-  .add(
-    /** A paid image generation; the page asks the user before it calls. */
-    HttpApiEndpoint.post("generateImage", "/api/media/image", {
-      payload: GenerateImage,
-      success: GeneratedImage,
-      error: [ApprovalRequired, RouteUnavailable, ExecutionFailed],
-    }),
-  )
-  .middleware(SameSite) {}

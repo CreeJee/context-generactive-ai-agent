@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import { HttpApi } from "effect/http-api";
 import { EventsGroup } from "./app-api/events.ts";
-import { MediaGroup, mediaRefusals } from "./app-api/media.ts";
+import { mediaRefusals } from "./app-api/media.ts";
 import { ProjectsGroup, projectsRefusals } from "./app-api/projects.ts";
 import { ReportsGroup, reportsRefusals } from "./app-api/reports.ts";
 import { AccountsGroup, AuthGroup, ModelsGroup, providersRefusals } from "./app-api/providers.ts";
@@ -24,7 +24,6 @@ export class AppApi extends HttpApi.make("app")
   .add(SessionsGroup)
   .add(TraceGroup)
   .add(ReportsGroup)
-  .add(MediaGroup)
   .add(EventsGroup) {}
 
 /** Every refusal of the app API, `SameSite`'s included. */
