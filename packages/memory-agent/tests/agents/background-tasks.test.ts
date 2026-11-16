@@ -197,6 +197,20 @@ testAgent()("background task lifecycle", (it) => {
       });
     }),
   );
+
+  // A cancel aimed at a subagent's task id once left the Goal run's outcome unknown, though it
+  // stopped nothing, and held the next new Goal back.
+  it.effect("cancelling a task the session does not own is refused without effect", () =>
+    Effect.gen(function* () {
+      const sessionId = yield* freshSession;
+      const tasks = yield* BackgroundTasks;
+      expect(
+        yield* Effect.flip(
+          callTool(tasks.toolsFor(sessionId), "cancel_background_task", { taskId: "missing" }),
+        ),
+      ).toMatchObject({ code: "tool_failed", tag: "BackgroundTaskNotFound", refused: true });
+    }),
+  );
 });
 
 // The spy and the completion listener replace parts of the block's agent, so the test owns it.

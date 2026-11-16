@@ -19,6 +19,7 @@ import { SqlClient, SqlSchema } from "effect/sql";
 import { BackgroundKind, RunningBackgroundTask } from "../agent/run-state.ts";
 import { AppEvents } from "../events/app-events.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
+import { ToolFailed } from "./failure.ts";
 import { runTool, type RunTool } from "./run-tool.ts";
 import { failureAnnotations, failureTags } from "../runtime/logged-failures.ts";
 
@@ -316,7 +317,20 @@ const make = Effect.gen(function* () {
       }),
     cancel: ({ taskId }: typeof ResultInput.Type) =>
       Effect.gen(function* () {
-        yield* owned(sessionId, taskId);
+        // A task the session does not own is refused before anything stops, so the call changed
+        // nothing and does not leave its run's outcome unknown.
+        yield* owned(sessionId, taskId).pipe(
+          Effect.catchTag("BackgroundTaskNotFound", (error) =>
+            Effect.fail(
+              ToolFailed.make({
+                code: "tool_failed",
+                tag: error._tag,
+                detail: error.message,
+                refused: true,
+              }),
+            ),
+          ),
+        );
         yield* FiberMap.remove(fibers, taskId);
         return { taskId, status: "stopped" as const };
       }),
