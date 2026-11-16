@@ -2520,36 +2520,43 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           const argumentsText = stringifyJson(imageCallArguments(prompt));
           const resultText = stringifyJson(imageResult(image.asset));
           const base = { projectId: session.projectId, sessionId };
-          yield* nodes.append({ ...base, kind: "user", text: prompt });
-          const callNode = yield* nodes.append({
-            ...base,
-            kind: "tool_call",
-            text: argumentsText,
-            detail: { toolName: imageToolName, toolCallId: ids.toolCall },
-          });
-          const resultNode = yield* nodes.append({
-            ...base,
-            kind: "tool_result",
-            text: resultText,
-            detail: { toolName: imageToolName, toolCallId: ids.toolCall, ok: true },
-            links: [{ kind: "returns", nodeId: callNode.id }],
-          });
-          yield* attachments.linkStored(resultNode.id, [image.asset.attachment.id]);
-          const stored = yield* runStore.thread(sessionId);
-          const now = yield* DateTime.now;
-          yield* runStore.saveThread(sessionId, [
-            ...stored,
-            ...imageMessages({
-              prompt,
-              asset: image.asset,
-              ids,
-              createdAt: DateTime.formatIso(now),
-              argumentsText,
-              resultText,
-            }),
-          ]);
+          yield* Effect.gen(function* () {
+            yield* nodes.append({ ...base, kind: "user", text: prompt });
+            const callNode = yield* nodes.append({
+              ...base,
+              kind: "tool_call",
+              text: argumentsText,
+              detail: { toolName: imageToolName, toolCallId: ids.toolCall },
+            });
+            const resultNode = yield* nodes.append({
+              ...base,
+              kind: "tool_result",
+              text: resultText,
+              detail: { toolName: imageToolName, toolCallId: ids.toolCall, ok: true },
+              links: [{ kind: "returns", nodeId: callNode.id }],
+            });
+            yield* attachments.linkStored(resultNode.id, [image.asset.attachment.id]);
+            const stored = yield* runStore.thread(sessionId);
+            const now = yield* DateTime.now;
+            yield* runStore.saveThread(sessionId, [
+              ...stored,
+              ...imageMessages({
+                prompt,
+                asset: image.asset,
+                ids,
+                createdAt: DateTime.formatIso(now),
+                argumentsText,
+                resultText,
+              }),
+            ]);
+          }).pipe(sql.withTransaction);
           yield* events.publishProject(session.projectId, "sessions");
           yield* events.publishSession(sessionId, "run-state");
+          return {
+            userMessageId: ids.user,
+            assistantMessageId: ids.assistant,
+            toolMessageId: ids.tool,
+          };
         });
         // A run that started while the image was made saves the whole thread after each step, so
         // the messages wait for it to end.

@@ -35,12 +35,17 @@ testAgent()(function (it) {
       const asset = yield* generatedAsset;
       yield* runStore.saveThread(session.id, [{ role: "user", content: "earlier" }]);
 
-      yield* chat.recordImage(session.id, null, { prompt: "a red fox", asset });
+      const recorded = yield* chat.recordImage(session.id, null, { prompt: "a red fox", asset });
 
       const thread = yield* runStore.thread(session.id);
       expect(thread[0]).toMatchObject({ role: "user", content: "earlier" });
       const [user, assistant, tool] = thread.slice(-3);
       expect(thread).toHaveLength(4);
+      expect(recorded).toEqual({
+        userMessageId: user?.id,
+        assistantMessageId: assistant?.id,
+        toolMessageId: tool?.id,
+      });
       expect(user).toMatchObject({ role: "user", content: "a red fox" });
       expect(assistant).toMatchObject({
         role: "assistant",
