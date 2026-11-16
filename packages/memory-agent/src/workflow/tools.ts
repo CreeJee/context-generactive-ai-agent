@@ -38,7 +38,7 @@ const ClosePlanInput = Schema.Struct({
 const startNewGoal = {
   name: "start_new_goal",
   description:
-    "Request a separate independent-success Goal from Goal, Plan or a verified completed workflow. Requires the exact current Goal instance ID from the workflow prompt (null only for legacy/unbound); the owner rechecks it. A live calling run cannot apply the transition immediately. Preserves prior Goal/Plan/run evidence without inheriting verification. Purpose revisions use update_goal; method changes use update_plan. Never bypass an active/failed run or uncertain side effect. A refusal for execution_outstanding lists in taskIds the session's tasks that still run or can be resumed; they hold the new Goal back until they finish or the user cancels them.",
+    "Request a separate independent-success Goal from Goal, Plan or a verified completed workflow. Requires the exact current Goal instance ID from the workflow prompt (null only for legacy/unbound); the owner rechecks it. A live calling run cannot apply the transition immediately. Preserves prior Goal/Plan/run evidence without inheriting verification. Purpose revisions use update_goal; method changes use update_plan. Never bypass an active/failed run or uncertain side effect. A refusal for execution_outstanding lists in taskIds the session's tasks that still run or can be resumed; they hold the new Goal back until they finish or the user cancels them. A refusal for run_outcome_uncertain or owner_effect_uncertain lists in runIds the session's runs that still run or whose tool outcome is unknown. A running one settles by itself; past one that ended, only the user can continue, in the app. Tell the user which runs hold the new Goal back and end the turn: retrying start_new_goal or cancelling tasks does not settle them.",
   parameters: StartNewGoal,
 } as const;
 
@@ -165,6 +165,7 @@ const make = Effect.gen(function* () {
               error: "new_goal_transition_refused" as const,
               reason: failure.reason,
               ...optionalProperty("taskIds", failure.taskIds),
+              ...optionalProperty("runIds", failure.runIds),
             }),
           ),
           Effect.provideContext(runtime),

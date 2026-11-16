@@ -317,7 +317,14 @@ testAgent()("explicit new Goal transition", (it) => {
           }),
         refused: ({ reason }) =>
           Effect.gen(function* () {
-            expect(yield* Effect.flip(request)).toMatchObject({ reason });
+            const error = yield* Effect.flip(request);
+            expect(error).toMatchObject({ reason });
+            // A refusal over runs names the one that holds the new Goal back.
+            expect(error._tag === "NewGoalTransitionRefused" ? error.runIds : null).toEqual(
+              ["run_outcome_uncertain", "owner_effect_uncertain"].includes(reason)
+                ? [historical]
+                : undefined,
+            );
             expect(yield* identity(session)).toBe(old);
             expect(yield* rows("revisions", session)).toEqual(before);
           }),
@@ -339,9 +346,10 @@ testAgent()("explicit new Goal transition", (it) => {
       // The owner checks the session at call time: a run started since then refuses it.
       const other = `${f.session}:other`;
       yield* startRun(f.session, other, "running");
-      expect(yield* call(transition(f.old))).toMatchObject({
+      expect(yield* call(transition(f.old))).toEqual({
         error: "new_goal_transition_refused",
         reason: "run_outcome_uncertain",
+        runIds: [other],
       });
       yield* setRun(other, "completed");
       expect(yield* call(transition(f.old))).toMatchObject({
@@ -350,6 +358,31 @@ testAgent()("explicit new Goal transition", (it) => {
         applied: false,
       });
       expect(yield* identity(f.session)).toBe(f.old);
+    }),
+  );
+
+  // A chat run that failed before the Goal bound any run once held every later new Goal back: it
+  // has no binding, so neither its known effects nor the user's acknowledgement could settle it.
+  // A run waiting on the user's answer still holds it back.
+  it.effect.each([
+    { status: "failed", expected: applied },
+    { status: "aborted", expected: applied },
+    { status: "interrupted", expected: refused("run_outcome_uncertain") },
+  ] as const)("an unbound $status run", ({ status, expected }) =>
+    Effect.gen(function* () {
+      const f = yield* withInvokingRun();
+      const unbound = `${f.session}:unbound`;
+      yield* startRun(f.session, unbound, status);
+      yield* Expected.$match(expected, {
+        applied: () =>
+          Effect.map(f.request(), (result) =>
+            expect(result).toEqual({ status: "accepted", runId: f.invoking }),
+          ),
+        refused: ({ reason }) =>
+          Effect.map(Effect.flip(f.request()), (error) =>
+            expect(error).toMatchObject({ reason, runIds: [unbound] }),
+          ),
+      });
     }),
   );
 
