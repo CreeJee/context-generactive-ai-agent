@@ -375,7 +375,11 @@ function ChatPanel({
   useAtomMount(Composer.$is("editing")(composer) ? composer.text : drafts.text);
   const [dragging, setDragging] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const media = useImageGeneration((message) => setNotice(problem(message)));
+  const media = useImageGeneration({
+    sessionId,
+    holder,
+    onProblem: (message) => setNotice(problem(message)),
+  });
   /** The prompt waiting for the user to accept a paid image generation. */
   const [imagePrompt, setImagePrompt] = useState<string | null>(null);
   /** A move away from a running board the user is asked to confirm; `revise` focuses the composer after. */
@@ -857,7 +861,10 @@ function ChatPanel({
     runUiEffect(
       Effect.gen(function* () {
         setImagePrompt(null);
-        if (yield* uiPromise(() => media.generate(prompt))) clearComposer();
+        if (yield* uiPromise(() => media.generate(prompt))) {
+          clearComposer();
+          reopen();
+        }
       }),
     );
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -961,9 +968,17 @@ function ChatPanel({
           clearComposer();
           sendMessage(content);
         };
+        if (media.generating)
+          return setNotice(
+            problem(t`이미지를 만드는 동안에는 메시지를 보낼 수 없습니다. 끝난 뒤 보내 주십시오.`),
+          );
         if (!generating && media.intent) {
           if (attachmentIds.length > 0)
-            return setNotice(problem(t`첫 버전의 이미지 생성은 텍스트 프롬프트만 지원합니다.`));
+            return setNotice(
+              problem(
+                t`이미지를 붙인 채로는 아직 이미지를 만들 수 없습니다. 첨부를 지우고 다시 보내 주십시오.`,
+              ),
+            );
           // A paid media model may run, so the dialog asks before `generateImage` does.
           return setImagePrompt(text);
         }
@@ -1169,7 +1184,6 @@ function ChatPanel({
               imageIntent={media.intent}
               onToggleImageIntent={media.toggleIntent}
               generatingImage={media.generating}
-              generatedImage={media.asset}
               imagesSupported={imagesSupported}
               mutationBlocked={mutationBlocked}
               generating={generating}

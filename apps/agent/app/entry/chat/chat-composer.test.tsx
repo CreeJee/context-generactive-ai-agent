@@ -29,7 +29,6 @@ function renderPlanComposer() {
         imageIntent={false}
         onToggleImageIntent={() => {}}
         generatingImage={false}
-        generatedImage={null}
         imagesSupported={false}
         mutationBlocked={false}
         generating

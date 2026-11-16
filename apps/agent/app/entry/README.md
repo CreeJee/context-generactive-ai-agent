@@ -25,7 +25,7 @@
 - `BoardEdit` / `BoardIntent` / `DecisionAnswer` — memory-agent 타입에서 `Data.taggedEnum`으로 만든 생성자·matcher다. 페이지가 서버로 보낼 때 쓴다
 - `KagiCommand` / `ImportCommand` / `EmbeddingCommand` — `/api/settings/kagi`, `/api/settings/imports`, `/api/settings/embedding` 명령 TaggedEnum이다. 비공개 `ImageSettingsCommand`, `ExternalAgentCommand`, `KanbanCommand`도 같은 방식으로 정의된다
 - `EmbedderRuntime` / `GpuState` / `ModelDownload` / `AgentTrustState` / `AgentLinkState` / `McpServerState` / `AccountLoginState` / `ImportActivity` / `WorkflowExecutionState` — 서버 유니온 타입에 `Data.taggedEnum` 생성자·matcher를 붙여 다시 내보낸 것이다
-- `GeneratedImageAsset` / `ImageSettingsView` / `CrossProviderMediaRunApproval` — 이미지 자산(+url) 타입(계약의 `GeneratedImage`), 이미지 설정 뷰(+crossProviderMediaConsent) 타입, 교차 공급자 실행 승인 `Schema.Struct`(계약에서 다시 내보낸다)다
+- `ImageSettingsView` / `CrossProviderMediaRunApproval` — 이미지 설정 뷰(+crossProviderMediaConsent) 타입, 교차 공급자 실행 승인 `Schema.Struct`(계약에서 다시 내보낸다)다
 - `ConversationSettings` / `RecallSettings` / `KanbanSettings` / `KanbanSettingsCommand` / `ProjectKanbanSettings` / `ProjectKanbanCommand` — 대화·회상·칸반 설정 뷰와 명령 타입으로, `api.ts`에 정의되어 있다
 - `DeliveredEvent` / `ContextEvent` / `eventDecoders` — 스트림 이벤트(대기열 전달, context) `Schema.Struct`와 그 디코더 표다
 - `ErrorBody` — 계약에 없는 상태로 거절된 응답과 첨부 업로드 거절의 본문 Schema다
@@ -57,7 +57,7 @@
 ## Side Effects
 
 - 네트워크: `api`의 메서드는 `appCall`로 앱 API 계약(`memory-agent/app-api`)의 `HttpApiClient`를 `appFetch` 위에서 부른다. 거부는 `appRefusalStatus`의 상태와 함께 `ApiError`가 된다. 계약에 없는 상태의 응답은 `ErrorBody`로 디코드한다(`apiError`). 계약이 보내기 전에 거절한 값은 400 `invalid_request`, 계약에 맞지 않는 응답은 서버 잘못이라 502 `request_failed`다(client의 `transformResponse`가 응답 decode 실패를 `UnexpectedAnswer`로 가른다)
-- 네트워크: `uploadAttachment(file)`로 첨부 파일을 업로드한다. `generateImage`로 이미지를 생성 요청한다
+- 네트워크: `uploadAttachment(file)`로 첨부 파일을 업로드한다. `generateSessionImage(session, holder, prompt, approved, approval?)`로 `POST /api/sessions/:session/images`에 이미지 생성을 요청한다. 서버가 그림을 대화에 적는다
 - `workTraceStreamUrl(sessionId, after)`로 work trace SSE 스트림 URL을 만든다(구독은 호출자가 맡는다)
 - `api.ts`는 `browserCrypto`(Web Crypto 기반 Effect `SecureRandom`)를 import한다
 - URL 상태: `App`이 nuqs `setLocation`으로 브라우저 쿼리스트링을 바꾼다. 프로젝트 선택·추가 때는 `history: "push"`를 쓴다

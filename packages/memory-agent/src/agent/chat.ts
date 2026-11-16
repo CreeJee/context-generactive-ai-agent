@@ -146,6 +146,8 @@ import {
 } from "../runtime/logged-failures.ts";
 import { promptLayout } from "./prompt-layout.ts";
 import { createLiveRuns } from "./live-runs.ts";
+import { imageCallArguments, imageMessages, imageResult, imageToolName } from "./image-record.ts";
+import type { ImageMediaAsset } from "../providers/image-media-contracts.ts";
 import { RunCancellations } from "../runtime/run-cancellation.ts";
 import { shownRunErrors } from "./run-errors.ts";
 import {
@@ -855,6 +857,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     Effect.fail({ error: "provider_unavailable", provider } as const);
   /** Refuses a change while the session is answering. */
   const runInProgress = () => Effect.fail({ error: "run_in_progress" } as const);
+  /** The generated image is made and stored, but writing it into the conversation failed. */
+  const imageNotRecorded = <E extends { readonly _tag: string }>(failure: E) =>
+    logFailure("Generated image was not recorded")(failure).pipe(
+      Effect.andThen(Effect.fail({ error: "image_record_failed" } as const)),
+    );
   /**
    * Refuses an archive, restore or delete that cannot start. Only a finished operation that was
    * blocked keeps a row in that state, and it names its blocker; a row without one is a defect.
@@ -2462,6 +2469,114 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         Effect.catchTags({
           SessionNotFound: unknownSession,
           ProviderUnavailable: unavailableProvider,
+        }),
+      ),
+
+    /**
+     * Before a paid image generation for the conversation: refuses another page's session and a
+     * session that is answering, and gives the chat route the generation starts from.
+     */
+    imageOrigin: (sessionId: string, holder: string | null) =>
+      Effect.gen(function* () {
+        yield* refuseOtherHolder(sessionId, holder);
+        yield* sessions.get(sessionId);
+        if (isTruthy(yield* liveRuns.get(sessionId))) return yield* runInProgress();
+        const selected = yield* sessionModel(sessionId);
+        if (selected === null)
+          return yield* Effect.fail({
+            error: "image_route_unavailable",
+            reason: "no chat model selected",
+          } as const);
+        return `chat:${selected.provider}:${selected.model}` as const;
+      }).pipe(
+        Effect.catchTags({
+          SessionNotFound: unknownSession,
+          ProviderUnavailable: unavailableProvider,
+        }),
+      ),
+
+    /**
+     * Writes a generated image into the conversation as the user's prompt, a `generate_image` call
+     * and its result, with the picture tied to the result's node so cleanup keeps it. Waits for a
+     * run that started meanwhile, and finishes even if the page that asked has gone: the image is
+     * already paid for.
+     */
+    recordImage: (
+      sessionId: string,
+      holder: string | null,
+      image: { readonly prompt: string; readonly asset: ImageMediaAsset },
+    ) =>
+      Effect.gen(function* () {
+        yield* refuseOtherHolder(sessionId, holder);
+        const session = yield* sessions.get(sessionId);
+        const write = Effect.gen(function* () {
+          const prompt = (yield* redactor.redactText(image.prompt)).text;
+          const ids = {
+            user: yield* crypto.uuidV7(),
+            assistant: yield* crypto.uuidV7(),
+            tool: yield* crypto.uuidV7(),
+            toolCall: yield* crypto.uuidV7(),
+          };
+          const argumentsText = stringifyJson(imageCallArguments(prompt));
+          const resultText = stringifyJson(imageResult(image.asset));
+          const base = { projectId: session.projectId, sessionId };
+          yield* Effect.gen(function* () {
+            yield* nodes.append({ ...base, kind: "user", text: prompt });
+            const callNode = yield* nodes.append({
+              ...base,
+              kind: "tool_call",
+              text: argumentsText,
+              detail: { toolName: imageToolName, toolCallId: ids.toolCall },
+            });
+            const resultNode = yield* nodes.append({
+              ...base,
+              kind: "tool_result",
+              text: resultText,
+              detail: { toolName: imageToolName, toolCallId: ids.toolCall, ok: true },
+              links: [{ kind: "returns", nodeId: callNode.id }],
+            });
+            yield* attachments.linkStored(resultNode.id, [image.asset.attachment.id]);
+            const stored = yield* runStore.thread(sessionId);
+            const now = yield* DateTime.now;
+            yield* runStore.saveThread(sessionId, [
+              ...stored,
+              ...imageMessages({
+                prompt,
+                asset: image.asset,
+                ids,
+                createdAt: DateTime.formatIso(now),
+                argumentsText,
+                resultText,
+              }),
+            ]);
+          }).pipe(sql.withTransaction);
+          yield* events.publishProject(session.projectId, "sessions");
+          yield* events.publishSession(sessionId, "run-state");
+          return {
+            userMessageId: ids.user,
+            assistantMessageId: ids.assistant,
+            toolMessageId: ids.tool,
+          };
+        });
+        // A run that started while the image was made saves the whole thread after each step, so
+        // the messages wait for it to end.
+        const waitForRun = Effect.flatMap(liveRuns.get(sessionId), (run) =>
+          run === null ? Effect.sleep("50 millis") : run.ended,
+        );
+        return yield* liveRuns.writing(sessionId, write).pipe(
+          Effect.tap((written) => Effect.when(waitForRun, Effect.succeed(written === null))),
+          Effect.repeat({ until: Predicate.isNotNull }),
+          Effect.forkIn(scope, { startImmediately: true }),
+          Effect.flatMap(Fiber.join),
+        );
+      }).pipe(
+        Effect.catchTags({
+          SessionNotFound: unknownSession,
+          NodeStoreFailed: imageNotRecorded,
+          SecretRedactionFailed: imageNotRecorded,
+          NoSuchElementError: imageNotRecorded,
+          SqlError: imageNotRecorded,
+          SchemaError: imageNotRecorded,
         }),
       ),
 

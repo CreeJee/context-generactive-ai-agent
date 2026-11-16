@@ -11,6 +11,7 @@ import {
   DecisionCloseScope,
   ExternalAgents,
   HumanDecisions,
+  ImageMediaWorkflow,
   KanbanBoardActions,
   KanbanOrchestrator,
   Projects,
@@ -21,6 +22,7 @@ import {
 import { AppApi } from "memory-agent/app-api";
 import { kanbanRefusal } from "../kanban-failures.ts";
 import { refusalsOnly } from "./agent-chat-refusals.ts";
+import { imageGenerationRefusals } from "./media.ts";
 
 /** A person changed the board from the page. */
 const user = BoardAuthor.cases.User.make({});
@@ -42,6 +44,7 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
     const actions = yield* KanbanBoardActions;
     const chat = yield* AgentChat;
     const active = yield* ActiveProvider;
+    const workflow = yield* ImageMediaWorkflow;
 
     /** Refuses a change while another page holds the session. */
     const checkHolder = (sessionId: string, holder: string | undefined) =>
@@ -335,6 +338,16 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
             (failure) => Effect.die(failure),
           ),
         ),
+      generateImage: ({ params: { session }, headers, payload }) =>
+        Effect.gen(function* () {
+          const holder = headers["x-session-holder"] ?? null;
+          const initiatorChatRouteId = yield* refusalsOnly(chat.imageOrigin(session, holder));
+          // The paid request stops when the page goes away and the handler is interrupted.
+          const signal = yield* Effect.abortSignal;
+          const asset = yield* workflow.generate({ ...payload, initiatorChatRouteId, signal });
+          yield* chat.recordImage(session, holder, { prompt: payload.prompt, asset });
+          return { ...asset, url: `/api/attachments/${encodeURIComponent(asset.attachment.id)}` };
+        }).pipe(Effect.scoped, Effect.catchTags(imageGenerationRefusals)),
       lease: ({ params: { session }, payload: { holder, action } }) =>
         refusalsOnly(chat.lease(session, holder, action)).pipe(
           Effect.tap(() => events.publishSession(session, "run-state")),

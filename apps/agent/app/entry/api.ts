@@ -15,7 +15,6 @@ import {
   type ExternalAgentCommand as ExternalAgentCommandCase,
   CrossProviderMediaRunApproval,
   FolderPick,
-  type GeneratedImage,
   type ImageSettings,
   type ImageSettingsCommand as ImageSettingsCommandCase,
   type ImportCommand as ImportCommandCase,
@@ -177,7 +176,6 @@ export const ImportActivity = Data.taggedEnum<ImportActivity>();
 export type WorkflowExecutionState = NonNullable<SessionRunState["execution"]>;
 export const WorkflowExecutionState = Data.taggedEnum<WorkflowExecutionState>();
 
-export type GeneratedImageAsset = GeneratedImage;
 export type ImageSettingsView = ImageSettings;
 
 /** A provider's connection as `/api/auth` sends it; a pending login's URL arrives as `authUrl`. */
@@ -779,13 +777,18 @@ export const api = {
         payload: ImageSettingsCommand.cross_provider_media({ mode }),
       }),
     ),
-  generateImage: (
+  /** A paid image, written into the conversation as the prompt, a call and its result. */
+  generateSessionImage: (
+    session: string,
+    holder: string,
     prompt: string,
     approved: boolean,
     crossProviderApproval?: CrossProviderMediaRunApproval,
   ) =>
     appCall((client) =>
-      client.media.generateImage({
+      client.sessions.generateImage({
+        params: { session },
+        headers: { "x-session-holder": holder },
         payload:
           crossProviderApproval === undefined
             ? { prompt, approved }
