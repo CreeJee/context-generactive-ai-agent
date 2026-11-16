@@ -1849,6 +1849,10 @@ msgstr "다른 탭에서 쓰고 있는 대화입니다. 그 탭에서 다시 시
 msgid "다른 탭에서 쓰고 있는 대화입니다. 그 탭을 닫은 뒤 다시 시도해 주십시오."
 msgstr "다른 탭에서 쓰고 있는 대화입니다. 그 탭을 닫은 뒤 다시 시도해 주십시오."
 
+#: app/entry/media/use-image-generation.ts
+msgid "다른 탭이 이 대화를 쓰고 있습니다."
+msgstr "다른 탭이 이 대화를 쓰고 있습니다."
+
 #: app/entry/settings/pages/recall.tsx
 msgid "다른 프로젝트 기억도 찾기"
 msgstr "다른 프로젝트 기억도 찾기"
@@ -2172,10 +2176,6 @@ msgstr "대화 {count}개"
 #: app/entry/settings/shared.tsx
 msgid "대화 가져오기"
 msgstr "대화 가져오기"
-
-#: app/entry/chat/chat-composer.tsx
-msgid "대화 모델: {chatModel} · 실행 경로: {mediaRoute}"
-msgstr "대화 모델: {chatModel} · 실행 경로: {mediaRoute}"
 
 #: app/entry/navigation/sidebar.tsx
 msgid "대화 목록을 불러오지 못했습니다."
@@ -3121,10 +3121,6 @@ msgstr "사용 중"
 msgid "사용 중지"
 msgstr "사용 중지"
 
-#: app/entry/chat/chat-composer.tsx
-msgid "사용량: {usage}"
-msgstr "사용량: {usage}"
-
 #: app/entry/chat/context-meter.tsx
 msgid "사용량이 모델 한도보다 커서 사용률은 표시하지 않습니다. 다음 요청부터 새 압축 결과가 반영됩니다."
 msgstr "사용량이 모델 한도보다 커서 사용률은 표시하지 않습니다. 다음 요청부터 새 압축 결과가 반영됩니다."
@@ -3263,10 +3259,6 @@ msgstr "새 파일"
 #: app/entry/chat/chat-panel.tsx
 msgid "생각하는 중…"
 msgstr "생각하는 중…"
-
-#: app/entry/chat/chat-composer.tsx
-msgid "생성된 이미지"
-msgstr "생성된 이미지"
 
 #. Kind of a result a task produced, in Work Trace: output the app stores itself
 #: app/entry/chat/work-trace-panel.tsx
@@ -3790,10 +3782,6 @@ msgstr "실행 기회를 모두 써서 멈췄습니다. 다시 대기열에 넣�
 msgid "실행 방식"
 msgstr "실행 방식"
 
-#: app/entry/chat/chat-composer.tsx
-msgid "실행 방식: {executionMode}"
-msgstr "실행 방식: {executionMode}"
-
 #: app/entry/chat/message.tsx
 msgid "실행 상태에 다시 연결 중"
 msgstr "실행 상태에 다시 연결 중"
@@ -4194,14 +4182,6 @@ msgstr "예"
 msgid "예: 승인 창이 계속 나타나고 채팅을 이어갈 수 없습니다."
 msgstr "예: 승인 창이 계속 나타나고 채팅을 이어갈 수 없습니다."
 
-#: app/entry/chat/chat-composer.tsx
-msgid "예상 비용 ${usd}"
-msgstr "예상 비용 ${usd}"
-
-#: app/entry/chat/chat-composer.tsx
-msgid "예상 비용 미확인"
-msgstr "예상 비용 미확인"
-
 #: app/entry/settings/pages/imports.tsx
 #: app/root.tsx
 msgid "예상하지 못한 오류가 났습니다"
@@ -4554,6 +4534,10 @@ msgstr "이 결정 요청은 닫혔습니다. 카드가 멈췄거나 실행이 �
 msgid "이 대화가 아직 답하는 중입니다."
 msgstr "이 대화가 아직 답하는 중입니다."
 
+#: app/entry/media/use-image-generation.ts
+msgid "이 대화가 아직 답하는 중입니다. 답변이 끝난 뒤 다시 보내 주십시오."
+msgstr "이 대화가 아직 답하는 중입니다. 답변이 끝난 뒤 다시 보내 주십시오."
+
 #: app/entry/chat/context-meter.tsx
 msgid "이 대화로 아직 모델에 요청하지 않았습니다."
 msgstr "이 대화로 아직 모델에 요청하지 않았습니다."
@@ -4807,6 +4791,10 @@ msgstr "이미지 첨부"
 msgid "이미지를 놓으면 첨부됩니다"
 msgstr "이미지를 놓으면 첨부됩니다"
 
+#: app/entry/chat/chat-panel.tsx
+msgid "이미지를 만드는 동안에는 메시지를 보낼 수 없습니다. 끝난 뒤 보내 주십시오."
+msgstr "이미지를 만드는 동안에는 메시지를 보낼 수 없습니다. 끝난 뒤 보내 주십시오."
+
 #: app/entry/chat/refusals.ts
 msgid "이미지를 만들 경로가 없습니다. 설정에서 이미지 생성을 확인해 주십시오."
 msgstr "이미지를 만들 경로가 없습니다. 설정에서 이미지 생성을 확인해 주십시오."
@@ -4814,6 +4802,14 @@ msgstr "이미지를 만들 경로가 없습니다. 설정에서 이미지 생�
 #: app/entry/chat/chat-panel.tsx
 msgid "이미지를 만들까요?"
 msgstr "이미지를 만들까요?"
+
+#: app/entry/media/use-image-generation.ts
+msgid "이미지를 만들었지만 대화에 적지 못했습니다. 다시 시도해 주십시오."
+msgstr "이미지를 만들었지만 대화에 적지 못했습니다. 다시 시도해 주십시오."
+
+#: app/entry/chat/chat-panel.tsx
+msgid "이미지를 붙인 채로는 아직 이미지를 만들 수 없습니다. 첨부를 지우고 다시 보내 주십시오."
+msgstr "이미지를 붙인 채로는 아직 이미지를 만들 수 없습니다. 첨부를 지우고 다시 보내 주십시오."
 
 #: app/entry/media/use-image-generation.ts
 msgid "이미지를 생성하지 못했습니다. 설정과 계정 권한을 확인해 주십시오."
@@ -5636,10 +5632,6 @@ msgstr "첨부된 증거 없음. 위 설명만으로 제보합니다."
 #: app/entry/chat/refusals.ts
 msgid "첨부한 이미지를 서버에서 찾지 못했습니다. 이미지를 다시 올려 주십시오."
 msgstr "첨부한 이미지를 서버에서 찾지 못했습니다. 이미지를 다시 올려 주십시오."
-
-#: app/entry/chat/chat-panel.tsx
-msgid "첫 버전의 이미지 생성은 텍스트 프롬프트만 지원합니다."
-msgstr "첫 버전의 이미지 생성은 텍스트 프롬프트만 지원합니다."
 
 #: app/entry/report/report-bundle.tsx
 msgid "최근 결함"

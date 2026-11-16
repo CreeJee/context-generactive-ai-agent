@@ -29,7 +29,7 @@ import { QueuePanel } from "./queue-panel";
 import { SlashPalette } from "./slash-palette";
 import { suggest, type SlashContext } from "./slash-commands";
 import { composerModeOf, modeLabels } from "./workflow-panel";
-import type { GeneratedImageAsset, ImageFeatureStatus, QueuedMessage, WorkflowMove } from "../api";
+import type { ImageFeatureStatus, QueuedMessage, WorkflowMove } from "../api";
 import type { useRunState } from "../session/use-run-state";
 
 const workflowModes = ["chat", "goal", "plan"] as const satisfies readonly WorkflowMove[];
@@ -43,38 +43,6 @@ const modeTitles = {
 
 const imageFiles = (files: FileList | null) =>
   Array.from(files ?? []).filter((file) => file.type.startsWith("image/"));
-
-/** The image just generated, with the route that made it and what it cost. */
-function GeneratedImage({ image }: { image: GeneratedImageAsset }) {
-  const { t } = useLingui();
-  const chatModel = image.initiatorChatModel;
-  const mediaRoute = image.executorMediaRouteId;
-  const { executionMode } = image;
-  const usd = image.estimatedCostUsd?.toFixed(4);
-  const usage = JSON.stringify(image.usage);
-  return (
-    <div className="mb-2 overflow-hidden rounded-lg border bg-card">
-      <img src={image.url} alt={t`생성된 이미지`} className="max-h-96 w-full object-contain" />
-      <div className="space-y-1 border-t p-3 text-xs text-muted-foreground">
-        <div>
-          <Trans>
-            대화 모델: {chatModel} · 실행 경로: {mediaRoute}
-          </Trans>
-        </div>
-        <div>
-          <Trans>실행 방식: {executionMode}</Trans>
-          {" · "}
-          {usd === undefined ? <Trans>예상 비용 미확인</Trans> : <Trans>예상 비용 ${usd}</Trans>}
-        </div>
-        {image.usage && (
-          <div>
-            <Trans>사용량: {usage}</Trans>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 export interface ChatComposerHandle {
   focus: () => void;
@@ -93,7 +61,6 @@ export function ChatComposer({
   imageIntent,
   onToggleImageIntent,
   generatingImage,
-  generatedImage,
   imagesSupported,
   mutationBlocked,
   generating,
@@ -125,7 +92,6 @@ export function ChatComposer({
   imageIntent: boolean;
   onToggleImageIntent: () => void;
   generatingImage: boolean;
-  generatedImage: GeneratedImageAsset | null;
   imagesSupported: boolean;
   mutationBlocked: boolean;
   generating: boolean;
@@ -232,7 +198,6 @@ export function ChatComposer({
             <Trans>승인된 미디어 경로에서 이미지를 생성하고 있습니다…</Trans>
           </div>
         )}
-        {generatedImage && <GeneratedImage image={generatedImage} />}
         <PromptInput editing={editingId !== null}>
           <QueuePanel
             items={queueItems}
