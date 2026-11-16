@@ -5525,7 +5525,6 @@
 
 - 계기: BTW는 열린 대화 옆에서 따로 묻는 패널이었다. 사용자는 다른 대화에서 묻는 것과 다르지 않다고 보았다. 화면과 서버에 따로 유지하는 코드가 1,600줄쯤 있었다.
 - 결정: BTW의 패널과 헤더 버튼, `/api/sessions/:session/btw`와 `/api/btw/:thread` 경로, `BtwChat`·`BtwThreads` 서비스, 그 테스트를 지운다.
-  - DB의 `btw_threads`, `btw_thread_messages`, `btw_attachments` 표와 그 migration은 그대로 둔다. 옛 DB가 지금 판으로 올라오는 길이고, 저장된 스레드를 지우면 되살릴 수 없다.
-  - 첨부 정리는 `btw_attachments`가 가리키는 첨부를 계속 남긴다.
-  - 이제 이 표들에 쓰는 코드는 없다.
-- 남은 것: 표를 지우는 migration. 저장된 스레드를 버리는 일이라 사용자가 따로 정한다.
+  - DB의 `btw_threads`, `btw_thread_messages`, `btw_attachments` 표도 지운다. 앱이 DB를 열 때 migration step 하나가 지운다. 저장되어 있던 BTW 스레드는 함께 사라지고 되살릴 수 없다. 사용자가 정했다.
+  - 표를 만들고 옮기던 옛 migration step은 그대로 둔다. 옛 DB가 지금 판으로 올라오는 길이다.
+  - 첨부 정리는 `btw_attachments`를 더 보지 않는다. BTW 메시지에만 붙어 있던 이미지는 다음 정리에서 지워진다.
