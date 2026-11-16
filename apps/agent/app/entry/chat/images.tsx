@@ -54,13 +54,13 @@ function ImageDialog({ image, onClose }: { image: MessageImage | null; onClose: 
 }
 
 /**
- * A picture of a drawing the model wrote, under its tool call. It is the snapshot taken when the
- * file was written, so it still shows what was drawn after the file changes. Clicking opens it full
- * size.
+ * A picture of a drawing the model wrote, or of an image the app generated, under its tool call.
+ * A drawing is the snapshot taken when the file was written, so it still shows what was drawn after
+ * the file changes; a generated image has no file, so `path` is null. Clicking opens it full size.
  */
-export function DrawingPicture({ url, path }: { url: string; path: string }) {
+export function DrawingPicture({ url, path }: { url: string; path: string | null }) {
   const { t } = useLingui();
-  const drawingAlt = t`그린 그림: ${path}`;
+  const drawingAlt = path === null ? t`생성한 이미지` : t`그린 그림: ${path}`;
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -68,15 +68,13 @@ export function DrawingPicture({ url, path }: { url: string; path: string }) {
         type="button"
         onClick={() => setOpen(true)}
         className="block w-fit max-w-full overflow-hidden rounded-md border bg-white"
-        title={t`${path} 크게 보기`}
+        title={path === null ? t`크게 보기` : t`${path} 크게 보기`}
       >
         <img src={url} alt={drawingAlt} className="max-h-80 max-w-full object-contain" />
       </button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-[min(90vw,64rem)] sm:max-w-[min(90vw,64rem)]">
-          <DialogTitle>
-            <code>{path}</code>
-          </DialogTitle>
+          <DialogTitle>{path === null ? t`생성한 이미지` : <code>{path}</code>}</DialogTitle>
           <img
             src={url}
             alt={drawingAlt}

@@ -215,3 +215,45 @@ it.live("an outside file tool that ran on a project file is shown as the project
     expect(screen.getByText("프로젝트 밖 파일 쓰기").elements()).toHaveLength(0);
   }),
 );
+
+it.live("a generated image result is shown as a picture under its tool call", () =>
+  Effect.gen(function* () {
+    const attachmentId = "a".repeat(64);
+    const screen = yield* sdkCall(() =>
+      render(
+        <MessageView
+          {...props}
+          streaming={false}
+          message={{
+            id: "generated",
+            role: "assistant",
+            parts: [
+              {
+                type: "tool-call" as const,
+                id: "image-call",
+                name: "generate_image",
+                arguments: '{"prompt":"a red fox"}',
+                state: "complete" as const,
+              },
+              {
+                type: "tool-result" as const,
+                toolCallId: "image-call",
+                content: JSON.stringify({
+                  preview: { attachmentId, mimeType: "image/png" },
+                  route: "media:test",
+                  model: "provider_managed",
+                }),
+                state: "complete" as const,
+              },
+            ],
+          }}
+        />,
+        { wrapper: Translated },
+      ),
+    );
+    yield* sdkCall(() => expect.element(screen.getByText("이미지 생성")).toBeVisible());
+    yield* sdkCall(() =>
+      expect.element(screen.getByRole("img", { name: "생성한 이미지" })).toBeVisible(),
+    );
+  }),
+);

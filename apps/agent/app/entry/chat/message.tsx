@@ -61,6 +61,7 @@ const toolLabels = {
   list_files: msg`파일 목록`,
   search_files: msg`파일 내용 검색`,
   read_file: msg`파일 읽기`,
+  generate_image: msg`이미지 생성`,
   write_file: msg`파일 쓰기`,
   edit_file: msg`파일 편집`,
   delete_file: msg`파일 삭제`,
@@ -265,11 +266,11 @@ const refusalStatus = {
   blocked: CallStatus.blocked(),
 } satisfies Record<typeof RefusedResult.Type, CallStatus>;
 
-/** A write_file / edit_file result that carries a picture of the SVG it wrote. */
+/** A result that carries a picture: the SVG a file tool wrote, or a generated image (no path). */
 const decodeDrawing = Schema.decodeUnknownOption(
   Schema.fromJsonString(
     Schema.Struct({
-      path: Schema.String,
+      path: Schema.optionalKey(Schema.String),
       preview: Schema.Struct({ attachmentId: Schema.String }),
     }),
   ),
@@ -281,7 +282,7 @@ function drawingOf(result: ToolResult | undefined) {
   const drawing = Option.getOrUndefined(decodeDrawing(result.content));
   if (!(drawing !== undefined)) return null;
   const url = attachmentUrl(drawing.preview.attachmentId);
-  return isTruthy(attachmentIdOf(url)) ? { url, path: drawing.path } : null;
+  return isTruthy(attachmentIdOf(url)) ? { url, path: drawing.path ?? null } : null;
 }
 
 function callStatus(call: ToolCall, result: ToolResult | undefined, awaitingApproval: boolean) {
