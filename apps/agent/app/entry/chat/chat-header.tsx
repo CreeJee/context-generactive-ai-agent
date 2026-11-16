@@ -10,7 +10,7 @@ export function ChatHeader({
 }: {
   readonly title: string;
   readonly projectName: string | null;
-  /** The buttons at the header's end: BTW and Work Trace. */
+  /** The buttons at the header's end: Work Trace. */
   readonly children: ReactNode;
 }) {
   const { open, isMobile } = useSidebar();

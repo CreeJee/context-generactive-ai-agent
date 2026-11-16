@@ -607,38 +607,6 @@ msgstr "API 키"
 msgid "API 키 (선택)"
 msgstr "API 키 (선택)"
 
-#: app/entry/chat/btw-panel.tsx
-msgid "BTW 목록"
-msgstr "BTW 목록"
-
-#: app/entry/chat/btw-panel.tsx
-msgid "BTW 별도 질문"
-msgstr "BTW 별도 질문"
-
-#: app/entry/chat/btw-panel.tsx
-msgid "BTW 삭제"
-msgstr "BTW 삭제"
-
-#: app/entry/chat/btw-panel.tsx
-msgid "BTW 열기"
-msgstr "BTW 열기"
-
-#: app/entry/chat/btw-panel.tsx
-msgid "BTW 질문"
-msgstr "BTW 질문"
-
-#: app/entry/chat/btw-panel.tsx
-msgid "BTW로 물어보기"
-msgstr "BTW로 물어보기"
-
-#: app/entry/chat/btw-panel.tsx
-msgid "BTW를 삭제했습니다."
-msgstr "BTW를 삭제했습니다."
-
-#: app/entry/chat/btw-panel.tsx
-msgid "BTW를 삭제했습니다. 일부 이미지 파일은 다음 정리 때 지워집니다."
-msgstr "BTW를 삭제했습니다. 일부 이미지 파일은 다음 정리 때 지워집니다."
-
 #: app/entry/navigation/compatible-accounts.tsx
 msgid "Chat Completions 호환 서버를 엔드포인트마다 등록하고 쓸 모델을 직접 추가합니다. 공급자의 API 요금이 적용될 수 있습니다."
 msgstr "Chat Completions 호환 서버를 엔드포인트마다 등록하고 쓸 모델을 직접 추가합니다. 공급자의 API 요금이 적용될 수 있습니다."
@@ -1683,8 +1651,6 @@ msgstr "기본값으로"
 msgid "기억"
 msgstr "기억"
 
-#. BTW tool call: searches the project's memory
-#: app/entry/chat/btw-panel.tsx
 #: app/entry/chat/message.tsx
 msgid "기억 검색"
 msgstr "기억 검색"
@@ -2135,10 +2101,6 @@ msgstr "답을 기록하거나 카드를 옮기지 못했습니다. 잠시 뒤 �
 msgid "답을 보내지 못했습니다."
 msgstr "답을 보내지 못했습니다."
 
-#: app/entry/chat/btw-panel.tsx
-msgid "답하지 못했습니다. 잠시 후 다시 시도해 주십시오."
-msgstr "답하지 못했습니다. 잠시 후 다시 시도해 주십시오."
-
 #. What a running task is doing now, in Work Trace
 #: app/entry/chat/work-trace-panel.tsx
 msgid "대기"
@@ -2504,7 +2466,6 @@ msgstr "먼저 API 키를 등록해 주십시오."
 msgid "먼저 merge될 Goal을 기다리는 중: {goals}. 그동안 카드를 새로 시작하지 않습니다."
 msgstr "먼저 merge될 Goal을 기다리는 중: {goals}. 그동안 카드를 새로 시작하지 않습니다."
 
-#: app/entry/chat/btw-panel.tsx
 #: app/entry/chat/refusals.ts
 msgid "먼저 모델을 선택해 주십시오."
 msgstr "먼저 모델을 선택해 주십시오."
@@ -2529,14 +2490,6 @@ msgstr "메시지를 넣지 못했습니다. 다시 시도해 주십시오."
 #: app/entry/chat/chat-composer.tsx
 msgid "메시지를 입력해 주십시오. /로 명령을 부르고 이미지는 붙여넣거나 끌어다 놓습니다"
 msgstr "메시지를 입력해 주십시오. /로 명령을 부르고 이미지는 붙여넣거나 끌어다 놓습니다"
-
-#: app/entry/chat/btw-panel.tsx
-msgid "메인 대화를 보면서 따로 묻고 싶은 것을 물어봐 주십시오."
-msgstr "메인 대화를 보면서 따로 묻고 싶은 것을 물어봐 주십시오."
-
-#: app/entry/chat/btw-panel.tsx
-msgid "메인 대화와 이 프로젝트의 기억을 읽고 근거를 찾아 답합니다. 여기서 나눈 질문·답변·조회 결과는 메인 대화나 검색 기억에 들어가지 않습니다. 닫아도 다시 열 수 있게 이 BTW에만 남습니다."
-msgstr "메인 대화와 이 프로젝트의 기억을 읽고 근거를 찾아 답합니다. 여기서 나눈 질문·답변·조회 결과는 메인 대화나 검색 기억에 들어가지 않습니다. 닫아도 다시 열 수 있게 이 BTW에만 남습니다."
 
 #. Heading of the slash command group in the palette
 #: app/entry/chat/slash-palette.tsx
@@ -2925,8 +2878,6 @@ msgid "보관함"
 msgstr "보관함"
 
 #. Button that sends a held or failed queued message
-#. Button that sends the BTW question
-#: app/entry/chat/btw-panel.tsx
 #: app/entry/chat/queue-panel.tsx
 msgid "보내기"
 msgstr "보내기"
@@ -3227,12 +3178,10 @@ msgid "사이드바 펼치기 (⌘B)"
 msgstr "사이드바 펼치기 (⌘B)"
 
 #. Button that deletes a subagent task's record
-#. Button that deletes the BTW thread
 #. Button that removes the endpoint
 #. Dialog button that confirms deleting the conversation's source
 #. Dialog button that confirms removing the endpoint
 #. Dialog button that deletes the task record
-#: app/entry/chat/btw-panel.tsx
 #: app/entry/chat/message.tsx
 #: app/entry/navigation/compatible-accounts.tsx
 #: app/entry/navigation/sidebar.tsx
@@ -3260,14 +3209,6 @@ msgstr "삭제됨"
 #: app/entry/navigation/account-profiles.tsx
 msgid "새 {providerName} 계정"
 msgstr "새 {providerName} 계정"
-
-#: app/entry/chat/btw-panel.tsx
-msgid "새 BTW · {createdAt}"
-msgstr "새 BTW · {createdAt}"
-
-#: app/entry/chat/btw-panel.tsx
-msgid "새 BTW 열기"
-msgstr "새 BTW 열기"
 
 #: app/entry/navigation/compatible-accounts.tsx
 msgid "새 OpenAI 호환 엔드포인트"
@@ -3319,7 +3260,6 @@ msgstr "새 카드로 대체하도록 요청했습니다"
 msgid "새 파일"
 msgstr "새 파일"
 
-#: app/entry/chat/btw-panel.tsx
 #: app/entry/chat/chat-panel.tsx
 msgid "생각하는 중…"
 msgstr "생각하는 중…"
@@ -3450,7 +3390,6 @@ msgstr "선택한 공급자는 이미지를 만들 수 없습니다."
 msgid "선택한 공급자에 로그인해 주십시오"
 msgstr "선택한 공급자에 로그인해 주십시오"
 
-#: app/entry/chat/btw-panel.tsx
 #: app/entry/chat/refusals.ts
 msgid "선택한 공급자에 로그인해야 합니다."
 msgstr "선택한 공급자에 로그인해야 합니다."
@@ -3464,7 +3403,6 @@ msgstr "선택한 모델에 없는 추론 강도입니다: {effort}"
 msgid "선택한 모델은 이미지를 읽지 못합니다"
 msgstr "선택한 모델은 이미지를 읽지 못합니다"
 
-#: app/entry/chat/btw-panel.tsx
 #: app/entry/chat/refusals.ts
 msgid "선택한 모델은 이미지를 읽지 못합니다."
 msgstr "선택한 모델은 이미지를 읽지 못합니다."
@@ -4470,15 +4408,6 @@ msgstr "워크플로 모드를 바꾸지 못했습니다."
 msgid "워크플로 상태를 아직 불러오지 못했습니다."
 msgstr "워크플로 상태를 아직 불러오지 못했습니다."
 
-#: app/entry/chat/btw-panel.tsx
-msgid "원래 대화로 돌아가기"
-msgstr "원래 대화로 돌아가기"
-
-#. BTW tool call: reads the original source text
-#: app/entry/chat/btw-panel.tsx
-msgid "원문 열람"
-msgstr "원문 열람"
-
 #: app/entry/chat/message.tsx
 msgid "원문 읽기"
 msgstr "원문 읽기"
@@ -4571,7 +4500,6 @@ msgstr "응답 다시 보내기"
 msgid "응답 대기"
 msgstr "응답 대기"
 
-#: app/entry/chat/btw-panel.tsx
 #: app/entry/chat/chat-panel.tsx
 msgid "응답을 받지 못했습니다"
 msgstr "응답을 받지 못했습니다"
@@ -4594,18 +4522,9 @@ msgstr "의존 카드"
 msgid "의존 카드가 아직 끝나지 않았습니다."
 msgstr "의존 카드가 아직 끝나지 않았습니다."
 
-#: app/entry/chat/btw-panel.tsx
-msgid "이 BTW가 아직 답하는 중입니다."
-msgstr "이 BTW가 아직 답하는 중입니다."
-
-#: app/entry/chat/btw-panel.tsx
 #: app/entry/chat/refusals.ts
 msgid "이 BTW는 삭제되었습니다."
 msgstr "이 BTW는 삭제되었습니다."
-
-#: app/entry/chat/btw-panel.tsx
-msgid "이 BTW를 삭제할까요?"
-msgstr "이 BTW를 삭제할까요?"
 
 #: app/entry/chat/board-panel.tsx
 msgid "이 Goal보다 먼저 merge될 Goal"
@@ -5686,10 +5605,6 @@ msgstr "진행 중인 카드입니다"
 msgid "질문"
 msgstr "질문"
 
-#: app/entry/chat/btw-panel.tsx
-msgid "질문·답변·근거 조회 기록과 이 BTW에만 쓰인 이미지를 이 기기의 활성 저장소에서 지웁니다. 이미 만들어진 백업, 데이터베이스 파일에 남은 빈 공간이나 WAL 기록, 모델 제공자에게 이미 보낸 내용은 지워진다고 보장할 수 없습니다."
-msgstr "질문·답변·근거 조회 기록과 이 BTW에만 쓰인 이미지를 이 기기의 활성 저장소에서 지웁니다. 이미 만들어진 백업, 데이터베이스 파일에 남은 빈 공간이나 WAL 기록, 모델 제공자에게 이미 보낸 내용은 지워진다고 보장할 수 없습니다."
-
 #: app/entry/report/report-bundle.tsx
 msgid "짧게 걸린 span 경로는 빠졌습니다."
 msgstr "짧게 걸린 span 경로는 빠졌습니다."
@@ -5822,11 +5737,6 @@ msgstr "추론 중"
 msgid "출처 고르기"
 msgstr "출처 고르기"
 
-#. BTW tool call: follows where a memory came from
-#: app/entry/chat/btw-panel.tsx
-msgid "출처 추적"
-msgstr "출처 추적"
-
 #: app/entry/chat/board/goal-merge.tsx
 msgid "충돌로 자동 merge를 멈췄습니다"
 msgstr "충돌로 자동 merge를 멈췄습니다"
@@ -5839,7 +5749,6 @@ msgstr "충족"
 #. Button that cancels the pending login
 #. Button that closes the add project dialog
 #. Button that closes the connection form
-#. Button that closes the delete dialog without deleting
 #. Button that closes the model form
 #. Button that closes the new account form
 #. Button that closes the new endpoint form
@@ -5851,7 +5760,6 @@ msgstr "충족"
 #. Dialog button that cancels
 #. Dialog button that cancels
 #. Dialog button that keeps the task record
-#: app/entry/chat/btw-panel.tsx
 #: app/entry/chat/chat-panel.tsx
 #: app/entry/chat/message.tsx
 #: app/entry/media/cross-provider-approval.tsx

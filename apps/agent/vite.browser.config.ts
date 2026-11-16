@@ -24,7 +24,6 @@ export default defineConfig({
       "apps/agent/app/entry/chat/chat-panel.browser.tsx",
       "apps/agent/app/entry/chat/context-meter.browser.tsx",
       "apps/agent/app/entry/report/*.browser.tsx",
-      "apps/agent/app/entry/chat/btw-panel.browser.tsx",
       "apps/agent/app/entry/chat/board/*.browser.tsx",
       "apps/agent/app/entry/settings/pages/*.browser.tsx",
       "apps/agent/app/entry/events/*.browser.tsx",

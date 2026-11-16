@@ -59,11 +59,6 @@ export const sessionQueries = {
       queryFn: () => api.cardFolder(sessionId, cardId),
       staleTime: 0,
     }),
-  btw: (projectId: string, sessionId: string) =>
-    queryOptions({
-      queryKey: appQueryKeys.session.btw(projectId, sessionId),
-      queryFn: () => api.btwThreads(sessionId),
-    }),
 };
 
 const useRunStateQueryBody = (projectId: string, sessionId: string, holder: string) =>

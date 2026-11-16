@@ -101,7 +101,6 @@ import { AccountManager } from "./navigation/account-profiles";
 import { CompatibleAccounts } from "./navigation/compatible-accounts";
 import { AccountSwitcher } from "./navigation/account-switcher";
 import { WorkTracePanel } from "./chat/work-trace-panel";
-import { BtwPanel } from "./chat/btw-panel";
 import { reportHref } from "./report/report-link";
 import { RetryButton } from "./shared/load-failed";
 import { useHydrated } from "./shared/use-hydrated";
@@ -622,7 +621,6 @@ export function App() {
             title={openSession === null ? t`제목 없는 대화` : sessionLabel(hydrated)(openSession)}
             projectName={projects.find((item) => item.id === openProjectId)?.name ?? null}
           >
-            {selection && <BtwPanel key={id} projectId={openProjectId} sessionId={id} />}
             <WorkTracePanel key={id} projectId={openProjectId} sessionId={id} />
           </ChatHeader>
           <div className="min-h-0 flex-1">

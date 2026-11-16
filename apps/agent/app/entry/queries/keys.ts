@@ -54,8 +54,6 @@ export const appQueryKeys = {
       [...appQueryKeys.session.root(projectId, sessionId), "trace"] as const,
     traceTask: (projectId: string, sessionId: string, taskId: string) =>
       [...appQueryKeys.session.trace(projectId, sessionId), "task", taskId] as const,
-    btw: (projectId: string, sessionId: string) =>
-      [...appQueryKeys.session.root(projectId, sessionId), "btw"] as const,
     board: (projectId: string, sessionId: string) =>
       [...appQueryKeys.session.root(projectId, sessionId), "board"] as const,
     decisions: (projectId: string, sessionId: string) =>
