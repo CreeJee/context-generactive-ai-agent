@@ -9,7 +9,7 @@ import { JsonValue } from "../src/json.ts";
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(JsonValue));
 const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(JsonValue));
 
-it.effect("opening a database moves the chat rows TanStack wrote, BTW threads included", () =>
+it.effect("opening a database moves the chat rows TanStack wrote, with BTW threads present", () =>
   Effect.gen(function* () {
     const db = yield* Effect.acquireRelease(
       Effect.sync(() => new DatabaseSync(":memory:")),
@@ -51,11 +51,6 @@ it.effect("opening a database moves the chat rows TanStack wrote, BTW threads in
     expect(
       yield* messages(
         "SELECT '[' || group_concat(message, ',' ORDER BY seq) || ']' AS messages FROM chat_thread_messages WHERE thread_id = 'session'",
-      ),
-    ).toEqual([moved]);
-    expect(
-      yield* messages(
-        "SELECT '[' || group_concat(message, ',' ORDER BY seq) || ']' AS messages FROM btw_thread_messages WHERE thread_id = 'btw'",
       ),
     ).toEqual([moved]);
     expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: migrations.length });

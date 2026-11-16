@@ -731,6 +731,16 @@ export const textIndexDropMigration = `
   DROP TABLE node_morphs;
 `;
 
+/** The step that drops the BTW side threads, which no code reads since BTW was removed. */
+export const btwTablesDropMigration = `
+  -- BTW side threads were removed (decisions.md "BTW 곁질문을 없앤다"), so their tables have no
+  -- reader or writer. The stored threads go with them. An image only a BTW message carried becomes
+  -- an orphan, which the next attachment cleanup deletes. Children first, then the parent.
+  DROP TABLE btw_attachments;
+  DROP TABLE btw_thread_messages;
+  DROP TABLE btw_threads;
+`;
+
 /**
  * The cards each workflow revision changed from the revision before it in its session, for the
  * board's history; a revision that changed no card has no row. Revisions never change, so this is
@@ -3132,6 +3142,7 @@ export const migrations: readonly string[] = [
   -- before this column.
   ALTER TABLE sessions ADD COLUMN model_selection TEXT;
   `,
+  btwTablesDropMigration,
 ];
 
 /** One of the two startup migrations that may rebuild a referenced table with FK checks suspended;
