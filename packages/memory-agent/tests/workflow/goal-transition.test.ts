@@ -317,7 +317,14 @@ testAgent()("explicit new Goal transition", (it) => {
           }),
         refused: ({ reason }) =>
           Effect.gen(function* () {
-            expect(yield* Effect.flip(request)).toMatchObject({ reason });
+            const error = yield* Effect.flip(request);
+            expect(error).toMatchObject({ reason });
+            // A refusal over runs names the one that holds the new Goal back.
+            expect(error._tag === "NewGoalTransitionRefused" ? error.runIds : null).toEqual(
+              ["run_outcome_uncertain", "owner_effect_uncertain"].includes(reason)
+                ? [historical]
+                : undefined,
+            );
             expect(yield* identity(session)).toBe(old);
             expect(yield* rows("revisions", session)).toEqual(before);
           }),
@@ -339,9 +346,10 @@ testAgent()("explicit new Goal transition", (it) => {
       // The owner checks the session at call time: a run started since then refuses it.
       const other = `${f.session}:other`;
       yield* startRun(f.session, other, "running");
-      expect(yield* call(transition(f.old))).toMatchObject({
+      expect(yield* call(transition(f.old))).toEqual({
         error: "new_goal_transition_refused",
         reason: "run_outcome_uncertain",
+        runIds: [other],
       });
       yield* setRun(other, "completed");
       expect(yield* call(transition(f.old))).toMatchObject({
@@ -363,14 +371,17 @@ testAgent()("explicit new Goal transition", (it) => {
   ] as const)("an unbound $status run", ({ status, expected }) =>
     Effect.gen(function* () {
       const f = yield* withInvokingRun();
-      yield* startRun(f.session, `${f.session}:unbound`, status);
+      const unbound = `${f.session}:unbound`;
+      yield* startRun(f.session, unbound, status);
       yield* Expected.$match(expected, {
         applied: () =>
           Effect.map(f.request(), (result) =>
             expect(result).toEqual({ status: "accepted", runId: f.invoking }),
           ),
         refused: ({ reason }) =>
-          Effect.map(Effect.flip(f.request()), (error) => expect(error).toMatchObject({ reason })),
+          Effect.map(Effect.flip(f.request()), (error) =>
+            expect(error).toMatchObject({ reason, runIds: [unbound] }),
+          ),
       });
     }),
   );

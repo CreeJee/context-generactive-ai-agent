@@ -201,6 +201,8 @@ export class NewGoalTransitionRefused extends Schema.TaggedError<
   ]),
   /** The session's tasks that are not finished yet, when they are why the request is refused. */
   taskIds: Schema.optionalKey(Schema.Array(Schema.String)),
+  /** The session's runs still running or whose outcome is unknown, when they are why it is refused. */
+  runIds: Schema.optionalKey(Schema.Array(Schema.String)),
 }) {}
 
 /**
@@ -664,29 +666,37 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
       )
         return yield* refuseNewGoal("workflow_changed");
       const caller = callingRunId ?? "";
-      if (
-        (yield* exists(sql`
-          SELECT b.run_id FROM workflow_run_bindings b LEFT JOIN chat_runs r ON r.run_id = b.run_id
-          WHERE b.session_id = ${sessionId} AND b.run_id <> ${caller}
-            AND (r.status IS NULL OR r.status <> 'completed')
-            AND NOT ${sql.literal(resolvedRunSql("b", "r"))} LIMIT 1`)) ||
-        // A run with no binding, such as a plain chat turn before the Goal, records no owner
-        // operation and has nothing the user can continue past, so it stops fencing once it ended.
-        (yield* exists(sql`
-          SELECT r.run_id FROM chat_runs r WHERE r.thread_id = ${sessionId} AND r.run_id <> ${caller}
-            AND r.status <> 'completed' AND NOT ${sql.literal(endedWithKnownEffectsSql("r"))}
-            AND NOT EXISTS (SELECT 1 FROM workflow_run_bindings b
-              WHERE b.run_id = r.run_id AND ${sql.literal(resolvedRunSql("b", "r"))}) LIMIT 1`))
-      )
-        return yield* refuseNewGoal("run_outcome_uncertain");
-      if (
-        yield* exists(sql`
-          SELECT o.run_id FROM owner_rpc_operations o JOIN workflow_run_bindings b ON b.run_id = o.run_id
-          WHERE b.session_id = ${sessionId}
-            AND ((o.status = 'pending' AND o.run_id <> ${caller}) OR (o.side_effect = 1 AND o.status = 'uncertain'))
-            AND NOT ${sql.literal(acknowledgedRunSql("b"))} LIMIT 1`)
-      )
-        return yield* refuseNewGoal("owner_effect_uncertain");
+      // The refusal names the runs, so the model can tell the user what holds the new Goal back.
+      const unsettledRuns = yield* sql<{ readonly run_id: string }>`
+        SELECT b.run_id FROM workflow_run_bindings b LEFT JOIN chat_runs r ON r.run_id = b.run_id
+        WHERE b.session_id = ${sessionId} AND b.run_id <> ${caller}
+          AND (r.status IS NULL OR r.status <> 'completed')
+          AND NOT ${sql.literal(resolvedRunSql("b", "r"))}
+        UNION
+        -- A run with no binding, such as a plain chat turn before the Goal, records no owner
+        -- operation and has nothing the user can continue past, so it stops fencing once it ended.
+        SELECT r.run_id FROM chat_runs r WHERE r.thread_id = ${sessionId} AND r.run_id <> ${caller}
+          AND r.status <> 'completed' AND NOT ${sql.literal(endedWithKnownEffectsSql("r"))}
+          AND NOT EXISTS (SELECT 1 FROM workflow_run_bindings b
+            WHERE b.run_id = r.run_id AND ${sql.literal(resolvedRunSql("b", "r"))})
+        ORDER BY 1 LIMIT 10`;
+      if (unsettledRuns.length > 0)
+        return yield* NewGoalTransitionRefused.make({
+          reason: "run_outcome_uncertain",
+          runIds: unsettledRuns.map(({ run_id }) => run_id),
+        });
+      const uncertainEffectRuns = yield* sql<{ readonly run_id: string }>`
+        SELECT DISTINCT o.run_id FROM owner_rpc_operations o
+        JOIN workflow_run_bindings b ON b.run_id = o.run_id
+        WHERE b.session_id = ${sessionId}
+          AND ((o.status = 'pending' AND o.run_id <> ${caller}) OR (o.side_effect = 1 AND o.status = 'uncertain'))
+          AND NOT ${sql.literal(acknowledgedRunSql("b"))}
+        ORDER BY 1 LIMIT 10`;
+      if (uncertainEffectRuns.length > 0)
+        return yield* NewGoalTransitionRefused.make({
+          reason: "owner_effect_uncertain",
+          runIds: uncertainEffectRuns.map(({ run_id }) => run_id),
+        });
       const unfinished = yield* sql<{ readonly id: string }>`SELECT id FROM work_tasks
         WHERE origin_session_id = ${sessionId} AND status IN ${sql.in(unfinishedTaskStatuses)}
         ORDER BY created_at LIMIT 10`;
