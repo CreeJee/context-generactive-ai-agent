@@ -11,10 +11,10 @@
 - `settings.ts` `SettingsApiHandlers` — `/api/settings/*`.
 - `projects.ts` `ProjectsApiHandlers` — `/api/projects`, `/api/projects/pick`, `/api/projects/:project`과 그 아래 agents·mcp·skills·kanban·boards·decisions.
 - `providers.ts` `AuthApiHandlers`·`AccountsApiHandlers`·`ModelsApiHandlers` — `/api/auth`, `/api/accounts`, `/api/accounts/quota`, `/api/models`, `/api/models/:model`.
-- `sessions.ts` `SessionsApiHandlers` — `/api/sessions`, `/api/sessions/:session`과 그 아래 결정·보드·칸반·큐·하위 에이전트·중계 승인·run 제어.
+- `sessions.ts` `SessionsApiHandlers` — `/api/sessions`, `/api/sessions/:session`과 그 아래 결정·보드·칸반·큐·하위 에이전트·중계 승인·run 제어·이미지 생성(`/api/sessions/:session/images`).
 - `trace.ts` `TraceApiHandlers` — 세션의 Work Trace, 세션 trace SSE(`/api/sessions/:session/trace/stream`).
 - `reports.ts` `ReportsApiHandlers` — `/api/reports/{sessions,evidence,diagnosis,delivery}`.
-- `media.ts` `MediaApiHandlers` — `/api/media/image`.
+- `media.ts` `MediaApiHandlers` — `/api/media/image`. `imageGenerationRefusals`는 이미지 생성 실패를 거절로 바꾸는 묶음이며 sessions의 `generateImage`도 쓴다.
 - `events.ts` `EventsApiHandlers` — 무효화 SSE(`/api/events`, `/api/projects/:project/events`, `/api/sessions/:session/events`).
 - `agent-chat-refusals.ts` `refusalsOnly` — `AgentChat` 메서드의 실패 가운데 `Error`가 아닌 거부 값만 남기고 나머지를 defect로 바꾼다.
 
@@ -48,6 +48,7 @@
 - OAuth 계정을 바꾼다: `OAuthProfiles.importLegacy`(OS keychain에서 import)와 `remove`/`rename`/`select`, `OAuthAccountLogins.start`/`cancel`(로그인은 다른 탭에서 끝난다). `ProviderRegistry` 공급자의 `auth.connect`/`disconnect`/`cancel`도 여기에 속한다.
 - `Effect.forkDetach`로 백그라운드 fiber를 띄운다. 계정 add는 `manager.settled`를 기다린다. auth pending은 250ms 간격으로 상태를 polling하고(`Effect.repeat`), 끝나면 `publishGlobal("auth")`를 발행한다.
 - projects group `pick`은 서버 기기에서 폴더 선택 창 프로세스를 띄운다(`ChildProcessSpawner`). 요청이 끊기면 Scope와 함께 창을 닫는다. 고른 경로는 `FileSystem.realPath`로 정규화한다.
+- sessions group의 `generateImage`는 `AgentChat.imageOrigin`으로 대화를 확인하고(423 `session_in_use`, 409 `run_in_progress`), 그 대화의 모델로 만든 시작 경로로 `ImageMediaWorkflow.generate`를 부른 뒤 `AgentChat.recordImage`로 결과를 대화에 적는다. 승인이 필요하다는 거절은 대화에 아무것도 적기 전에 돌아간다.
 - media group이 `ImageMediaWorkflow.generate`로 유료 외부 이미지 생성을 호출한다. 요청이 끊겨 handler가 interrupt되면 `Effect.abortSignal`로 넘긴 signal이 그 호출을 멈춘다.
 - 모델 선택(`configured.models.select`)을 전역 선택으로 저장하고, 공급자 모델 카탈로그를 네트워크로 조회한다.
 - `ReportDelivery.send`로 서버 설정의 Discord webhook(`DISCORD_WEBHOOK_URL`)에 보고서와 JSON evidence 첨부를 전송한다. `GlobalConfig.update({ defectReports })`로 전역 설정을 쓴다.

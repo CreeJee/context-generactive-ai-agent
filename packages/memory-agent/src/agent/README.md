@@ -36,7 +36,9 @@
 - `promptLayout` — dual 함수다. standing → role → context 순서로 프롬프트 블록을 배치한다.
 - `projectInstructionsHook` — `root`를 받는다. 루트 안내와 경로 카탈로그를 대화 실행당 한 번 읽어 앞선 훅이 고른 system 프롬프트 뒤에 붙이는 `RunHook`이다.
 - `steerCuttableModel` / `SteerCut` — steer된 메시지가 현재 응답을 끊도록 `LanguageModel`을 감싼다. 연 블록을 닫고 실행을 완료한다.
-- `createLiveRuns` / `LiveRun` / `LiveRuns` — `AgentChat` 서비스당 하나 있는 실행 중 run 레지스트리이다.
+- `createLiveRuns` / `LiveRun` / `LiveRuns` — `AgentChat` 서비스당 하나 있는 실행 중 run 레지스트리이다. `writing(sessionId, write)`는 run이 없는 동안 대화를 "쓰는 중"으로 쥐고 `write`를 돌린다. run이나 다른 쓰기가 쥐고 있으면 `null`을 돌려준다. 이 표시는 run이 아니라서 `get`과 `sessionIds`에 보이지 않는다.
+- `imageToolName` / `imageCallArguments` / `imageResult` / `imageMessages` — 생성한 이미지를 대화에 적는 메시지 셋(사용자 프롬프트, `generate_image` 호출, 결과)과 JSON 값을 만드는 순수 함수이다(`image-record.ts`).
+- `AgentChat.imageOrigin` / `AgentChat.recordImage` — 이미지 생성 전에 다른 탭의 대화와 답변 중인 대화를 거절하고 시작 경로(`chat:<provider>:<model>`)를 돌려주는 동작, 만든 그림을 node 셋과 메시지 셋으로 적고 그림을 결과 node에 묶는 동작이다. `recordImage`는 run이 쥔 대화면 끝나기를 기다렸다가 적고, 요청이 끊겨도 끝까지 간다. 저장 실패는 `{ error: "image_record_failed" }`로 거절한다.
 - `shownRunErrors` / `pageTurns` / `withPageTurns` — `RUN_ERROR` 메시지를 자르고 비밀을 가리는 스트림 변환, 페이지 사용자 턴을 저장 thread에 보충하는 함수이다.
 - `agentPrompts` — 모델이 읽는 리포트 근거 수집 실패 안내(`prompts.ts`)이다.
 - 문구 — Lingui 런타임 매크로 메시지(`msg`)로 쓰는 곳에 두고 `src/i18n.ts`로 푼다. `src/locales/ko.po`로 추출되고 `lint/wording`가 검사한다.
@@ -71,6 +73,7 @@
 - `AgentOperationFailed`의 `cause`는 서버에만 남기고 클라이언트에 노출하지 않는다.
 - `shownRunErrors`는 `RUN_ERROR` 메시지를 페이지·에디터·durable 로그가 읽기 전에 자르고 비밀을 가린다.
 - `createLiveRuns` 레지스트리는 `AgentChat` 서비스당 하나다. `makeAgentChatImplementation`은 생성할 때마다 중앙 서비스를 새로 획득한다.
+- run 밖에서 대화에 메시지를 덧붙이는 코드는 `liveRuns.writing` 안에서만 쓴다. run은 step이 끝날 때마다 대화 전체를 다시 저장하므로, 그 옆에서 덧붙인 메시지는 다음 저장이 지운다. `writing`이 쥐는 동안 `claim`은 실패하고, run이 있는 동안 `writing`은 쥘 수 없다.
 - `start`는 호출자가 아니라 서비스 scope에서 돈다. user turn을 메모리 node로 먼저 쓰고 run을 그 뒤에 만들므로, 요청이 그 사이에 끊겨도 run 시작까지 마친다. 서비스가 닫힐 때만 중단된다.
 - workspace 지침상 앱 저장소 폴더(`places.storageRoot`)는 파일 도구와 sh skill 스크립트가 열지 않는다. 자격 증명 파일과 .git 내부는 승인과 관계없이 파일 도구 접근이 금지된다.
 
