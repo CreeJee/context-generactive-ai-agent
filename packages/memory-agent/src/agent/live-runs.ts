@@ -1,4 +1,4 @@
-import { HashMap, Option, Deferred, Effect, Ref, Stream } from "effect";
+import { HashMap, HashSet, Option, Deferred, Effect, Ref, Stream } from "effect";
 
 /** A run whose model stream is still being produced in this process. */
 export interface LiveRun {
@@ -11,16 +11,44 @@ export interface LiveRun {
 
 /** One registry per AgentChat service. Only active streams occupy a session key. */
 export const createLiveRuns = Effect.gen(function* () {
-  const bySession = yield* Ref.make(HashMap.empty<string, LiveRun>());
+  // Runs and writes share one Ref so that checking one and taking the other cannot be split.
+  const held = yield* Ref.make({
+    runs: HashMap.empty<string, LiveRun>(),
+    writers: HashSet.empty<string>(),
+  });
 
   return {
     get: (sessionId: string): Effect.Effect<LiveRun | null> =>
-      Effect.map(Ref.get(bySession), (runs) => Option.getOrNull(HashMap.get(runs, sessionId))),
+      Effect.map(Ref.get(held), ({ runs }) => Option.getOrNull(HashMap.get(runs, sessionId))),
 
     /** The sessions whose run is producing now. */
-    sessionIds: Effect.map(Ref.get(bySession), (runs): readonly string[] => [
-      ...HashMap.keys(runs),
-    ]),
+    sessionIds: Effect.map(Ref.get(held), ({ runs }): readonly string[] => [...HashMap.keys(runs)]),
+
+    /**
+     * Runs `write` while nothing else may start on the session: a run saves the whole conversation
+     * after each step, so a message appended beside one would be overwritten. Null when a run or
+     * another write holds the session. The hold is not a run: `get` and `sessionIds` do not show it.
+     */
+    writing: <A, E, R>(
+      sessionId: string,
+      write: Effect.Effect<A, E, R>,
+    ): Effect.Effect<A | null, E, R> =>
+      Effect.acquireUseRelease(
+        Ref.modify(held, (state) =>
+          HashMap.has(state.runs, sessionId) || HashSet.has(state.writers, sessionId)
+            ? [false, state]
+            : [true, { ...state, writers: HashSet.add(state.writers, sessionId) }],
+        ),
+        (acquired) => (acquired ? write : Effect.succeed(null)),
+        (acquired) =>
+          Effect.when(
+            Ref.update(held, (state) => ({
+              ...state,
+              writers: HashSet.remove(state.writers, sessionId),
+            })),
+            Effect.succeed(acquired),
+          ),
+      ),
 
     /** Claims a session until the returned stream finishes. */
     claim: Effect.fnUntraced(function* (options: {
@@ -42,17 +70,19 @@ export const createLiveRuns = Effect.gen(function* () {
         cancel: options.cancelExecution ?? Effect.sync(() => controller.abort()),
         ended: Deferred.await(done),
       };
-      const claimed = yield* Ref.modify(bySession, (runs) =>
-        HashMap.has(runs, sessionId) ? [false, runs] : [true, HashMap.set(runs, sessionId, run)],
+      const claimed = yield* Ref.modify(held, (state) =>
+        HashMap.has(state.runs, sessionId) || HashSet.has(state.writers, sessionId)
+          ? [false, state]
+          : [true, { ...state, runs: HashMap.set(state.runs, sessionId, run) }],
       );
       if (!claimed) return null;
       const released = yield* Ref.make(false);
       const release = (options.releaseResources ?? Effect.void).pipe(
         Effect.ensuring(
-          Ref.update(bySession, (runs) =>
-            Option.exists(HashMap.get(runs, sessionId), (held) => held === run)
-              ? HashMap.remove(runs, sessionId)
-              : runs,
+          Ref.update(held, (state) =>
+            Option.exists(HashMap.get(state.runs, sessionId), (current) => current === run)
+              ? { ...state, runs: HashMap.remove(state.runs, sessionId) }
+              : state,
           ),
         ),
         Effect.andThen(options.settle ?? Effect.void),
