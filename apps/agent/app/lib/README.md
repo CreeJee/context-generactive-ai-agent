@@ -6,7 +6,7 @@
 
 ## Interface
 
-- `dayAndTime` — ISO 문자열을 한국어 로케일 "M월 D일 A hh:mm" 형식(예: "9월 15일 오후 11:33")으로 바꾼다. 제목이 아직 없는 대화의 시작 시각 표시에 쓴다(sidebar, btw-panel, settings/pages/embedding).
+- `dayAndTime` — ISO 문자열을 한국어 로케일 "M월 D일 A hh:mm" 형식(예: "9월 15일 오후 11:33")으로 바꾼다. 제목이 아직 없는 대화의 시작 시각 표시에 쓴다(sidebar, settings/pages/embedding).
 - `timeOfDay` — ISO 문자열을 한국어 로케일 "A hh:mm" 형식(예: "오후 09:53")으로 바꾼다. 날짜를 말하지 않아도 되는 곳에서 쓴다(settings/pages/imports).
 - 문구 — 쓰이는 자리에 Lingui 메시지(`<Trans>`, `` t`…` ``, `msg`)로 쓴다. `app/locales/ko.po`로 추출되고 `lint/wording`이 검사한다.
 - `cn` — `cn` 패키지에서 다시 내보내는 className 결합 함수다. `~/lib/utils`로 UI 컴포넌트 여러 곳이 가져다 쓴다.
