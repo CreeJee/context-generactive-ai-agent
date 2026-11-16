@@ -13,7 +13,7 @@
 - `optionalProperty` — `EffectFunction.dual(2)`이며 `(key, value)`와 `(value)(key)`를 지원한다. value가 `undefined`가 아니면 `{ [key]: value }`를, `undefined`면 `{}`를 돌려준다(`optional-property.ts`)
 - `isTruthy` — JavaScript truthiness를 그대로 쓰면서 `Exclude<NonNullable<T>, false | 0 | 0n | "">`로 좁히는 타입 가드다(`truthy.ts`)
 - `AgentChat` / `QueueRequest` / `attachmentInstructions` / `memoryInstructions` / `workspaceInstructions` — `agent/chat.ts`에서 다시 내보낸다
-- `ChatApiHandlers` / `BtwApiHandlers` — `api/chat-api-live.ts`의 HTTP API 핸들러를 다시 내보낸다
+- `ChatApiHandlers` — `api/chat-api-live.ts`의 HTTP API 핸들러를 다시 내보낸다
 - `createLiveRuns` / `LiveRun` / `LiveRuns`, `contextUsageEvent` / `serverRestartedCode` / `CancelResult` / `CompactResult` / `ContextView` / `SessionRunState` — `agent/live-runs.ts`와 `agent/run-state.ts`에서 다시 내보낸다
 - `ChatState`, `StoredMessage`(type), `UncertainContinueRequest` — chat-state, chat-store 스키마, `workflow/uncertain-runs.ts`에서 다시 내보낸다
 - `ProjectImprovement`, `ImprovementItem` / `ImprovementReport` / `ImprovementScan`(type) — improve 디렉터리에서 다시 내보낸다
@@ -33,7 +33,6 @@
   - [`api`](./api/README.md) — 채팅 HTTP API 계약 `ChatApi`와 구현
   - [`approvals`](./approvals/README.md) — 하위·외부 에이전트 승인 중계(`RelayedApprovals`)
   - [`attachments`](./attachments/README.md) — 이미지 첨부 저장과 모델용 변환
-  - [`btw`](./btw/README.md) — BTW 곁질문 스레드
   - [`chat-state`](./chat-state/README.md) — 채팅 상태 준비와 화면 메시지 페이지
   - [`chat-store`](./chat-store/README.md) — 저장 채팅 행 스키마
   - [`code`](./code/README.md) — QuickJS 코드 샌드박스

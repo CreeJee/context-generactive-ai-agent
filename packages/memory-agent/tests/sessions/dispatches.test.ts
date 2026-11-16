@@ -146,7 +146,7 @@ testAgent()(function (it) {
     }),
   );
 
-  it.effect("a BTW thread id is refused like any unknown target", () =>
+  it.effect("an id that is no session is refused like any unknown target", () =>
     Effect.gen(function* () {
       const env = yield* TestEnv;
       const { project, session } = env;

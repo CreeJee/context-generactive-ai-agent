@@ -8,7 +8,7 @@ import { browserCrypto } from "../shared/browser-crypto";
 
 /**
  * The chat API's client for the whole page (docs/effect-ai-migration.md step 6), one registry for
- * its sessions and BTW threads. Requests go to the page's own origin through `appFetch`, which
+ * its sessions. Requests go to the page's own origin through `appFetch`, which
  * names the build the page runs, as the page's other requests do.
  */
 export const chatRuntime = Atom.runtime(

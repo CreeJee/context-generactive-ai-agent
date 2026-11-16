@@ -1,6 +1,5 @@
 import { Schema } from "effect";
 import { HttpApi } from "effect/http-api";
-import { BtwThreadsGroup, btwRefusals } from "./app-api/btw.ts";
 import { EventsGroup } from "./app-api/events.ts";
 import { MediaGroup, mediaRefusals } from "./app-api/media.ts";
 import { ProjectsGroup, projectsRefusals } from "./app-api/projects.ts";
@@ -24,7 +23,6 @@ export class AppApi extends HttpApi.make("app")
   .add(ModelsGroup)
   .add(SessionsGroup)
   .add(TraceGroup)
-  .add(BtwThreadsGroup)
   .add(ReportsGroup)
   .add(MediaGroup)
   .add(EventsGroup) {}
@@ -37,7 +35,6 @@ const appRefusals = [
   ...providersRefusals,
   ...sessionsRefusals,
   ...traceRefusals,
-  ...btwRefusals,
   ...reportsRefusals,
   ...mediaRefusals,
 ];

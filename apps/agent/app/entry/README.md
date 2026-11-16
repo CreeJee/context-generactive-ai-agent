@@ -9,7 +9,7 @@
 ## Interface
 
 - `App` — `index.tsx`의 루트 React 컴포넌트다. 인증·모델·프로젝트·세션 쿼리, nuqs `useQueryStates(locationParsers)`로 URL 위치(project, session, card, board, boards, boardCard)를 관리한다. 세션 보관·삭제·복원, 프로젝트 추가, 모델 선택, 설정 열기를 연결한다
-- `api` — `/api/*` 백엔드 호출을 모은 객체 리터럴(`api.ts` 639-1104행)이다. 메서드는 auth/authAction/accounts/accountAction/accountQuota, models/selectModel, projects/hiddenProjects/addProject/hideProject/restoreProject/pickFolder/moveProject/setPermissionMode/setCrossRecallExcluded, sessions/archivedSessions/createSession, board/editBoard/decisions/decisionInbox/answerDecision/projectBoards, kanban/startKanban/boardIntent/restartKanbanLoop/setGoalDependencies/moveGoal/projectKanban/setProtectedBranches, moveWorkflow/controlWorkflow, sessionRunState/cancelRun/discardInterrupts/continuePastUncertain/compactSession/leaseAction, queue/enqueue/editQueued, btwThreads/createBtw/deleteBtw, image·kagi·imports·embedding·conversation·recall·kanban 설정, mcpServers/mcpAction, externalAgents/trustExternalAgent/reconnectExternalAgent, skills, work trace 계열(resume/archive/deleteWorkTraceTask, workTraceStreamUrl), subagents/relayedApprovals/subagentTranscript/answerApproval, uploadAttachment(file)이다
+- `api` — `/api/*` 백엔드 호출을 모은 객체 리터럴(`api.ts` 639-1104행)이다. 메서드는 auth/authAction/accounts/accountAction/accountQuota, models/selectModel, projects/hiddenProjects/addProject/hideProject/restoreProject/pickFolder/moveProject/setPermissionMode/setCrossRecallExcluded, sessions/archivedSessions/createSession, board/editBoard/decisions/decisionInbox/answerDecision/projectBoards, kanban/startKanban/boardIntent/restartKanbanLoop/setGoalDependencies/moveGoal/projectKanban/setProtectedBranches, moveWorkflow/controlWorkflow, sessionRunState/cancelRun/discardInterrupts/continuePastUncertain/compactSession/leaseAction, queue/enqueue/editQueued, image·kagi·imports·embedding·conversation·recall·kanban 설정, mcpServers/mcpAction, externalAgents/trustExternalAgent/reconnectExternalAgent, skills, work trace 계열(resume/archive/deleteWorkTraceTask, workTraceStreamUrl), subagents/relayedApprovals/subagentTranscript/answerApproval, uploadAttachment(file)이다
 - `ApiError` — `Schema.TaggedError("ApiError")`이다. 코드는 `ApiErrorCode`를 따르고 `CrossProviderMediaRunApproval`을 담을 수 있다. `message` getter를 override한다
 - `ApiErrorCode` — 브라우저 API가 이해하는 모든 오류 코드다. 앱 API 계약의 거부 code(`memory-agent/app-api`의 `AppRefusalCode`)와 페이지가 스스로 정하는 code(`invalid_request`, `request_failed`, `upload_failed`, `backend_restart_*`, `attachment_rejected`)의 합이다
 - `refusalOf` / `isApiError` — 실패 값(F)에서 `ApiError | null`을 꺼내는 헬퍼와 그 판별 함수다
@@ -32,7 +32,7 @@
 - 문구 — 쓰이는 자리에 Lingui 메시지(`<Trans>`, `` t`…` ``, `msg`)로 쓴다. `app/locales/ko.po`로 추출되고 `lint/wording`이 검사한다.
 - 재내보내기 — `memory-agent/definitions`의 값 `ApprovalRequester`, `NextDelivery`, `QueueEdit`, `QueueItemState`와, `memory-agent`·definitions의 타입(`Session`, `Project`, `ModelSelection`, `ProviderId`, `QueueSnapshot`, `SessionRunState`, `LeaseView`, `BoardView`, `McpOverview`, `SkillCatalog`, `SubagentView`, `WorkflowPhase` 등)을 `api.ts`에서 다시 내보낸다
 - 하위 디렉터리:
-  - [`chat`](./chat/README.md) — 한 세션의 대화 패널, 입력창, 메시지 렌더링, 승인 카드, 대기열·BTW·워크플로·작업 추적·보드 패널
+  - [`chat`](./chat/README.md) — 한 세션의 대화 패널, 입력창, 메시지 렌더링, 승인 카드, 대기열·워크플로·작업 추적·보드 패널
   - [`events`](./events/README.md) — 서버 SSE 스트림(`/api/events`)을 구독해 TanStack Query 캐시를 무효화하는 계층
   - [`media`](./media/README.md) — 이미지 생성 훅 `useImageGeneration`과 cross-provider 승인 대화상자
   - [`navigation`](./navigation/README.md) — 왼쪽 사이드바의 모델·프로젝트·세션·판단 대기함·칸반·계정 UI

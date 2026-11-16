@@ -51,7 +51,6 @@ import type {
   BoardEditResult,
   BoardIntent as BoardIntentCase,
   BoardView,
-  BtwThread,
   CardStatus,
   DecisionAnswer as DecisionAnswerCase,
   DecisionInboxItem,
@@ -205,7 +204,6 @@ export type {
   SubscriptionAccountProvider,
   SubscriptionQuotaReport,
   Attachment,
-  BtwThread,
   CancelResult,
   ProviderModel,
   CompactResult,
@@ -703,11 +701,6 @@ export const api = {
   /** `agent`: talk directly to that trusted external ACP agent instead of the app's model. */
   createSession: (projectId: string, agent?: string) =>
     appCall((client) => client.sessions.create({ payload: { projectId, agent } })),
-  btwThreads: (session: string) => appCall((client) => client.btw.list({ params: { session } })),
-  /** A new BTW thread bound for good to this conversation. */
-  createBtw: (session: string) => appCall((client) => client.btw.create({ params: { session } })),
-  /** `filesPending`: the rows are gone, some unreferenced image files wait for the next cleanup. */
-  deleteBtw: (thread: string) => appCall((client) => client.btw.remove({ params: { thread } })),
   sessionRunState: (session: string, holder: string) =>
     appCall((client) => client.sessions.status({ params: { session }, query: { holder } })),
   cancelRun: (session: string, holder: string) =>

@@ -13,7 +13,6 @@ import {
   type ProviderId,
 } from "./providers/contracts.ts";
 import { AgentChat } from "./agent/chat.ts";
-import { BtwChat } from "./btw/chat.ts";
 import { ProjectImprovement } from "./improve/discovery.ts";
 import { ApiUsage } from "./agent/api-usage.ts";
 import { TurnSummaries } from "./agent/turn-summaries.ts";
@@ -439,7 +438,6 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     Layer.provideMerge(
       Layer.mergeAll(
         MemoryTools.layer,
-        BtwChat.layer,
         // The outside tools run a path in the project as the file tools do.
         Layer.mergeAll(
           OutsideTools.layer,

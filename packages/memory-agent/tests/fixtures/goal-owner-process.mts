@@ -16,13 +16,7 @@ import {
 } from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
 import { HttpApiBuilder } from "effect/http-api";
-import {
-  BtwApiHandlers,
-  ChatApiHandlers,
-  memoryAgentLayer,
-  Projects,
-  Sessions,
-} from "../../src/index.ts";
+import { ChatApiHandlers, memoryAgentLayer, Projects, Sessions } from "../../src/index.ts";
 import { ChatApi, SameSite } from "../../src/api/chat-api.ts";
 import { SqlClient } from "effect/sql";
 import { SecretStore } from "../../src/config/secrets.ts";
@@ -106,7 +100,7 @@ await Effect.runPromise(
         Effect.sync(() =>
           HttpRouter.toWebHandler(
             HttpApiBuilder.layer(ChatApi).pipe(
-              Layer.provide(Layer.merge(ChatApiHandlers, BtwApiHandlers)),
+              Layer.provide(ChatApiHandlers),
               Layer.provide(Layer.succeed(SameSite, (httpEffect) => httpEffect)),
               Layer.provide(Layer.succeedContext(services)),
               Layer.provide(HttpServer.layerServices),

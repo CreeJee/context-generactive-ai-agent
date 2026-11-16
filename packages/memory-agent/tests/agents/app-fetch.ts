@@ -6,8 +6,7 @@ import { AgentChat } from "../../src/agent/chat.ts";
 import { appRefusalStatus } from "../../src/api/app-api.ts";
 import { LeaseRequest } from "../../src/api/app-api/sessions.ts";
 import { ChatApi, SameSite } from "../../src/api/chat-api.ts";
-import { BtwApiHandlers, ChatApiHandlers } from "../../src/api/chat-api-live.ts";
-import { BtwChat } from "../../src/btw/chat.ts";
+import { ChatApiHandlers } from "../../src/api/chat-api-live.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { ActiveProvider } from "../../src/providers/active-provider.ts";
 import { ProviderRegistry } from "../../src/providers/registry.ts";
@@ -29,12 +28,12 @@ const sameSite = Layer.succeed(SameSite, (httpEffect) => httpEffect);
 
 /** The chat API's web handler on the open agent, as the app's routes serve it. */
 const chatApiHandler = Effect.gen(function* () {
-  const agent = yield* Effect.context<AgentChat | BtwChat>();
+  const agent = yield* Effect.context<AgentChat>();
   return yield* Effect.acquireRelease(
     Effect.sync(() =>
       HttpRouter.toWebHandler(
         HttpApiBuilder.layer(ChatApi).pipe(
-          Layer.provide(Layer.merge(ChatApiHandlers, BtwApiHandlers)),
+          Layer.provide(ChatApiHandlers),
           Layer.provide(sameSite),
           Layer.provide(Layer.succeedContext(agent)),
           Layer.provide(HttpServer.layerServices),

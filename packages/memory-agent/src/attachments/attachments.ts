@@ -146,7 +146,6 @@ const make = Effect.gen(function* () {
     execute: () => sql`
       DELETE FROM attachments AS a
       WHERE NOT EXISTS (SELECT 1 FROM node_attachments n WHERE n.attachment_id = a.id)
-        AND NOT EXISTS (SELECT 1 FROM btw_attachments b WHERE b.attachment_id = a.id)
         AND NOT EXISTS (SELECT 1 FROM queued_message_attachments q WHERE q.attachment_id = a.id)
       RETURNING *`,
   });

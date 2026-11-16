@@ -2,13 +2,12 @@
 
 ## Overview
 
-이 디렉터리는 채팅 HTTP API 계약 `ChatApi`와 그 구현, 그리고 채팅 밖의 앱 API 계약 `AppApi`(`docs/httpapi-migration.md`)를 담는다. 페이지의 Effect 클라이언트와 서버가 이 계약을 함께 쓴다. `AppApi`의 핸들러는 앱(`apps/agent/app/.server/api/`)에 있다. 계약은 `effect/http-api`로 한 번만 선언한다(`docs/effect-ai-migration.md` step 6). 서버 쪽 `chat-api-live.ts`는 `AgentChat`·`BtwChat` 서비스 위에 핸들러를 구현하고, run의 AG-UI 이벤트를 SSE로 스트리밍한다. 클라이언트 쪽 `chat-session.ts`·`btw-thread.ts`·`chat-view.ts`는 서버 코드를 import하지 않는다. 이 파일들은 세션과 BTW 스레드의 Atom 묶음을 id별로 노출하고, 페이지는 이 Atom을 `@effect/atom-react`로 읽는다. 묶음은 `keptAtomGroups`가 페이지 수명 동안 강하게 쥔다. `Atom.family`는 만든 값을 약하게만 쥐어서, 아무도 쥐지 않는 묶음은 GC 뒤 새 Atom(빈 화면, 처음부터 다시 읽는 `open`)으로 바뀐다.
+이 디렉터리는 채팅 HTTP API 계약 `ChatApi`와 그 구현, 그리고 채팅 밖의 앱 API 계약 `AppApi`(`docs/httpapi-migration.md`)를 담는다. 페이지의 Effect 클라이언트와 서버가 이 계약을 함께 쓴다. `AppApi`의 핸들러는 앱(`apps/agent/app/.server/api/`)에 있다. 계약은 `effect/http-api`로 한 번만 선언한다(`docs/effect-ai-migration.md` step 6). 서버 쪽 `chat-api-live.ts`는 `AgentChat` 서비스 위에 핸들러를 구현하고, run의 AG-UI 이벤트를 SSE로 스트리밍한다. 클라이언트 쪽 `chat-session.ts`·`chat-view.ts`는 서버 코드를 import하지 않는다. 이 파일들은 세션의 Atom 묶음을 id별로 노출하고, 페이지는 이 Atom을 `@effect/atom-react`로 읽는다. 묶음은 `keptAtomGroups`가 페이지 수명 동안 강하게 쥔다. `Atom.family`는 만든 값을 약하게만 쥐어서, 아무도 쥐지 않는 묶음은 GC 뒤 새 Atom(빈 화면, 처음부터 다시 읽는 `open`)으로 바뀐다.
 
 ## Interface
 
-- `ChatApi` — `chat` 그룹과 `btw` 그룹을 묶은 HttpApi 계약(서버·브라우저 공용)
+- `ChatApi` — `chat` 그룹을 담은 HttpApi 계약(서버·브라우저 공용)
 - `ChatGroup` — `snapshot` GET /api/sessions/:session/messages, `run` POST /api/sessions/:session/runs(SameSite, x-session-holder 헤더), `join` GET /api/sessions/:session/runs/:run/events?after
-- `BtwGroup` — `messages` GET /api/btw/:thread/messages, `ask` POST /api/btw/:thread/runs(SameSite)
 - `SameSite` / `SameSiteRefusal` — 다른 사이트가 보낸 변경 요청을 403(`cross_site_request`/`invalid_origin`)으로 거부하는 HttpApiMiddleware 서비스 태그(PRD R14)와 그 거부 스키마. `refusal.ts`에 있고 `chat-api.ts`가 `SameSite`를 다시 내보낸다
 - `refusalWith(fields)(status, codes)` / `refusalStatusIn(refusals)` / `appRefusalFields` — 거부 스키마(`{ error, ...fields }` + `httpApiStatus`)를 만드는 함수, 거부 값에 맞는 스키마의 상태를 찾는 함수(못 찾으면 500), 앱 API 거부가 싣는 `reason?`(`refusal.ts`)
 - `Refusal` / `refusalStatus` — 채팅 API의 400~503 상태별 거부 코드 리터럴 union 스키마와 그 상태 함수
@@ -20,7 +19,6 @@
 - `ModelsGroup` — `list` GET /api/models?provider&account?(`ModelCatalogView`, 호환 공급자에 `account`를 주면 선택된 계정 대신 그 계정의 모델 목록, 로그인하지 않았으면 401 `login_required`+`auth`, 404 `provider_unavailable`, 502 `model_list_failed`), `select` POST /api/models/:model `{ provider, reasoningEffort? }`(`ModelSelection`, 404 `model_unavailable`+provider·model·reasoningEffort). 모두 SameSite
 - `SessionsGroup` — `status` GET /api/sessions/:session?holder(`SessionRunState`, 404 `session_not_found`, 503 `provider_unavailable`+`provider`), `change` POST 같은 경로(`SessionChange`: `Archive`·`Delete`·`Phase`·`Control`; 보관·복원은 `Session`, 삭제는 `LifecycleResult`의 `completed`, 멈추길 기다리면 202 `waiting_for_stop`, 끝내다 막히면 202 `blocked`, 요청부터 막히면 409 `blocked`+`blocker`, `Phase`·`Control`은 `WorkflowState`, 409 `run_in_progress`와 workflow 전이·진행 거부 reason, 423 `session_in_use`), `list` GET /api/sessions?project(`?archived=1`은 보관한 대화만), `create` POST /api/sessions `{ projectId, title?, agent? }`(201 `Session`, 404 `project_not_found`, 409 `external_agent_unavailable`), `decisions` GET /api/sessions/:session/decisions(404 `session_not_found`), `answerDecision` POST /api/sessions/:session/decisions/:decision(x-session-holder 헤더, 423 `session_in_use`, 결정 거부 reason을 404·400·409로), `board` GET /api/sessions/:session/board(`BoardView`), `editBoard` POST 같은 경로(`BoardEdit`; 200 `Applied`, 실행 중 카드는 202 `Requested`, 409 보드 거부 reason, 422 `plan_dependencies_rejected`+`issues`, 422 `plan_outcomes_rejected`+`unknown`), `kanban` GET /api/sessions/:session/kanban(`KanbanView`: `{ active: false }` 또는 `{ active: true, ...KanbanBoardView }`), `cardFolder` GET /api/sessions/:session/kanban/cards/:card/folder(`CardFolderView` 또는 null: 카드의 작업 폴더와 브랜치, 폴더가 지금 없으면 null, 404 `session_not_found`), `kanbanAction` POST 같은 경로(`KanbanCommand` 또는 `BoardIntent`; 409 칸반 동작·시작·의존 거부 reason, `queue_item_changed`, `worktree_in_use`). `queue` GET /api/sessions/:session/queue(`QueueSnapshot`), `enqueue` POST 같은 경로(`QueueRequest`; 201 `QueuedMessage`, 400 `empty_message`·`unknown_attachment`, 409 `not_running`), `editQueued` POST /api/sessions/:session/queue/:message(`QueueEditRequest`; 지운 메시지는 null, 409 `queue_not_found`·`queue_delivered`·`queue_not_held`·`queue_reserved`), `subagents` GET /api/sessions/:session/subagents, `subagentTranscript` GET /api/sessions/:session/subagents/:subagent(`SubagentTranscript`, 404 `subagent_not_found`), `approvals` GET /api/sessions/:session/approvals, `answerApproval` POST /api/sessions/:session/approvals/:approval(`{ approved }`; 남은 대기 목록, 404 `approval_not_pending`). `cancel` POST /api/sessions/:session/cancel(`CancelResult`, 409 `no_running_run`), `compact` POST /api/sessions/:session/compact(`CompactResult`, 409 `run_in_progress`, 503 `provider_unavailable`+`provider`), `discardInterrupts` POST /api/sessions/:session/interrupts/discard(`{ discarded }`, 409 `run_in_progress`), `continuePastUncertain` POST /api/sessions/:session/uncertain(`UncertainContinueRequest`; `{ _tag: "acknowledged" }`, 409 `run_in_progress`·`uncertain_runs_changed`), `lease` POST /api/sessions/:session/lease(`LeaseRequest` `{ holder, action: claim|release }`; `LeaseView`, holder 헤더 없이 본문으로 받는다). 저장소 실패는 500 `storage_failed`·`kanban_storage_failed`·`workflow_storage_failed`. 모두 SameSite. 계약 타입 `CreateSession`, `DecisionAnswerInput`, `KanbanCommand`, `KanbanView`, `SubagentTranscript`, `SessionChange`와 다시 내보내는 `Session`, `WorkflowState`, `LifecycleResult`. `LeaseRequest`·`InterruptsDiscarded`·`UncertainAcknowledged`는 `app-api/sessions.ts`에만 있다
 - `TraceGroup` — `sessionTree` GET /api/sessions/:session/trace(`TraceTreeSnapshot`), `sessionTask` GET /api/sessions/:session/trace/tasks/:task(`TraceTaskDetail`, 404 `trace_task_not_found`), `changeTask` POST 같은 경로(`TraceTaskChange`, x-session-holder 헤더; `resume`은 202 `queued`, 막히면 409 `blocked`+`reason`; `archive`·`restore`·`delete`는 `SessionsGroup.change`처럼 `LifecycleResult`를 200·202·409로; 423 `session_in_use`), `sessionStream` GET /api/sessions/:session/trace/stream?after(`after`가 없으면 `last-event-id` 헤더, 둘 다 없으면 0; `TraceStreamEvent`의 `StreamSse`, 스트림 실패는 `TraceEventsLost`). Work Trace가 꺼져 있으면 404 `work_trace_disabled`, 그 설정을 읽지 못하면 500 `settings_unavailable`, 없는 세션은 404 `session_not_found`. 모두 SameSite. `TraceTaskChange`는 `app-api/trace.ts`에만 있고, 계약에서 다시 내보내는 것은 `ResumeTaskResult`다
-- `BtwThreadsGroup` — 앱 API의 `btw` 그룹. `list` GET /api/sessions/:session/btw(`BtwThread` 배열, 최신순), `create` POST 같은 경로(201 `BtwThread`, 404 `session_not_found`), `remove` DELETE /api/btw/:thread(`BtwThreadDeleted` `{ deleted: true, filesPending }`, 404 `btw_not_found`, 409 `run_in_progress`). 모두 SameSite. 스레드에 묻기와 메시지 읽기는 `ChatApi`의 `BtwGroup`이다
 - `ReportsGroup` — 문제 제보 페이지의 `reports` 그룹. `openSession` POST /api/reports/sessions(`OpenReportSession` → `ReportSessionOpened`, 404 `report_source_not_found`), `evidence` GET /api/reports/evidence?project&session(`ReportBundle`, 404 `session_not_found`, 503 `evidence_unavailable`), `diagnose` POST /api/reports/diagnosis(`ReportDiagnosisInput` → `ReportDiagnosis`, `report_diagnosis_failed`+`reason`), `deliveryStatus` GET /api/reports/delivery(`ReportDeliveryStatus`), `deliver` POST 같은 경로(`ReportDeliveryCommand`: `send`는 `ReportDeliveryResult`, `defect_reports`는 `ReportDeliveryStatus`; `report_delivery_failed`+`reason`). 설정을 읽거나 쓰지 못하면 500 `settings_unavailable`. 진단·전송 실패는 reason마다 상태가 하나다(`deliveryFailureStatus`, `diagnosisFailureStatus`). 모두 SameSite와 `NoStore`. 계약 타입 `ReportDeliveryCommand`와 두 상태 표를 다시 내보낸다
 - `MediaGroup` — chat 도구 밖의 `media` 그룹. `generateImage` POST /api/media/image(`GenerateImage` `{ prompt, approved, runId?, crossProviderApproval?, maximumEstimatedCostUsd? }` → `GeneratedImage`: `ImageMediaAsset`과 `url`; 409 `image_approval_required`+`reason?`·`approval?`, 422 `image_route_unavailable`+`reason`, 502 `image_execution_failed`). SameSite. 계약 타입 `GeneratedImage`와 `CrossProviderMediaRunApproval`을 다시 내보낸다
 - `EventsGroup` — 페이지가 `EventSource`로 따르는 무효화 SSE(`events` 그룹). `all` GET /api/events, `project` GET /api/projects/:project/events, `session` GET /api/sessions/:session/events. 모두 `AppEventFrame`의 `StreamSse`이고 `NoStore`. 계약 타입 `AppChangedEvent`·`AppReadyEvent`를 다시 내보낸다
@@ -32,32 +30,27 @@
 - `ResumeEntry` — interrupt 하나에 대한 페이지의 답(`resolved`/`cancelled`, payload, metadata)
 - `RunEvent` / `RunEventsLost` — SSE 이벤트(id=run 로그 offset, data=JSON 문자열 `AgUiEvent`)와 로그를 읽지 못했을 때의 `run_events_unavailable` 오류
 - `ChatSnapshot` / `ChatMessage` / `MessagePart` / `PendingInterrupts` — 세션 페이지 스냅샷(messages, older 커서, activeRun, interrupts)과 메시지 파트 tagged union(text/thinking/image/tool-call/tool-result)
-- `BtwQuestion` — BTW 사이드 질문 payload(`runId`, user `message`)
 - `maxPageSize` — 한 페이지 메시지 상한 500(`limit` 쿼리 검증에 씀)
 - `ChatApiHandlers` — `AgentChat` 위의 `chat` 그룹 HttpApiBuilder 핸들러 레이어
-- `BtwApiHandlers` — `BtwChat` 위의 `btw` 그룹 HttpApiBuilder 핸들러 레이어
 - `ChatApiClient` — `HttpApiClient.make(ChatApi)` 클라이언트 Context.Service와 `ChatApiClient.layer`
 - `chatSessions` — 세션 id별 Atom 묶음(`keptAtomGroups`). `state`, `custom`(마지막 CUSTOM 이벤트), `notTaken`(서버가 받지 않은 마지막 turn과 거절. 페이지가 입력창에 되돌린다), `open`, `send`, `answer`, `loadOlder`, `latest`(페이지가 알려 주는 서버의 최신 run id), `follow`(마운트된 동안 다른 탭이나 서버가 시작한 run을 따라 읽는다) 제공
 - `followRuns(read, sight)` / `RunSight` / `ReadRuns` (`follow-runs.ts`) — 페이지가 시작하지 않은 run을 읽을지 정하는 순수 함수. 처음 본 최신 run은 첫 읽기가 덮은 것으로 두고, 그 뒤 읽지 않은 run이 보이면 페이지가 자기 run을 읽거나 보내는 중이 아닐 때 대화를 한 번 다시 열게 한다
-- `btwThreads` — BTW 스레드 id별 Atom 묶음(`keptAtomGroups`). `view`, `notTaken`(서버가 받지 않은 마지막 질문), `open`, `ask` 제공
 - `pageSize` — 클라이언트가 한 번에 읽는 메시지 수 20
 - `partsOf` — user 메시지 content(문자열 또는 파트 배열)를 표시용 `MessagePart` 배열로 변환
 - `OpenSession` / `Send` / `Answer` / `CustomEvent` / `UserContent` — 클라이언트 세션 상태, 보낼 turn, 승인 답변, CUSTOM 이벤트, user content 타입
 - `ChatView` / `RunFailure` / `viewOf` / `caughtUp` / `streamStarted` / `applyEvent` — 스냅샷과 AG-UI 이벤트로 화면 상태를 만드는 순수 리듀서(`caughtUp`·`applyEvent`는 dual)
-- `app-api/` — `AppApi`의 group 모듈(`settings.ts`, `projects.ts`, `providers.ts`: auth·accounts·models, `sessions.ts`, `trace.ts`, `btw.ts`, `reports.ts`, `media.ts`, `events.ts`)
+- `app-api/` — `AppApi`의 group 모듈(`settings.ts`, `projects.ts`, `providers.ts`: auth·accounts·models, `sessions.ts`, `trace.ts`, `reports.ts`, `media.ts`, `events.ts`)
 
 ## Invariants
 
-- `chat-api.ts`, `app-api.ts`, `app-api/*`, `refusal.ts`, `no-store.ts`, `chat-session.ts`, `follow-runs.ts`, `btw-thread.ts`, `chat-view.ts`는 서버 코드를 import하지 않는다. 브라우저 번들이 쓰기 때문이다. 계약이 쓰는 도메인 Schema는 각 폴더의 `contracts.ts`(예: `config/contracts.ts`, `kagi/contracts.ts`, `memory/embedding/contracts.ts`, `imports/contracts.ts`, `improve/contracts.ts`, `providers/contracts.ts`, `providers/openai-compatible-config.ts`, `oauth/contracts.ts`, `projects/contracts.ts`, `sessions/contracts.ts`, `mcp/contracts.ts`, `external-agents/contracts.ts`, `skills/contracts.ts`, `kanban/contracts.ts`, `workflow/contracts.ts`, `attachments/contracts.ts`, `providers/image-media-contracts.ts`, `events/contracts.ts`)에서 가져온다. `chat-api.ts`는 `sessionHolderHeader`를 `import type`으로만 가져온다.
+- `chat-api.ts`, `app-api.ts`, `app-api/*`, `refusal.ts`, `no-store.ts`, `chat-session.ts`, `follow-runs.ts`, `chat-view.ts`는 서버 코드를 import하지 않는다. 브라우저 번들이 쓰기 때문이다. 계약이 쓰는 도메인 Schema는 각 폴더의 `contracts.ts`(예: `config/contracts.ts`, `kagi/contracts.ts`, `memory/embedding/contracts.ts`, `imports/contracts.ts`, `improve/contracts.ts`, `providers/contracts.ts`, `providers/openai-compatible-config.ts`, `oauth/contracts.ts`, `projects/contracts.ts`, `sessions/contracts.ts`, `mcp/contracts.ts`, `external-agents/contracts.ts`, `skills/contracts.ts`, `kanban/contracts.ts`, `workflow/contracts.ts`, `attachments/contracts.ts`, `providers/image-media-contracts.ts`, `events/contracts.ts`)에서 가져온다. `chat-api.ts`는 `sessionHolderHeader`를 `import type`으로만 가져온다.
 - 앱 API의 거부 code는 group이 달라도 상태가 하나다. 페이지는 `appRefusalStatus`로 거부 값만 보고 상태를 찾는다. 제보의 `report_delivery_failed`·`report_diagnosis_failed`는 `reason` 리터럴마다 스키마가 하나라 상태가 reason을 따른다. 예외는 둘이다. `auth_failed`는 502와 504(`reason: auth_status_timeout`)가 있고, reason이 정해진 504를 먼저 선언해 둘을 가른다. `provider_unavailable`은 설정에 없는 provider의 404와, 선택한 모델의 provider를 지금 쓸 수 없는 503(`provider`를 싣는다, `SelectedProviderUnavailable`)이 있고, `providersRefusals`가 503을 먼저 선언해 둘을 가른다. 새 group의 거부 목록은 `app-api.ts`의 `appRefusals`에 더한다. `appRefusalStatus`와 `AppRefusalCode`가 둘 다 이 목록에서 나온다.
 - holder 헤더 이름은 `x-session-holder`다. `satisfies Lowercase<typeof sessionHolderHeader>`로 `sessions/lease-state.ts`의 헤더 상수와 맞춘다.
-- 세션을 바꾸는 엔드포인트(`run`, `ask`)에는 `SameSite` 미들웨어를 붙인다. 403 cross-site 거부는 `refusals` 목록이 아니라 `SameSite`의 error에 둔다.
+- 세션을 바꾸는 엔드포인트(`run`)에는 `SameSite` 미들웨어를 붙인다. 403 cross-site 거부는 `refusals` 목록이 아니라 `SameSite`의 error에 둔다.
 - 거부 코드와 HTTP 상태는 `refusalWith(fields)(status, codes)`로 묶는다. 이 상태는 `refusalStatusIn`이 `httpApiStatus` 어노테이션에서 읽고(4.1.2의 `HttpApiSchema.status`는 키 어노테이션에 둔다), 어느 스키마에도 맞지 않으면 500을 쓴다.
 - 핸들러에서 어떤 refusal 코드에도 매핑되지 않은 실패는 `orDefect`가 `logDefect("route_defect")`로 남긴다. 그다음 `Effect.die`로 500 defect를 낸다.
-- run SSE 이벤트의 `id`는 run 로그의 offset이다. `join`은 `after` 다음부터 이어 읽고, `after`가 없으면 `"-1"`부터 읽는다. BTW run 이벤트 id는 스트림 시작부터 0,1,2… 인덱스다.
-- run 로그 읽기 오류는 경고 로그를 남긴다. 그 뒤 `{ error: "run_events_unavailable" }`로 바꿔 스트림을 끝낸다.
+- run SSE 이벤트의 `id`는 run 로그의 offset이다. `join`은 `after` 다음부터 이어 읽고, `after`가 없으면 `"-1"`부터 읽는다.- run 로그 읽기 오류는 경고 로그를 남긴다. 그 뒤 `{ error: "run_events_unavailable" }`로 바꿔 스트림을 끝낸다.
 - 서버는 대화를 보관한다. 그래서 `RunInput.messages`에는 페이지의 새 user turn만 담는다. 서버는 클라이언트 tool·context·state를 실행하거나 읽지 않는다.
-- BTW 패널을 닫으면 스트림만 멈추고 run은 계속된다. 답은 run이 끝날 때 스레드에 저장된다. BTW run에는 승인이 없어서 resume하지 않는다.
 - Atom 상태는 레지스트리가 아니라 호출 자신의 `get.set`으로 쓴다. 새 호출이 이전 호출을 대체하면 이전 호출의 늦은 쓰기가 버려져, 새 run의 view를 덮어쓰지 않는다.
 - `following`은 스트림이 끝나면 최신 페이지 snapshot을 다시 읽어 `caughtUp`을 적용한다. 그 페이지가 들어올 때까지 `reading`을 유지해 run 메시지가 깜빡이지 않게 한다. `Effect.ensuring`으로 `reading`을 항상 null로 되돌린다.
 - 보낸 user 메시지는 낙관적으로 먼저 표시한다. run 요청이 거부되면(`tapError`) 그 메시지를 view에서 지운다.
@@ -70,12 +63,12 @@
 
 ## Side Effects
 
-- `chat-api-live.ts`: `AgentChat.snapshot`/`start`/`follow`와 `BtwChat.messages`/`ask`를 호출한다. 실제 세션·run·스레드 저장소 읽기와 쓰기는 그 서비스가 한다.
+- `chat-api-live.ts`: `AgentChat.snapshot`/`start`/`follow`를 호출한다. 실제 세션·run 저장소 읽기와 쓰기는 그 서비스가 한다.
 - `chat-api-live.ts`: `RunLog.read(after)`로 run 로그를 스트림으로 읽는다. 로그를 읽지 못하면 `Effect.logWarning`을 남긴다.
 - `chat-api-live.ts`: 매핑되지 않은 실패를 `logDefect("route_defect")`로 로그에 남긴다.
-- `chat-session.ts`, `btw-thread.ts`: `HttpApiClient`로 `/api/sessions/...`와 `/api/btw/...`에 네트워크 요청을 보낸다. SSE 스트림 구독도 포함한다.
-- `chat-session.ts`, `btw-thread.ts`: `SecureRandom.uuidV7`로 무작위 id를 만든다.
-- `chat-session.ts`, `btw-thread.ts`: `effect/reactivity` Atom 상태(`state`, `custom`, `view`)를 바꾼다. 이 Atom들은 `Atom.keepAlive`로 유지된다.
+- `chat-session.ts`: `HttpApiClient`로 `/api/sessions/...`에 네트워크 요청을 보낸다. SSE 스트림 구독도 포함한다.
+- `chat-session.ts`: `SecureRandom.uuidV7`로 무작위 id를 만든다.
+- `chat-session.ts`: `effect/reactivity` Atom 상태(`state`, `custom`, `view`)를 바꾼다. 이 Atom들은 `Atom.keepAlive`로 유지된다.
 
 ## Verification
 
