@@ -14,7 +14,7 @@
 - `sessions.ts` `SessionsApiHandlers` — `/api/sessions`, `/api/sessions/:session`과 그 아래 결정·보드·칸반·큐·하위 에이전트·중계 승인·run 제어·이미지 생성(`/api/sessions/:session/images`).
 - `trace.ts` `TraceApiHandlers` — 세션의 Work Trace, 세션 trace SSE(`/api/sessions/:session/trace/stream`).
 - `reports.ts` `ReportsApiHandlers` — `/api/reports/{sessions,evidence,diagnosis,delivery}`.
-- `media.ts` `MediaApiHandlers` — `/api/media/image`. `imageGenerationRefusals`는 이미지 생성 실패를 거절로 바꾸는 묶음이며 sessions의 `generateImage`도 쓴다.
+- `media.ts` `imageGenerationRefusals` — 이미지 생성 실패를 거절로 바꾸는 묶음이다. sessions의 `generateImage`가 쓴다. 옛 `/api/media/image` handler는 없앴다.
 - `events.ts` `EventsApiHandlers` — 무효화 SSE(`/api/events`, `/api/projects/:project/events`, `/api/sessions/:session/events`).
 - `agent-chat-refusals.ts` `refusalsOnly` — `AgentChat` 메서드의 실패 가운데 `Error`가 아닌 거부 값만 남기고 나머지를 defect로 바꾼다.
 
@@ -28,7 +28,6 @@
 - 레거시 OAuth import(`OAuthProfiles.importLegacy`)가 실패하면 로그만 남긴다. 기존 인증은 그대로 쓰고, 다음 요청에서 다시 시도한다.
 - auth group의 `action`은 구독 공급자만 받는다(계약의 payload가 `SubscriptionAccountProvider`). 브라우저 응답에서는 pending 상태의 `authorizationUrl`을 `authUrl`로 바꿔 내보낸다(`browserState`). models `list`의 401 `auth`도 같은 모양이다.
 - models group의 `select`는 공급자 fallback 없이 명시된 provider/model/effort만 저장한다.
-- media group의 이미지 생성은 chat 도구 컨텍스트 밖에서 하며, `initiatorChatRouteId`는 활성 선택에서 `chat:${provider}:${model}` 형태로 만든다. 선택한 chat 모델이 없으면 422 `image_route_unavailable`이다.
 - reports group 계약의 `deliveryFailureStatus`와 `diagnosisFailureStatus`는 실패 reason마다 상태 하나를 둔다. 제보 페이지는 거부된 본문을 읽지 않고 이 표로 상태에서 reason을 찾는다.
 - reports group `evidence`의 query 식별자는 권한 근거가 아니다(local-server 전용, read-only). handler는 `../report-evidence.ts`의 `reportSession`으로 세션이 그 프로젝트에 있는지 먼저 확인한다. 번들은 redact하고 한도에 맞춰 자른다. 분석 세션 열기(`openSession`)는 성공한 뒤에만 `publishProject(project, "sessions")`를 발행한다.
 - projects group의 프로젝트 하위 endpoint(kanban, boards, decisions)는 서비스 호출 전에 `Projects.get(params.project)`로 존재를 확인하고, 실패는 `../kanban-failures.ts`의 `kanbanRefusal`로 답한다. kanban `MoveGoal`은 `Sessions.get`으로 `sessionId`와 `before`(null이 아닐 때)를 확인한 뒤 `ProjectScheduler.moveGoal`을 호출한다.
@@ -49,7 +48,7 @@
 - `Effect.forkDetach`로 백그라운드 fiber를 띄운다. 계정 add는 `manager.settled`를 기다린다. auth pending은 250ms 간격으로 상태를 polling하고(`Effect.repeat`), 끝나면 `publishGlobal("auth")`를 발행한다.
 - projects group `pick`은 서버 기기에서 폴더 선택 창 프로세스를 띄운다(`ChildProcessSpawner`). 요청이 끊기면 Scope와 함께 창을 닫는다. 고른 경로는 `FileSystem.realPath`로 정규화한다.
 - sessions group의 `generateImage`는 `AgentChat.imageOrigin`으로 대화를 확인하고(423 `session_in_use`, 409 `run_in_progress`), 그 대화의 모델로 만든 시작 경로로 `ImageMediaWorkflow.generate`를 부른 뒤 `AgentChat.recordImage`로 결과를 대화에 적는다. 승인이 필요하다는 거절은 대화에 아무것도 적기 전에 돌아간다.
-- media group이 `ImageMediaWorkflow.generate`로 유료 외부 이미지 생성을 호출한다. 요청이 끊겨 handler가 interrupt되면 `Effect.abortSignal`로 넘긴 signal이 그 호출을 멈춘다.
+- sessions group의 `generateImage`가 `ImageMediaWorkflow.generate`로 유료 외부 이미지 생성을 호출한다. 요청이 끊겨 handler가 interrupt되면 `Effect.abortSignal`로 넘긴 signal이 그 호출을 멈춘다.
 - 모델 선택(`configured.models.select`)을 전역 선택으로 저장하고, 공급자 모델 카탈로그를 네트워크로 조회한다.
 - `ReportDelivery.send`로 서버 설정의 Discord webhook(`DISCORD_WEBHOOK_URL`)에 보고서와 JSON evidence 첨부를 전송한다. `GlobalConfig.update({ defectReports })`로 전역 설정을 쓴다.
 - `ReportDiagnoser.diagnose`로 사용자가 선택한 모델을 호출한다. 보내는 내용은 사용자가 포함한 설명과 evidence뿐이다.

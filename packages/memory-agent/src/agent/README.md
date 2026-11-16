@@ -38,7 +38,7 @@
 - `steerCuttableModel` / `SteerCut` — steer된 메시지가 현재 응답을 끊도록 `LanguageModel`을 감싼다. 연 블록을 닫고 실행을 완료한다.
 - `createLiveRuns` / `LiveRun` / `LiveRuns` — `AgentChat` 서비스당 하나 있는 실행 중 run 레지스트리이다. `writing(sessionId, write)`는 run이 없는 동안 대화를 "쓰는 중"으로 쥐고 `write`를 돌린다. run이나 다른 쓰기가 쥐고 있으면 `null`을 돌려준다. 이 표시는 run이 아니라서 `get`과 `sessionIds`에 보이지 않는다.
 - `imageToolName` / `imageCallArguments` / `imageResult` / `imageMessages` — 생성한 이미지를 대화에 적는 메시지 셋(사용자 프롬프트, `generate_image` 호출, 결과)과 JSON 값을 만드는 순수 함수이다(`image-record.ts`).
-- `AgentChat.imageOrigin` / `AgentChat.recordImage` — 이미지 생성 전에 다른 탭의 대화와 답변 중인 대화를 거절하고 시작 경로(`chat:<provider>:<model>`)를 돌려주는 동작, 만든 그림을 node 셋과 메시지 셋으로 적고 그림을 결과 node에 묶는 동작이다. `recordImage`는 run이 쥔 대화면 끝나기를 기다렸다가 적고, 요청이 끊겨도 끝까지 간다. 저장 실패는 `{ error: "image_record_failed" }`로 거절한다.
+- `AgentChat.imageOrigin` / `AgentChat.recordImage` — 이미지 생성 전에 다른 탭의 대화와 답변 중인 대화를 거절하고 시작 경로(`chat:<provider>:<model>`)를 돌려주는 동작, 만든 그림을 node 셋과 메시지 셋으로 적고 그림을 결과 node에 묶는 동작이다. `recordImage`는 run이 쥔 대화면 끝나기를 기다렸다가 적고, 요청이 끊겨도 끝까지 간다. node 셋·그림 묶기·대화 저장은 한 transaction이고, 적은 메시지 셋의 id(`userMessageId`·`assistantMessageId`·`toolMessageId`)를 돌려준다. 저장 실패는 `{ error: "image_record_failed" }`로 거절한다.
 - `shownRunErrors` / `pageTurns` / `withPageTurns` — `RUN_ERROR` 메시지를 자르고 비밀을 가리는 스트림 변환, 페이지 사용자 턴을 저장 thread에 보충하는 함수이다.
 - `agentPrompts` — 모델이 읽는 리포트 근거 수집 실패 안내(`prompts.ts`)이다.
 - 문구 — Lingui 런타임 매크로 메시지(`msg`)로 쓰는 곳에 두고 `src/i18n.ts`로 푼다. `src/locales/ko.po`로 추출되고 `lint/wording`가 검사한다.
