@@ -1,6 +1,7 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { Array as EffectArray } from "effect";
 import { isTruthy } from "../truthy.ts";
+import { isBoardRun } from "../kanban/board-run.ts";
 import { logFailure } from "../runtime/logged-failures.ts";
 import { optionalProperty } from "../optional-property.ts";
 import {
@@ -698,15 +699,34 @@ const make = Effect.gen(function* () {
                 heartbeat_state = 'idle', heartbeat_step = 'Stopped by a server restart',
                 finished_at = ${now}, updated_at = ${now}
             WHERE id = ${row.id}`);
+          // The board runs its work again as new tasks, so a task it started has ended here. Left
+          // resumable or blocked, it would hold the session's next Goal back with nothing to
+          // finish it: the user cannot retry a board task.
+          const { status, summary } = isBoardRun(row.parent_run_id)
+            ? {
+                status: "failed",
+                summary:
+                  "Board execution was interrupted by a server restart; the board decides whether to run it again.",
+              }
+            : !retryable
+              ? {
+                  status: "interrupted",
+                  summary: "Execution was interrupted by a server restart.",
+                }
+              : uncertain
+                ? {
+                    status: "blocked",
+                    summary:
+                      "Subagent execution was interrupted by a server restart. A tool call may have run; check its effects before retrying.",
+                  }
+                : {
+                    status: "resumable",
+                    summary:
+                      "Subagent execution was interrupted by a server restart and can be retried.",
+                  };
           yield* run(sql`UPDATE work_tasks
-            SET status = ${!retryable ? "interrupted" : uncertain ? "blocked" : "resumable"},
-                active_attempt_id = NULL, updated_at = ${now}
+            SET status = ${status}, active_attempt_id = NULL, updated_at = ${now}
             WHERE id = ${row.task_id}`);
-          const summary = !retryable
-            ? "Execution was interrupted by a server restart."
-            : uncertain
-              ? "Subagent execution was interrupted by a server restart. A tool call may have run; check its effects before retrying."
-              : "Subagent execution was interrupted by a server restart and can be retried.";
           yield* run(sql`INSERT INTO parent_notifications
             (id, project_id, task_id, origin_session_id, parent_run_id, kind, summary, payload,
              idempotency_key, created_at)

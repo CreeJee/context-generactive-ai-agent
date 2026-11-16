@@ -741,6 +741,16 @@ export const btwTablesDropMigration = `
   DROP TABLE btw_threads;
 `;
 
+export const boardTasksRestartEndMigration = `
+  -- A server restart used to leave a task the kanban board started resumable, blocked or
+  -- interrupted, though only the board runs its work again, as a new task (decisions.md "보드가
+  -- 시작한 작업은 서버 재시작 때 끝난다"). Such a task held its session's next Goal back for good.
+  -- It ends as failed now, as restart recovery ends one from here on.
+  UPDATE work_tasks SET status = 'failed'
+    WHERE parent_run_id LIKE 'kanban:%' AND active_attempt_id IS NULL
+      AND status IN ('resumable', 'blocked', 'interrupted');
+`;
+
 /**
  * The cards each workflow revision changed from the revision before it in its session, for the
  * board's history; a revision that changed no card has no row. Revisions never change, so this is
@@ -3143,6 +3153,7 @@ export const migrations: readonly string[] = [
   ALTER TABLE sessions ADD COLUMN model_selection TEXT;
   `,
   btwTablesDropMigration,
+  boardTasksRestartEndMigration,
 ];
 
 /** One of the two startup migrations that may rebuild a referenced table with FK checks suspended;

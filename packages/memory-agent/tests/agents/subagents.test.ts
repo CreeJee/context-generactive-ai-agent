@@ -428,6 +428,44 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagent blocked re
   );
 });
 
+testAgent({ testProvider: { responder: heldDefaultTurn } })("board task restart recovery", (it) => {
+  it.effect("a restart ends a task the board started, so it holds no next Goal back", () =>
+    Effect.gen(function* () {
+      const env = yield* TestEnv;
+      const { sessionId } = yield* parentSession();
+      yield* delegate(sessionId, 'call run_subagent {"task":"check an outcome"}');
+      const ids = yield* latestAttempt(sessionId);
+      // The board's verifier stopped mid tool call, as a restart once left one blocked for good.
+      yield* sqlTransaction(
+        Effect.gen(function* () {
+          yield* sqlRun(
+            "UPDATE agent_run_attempts SET status = 'running', finished_at = NULL WHERE id = ?",
+            ids.attempt_id,
+          );
+          yield* sqlRun(
+            "INSERT INTO attempt_pending_tool_calls VALUES (?, 'unsettled-check')",
+            ids.attempt_id,
+          );
+          yield* sqlRun(
+            `UPDATE work_tasks SET status = 'running', active_attempt_id = ?,
+              parent_run_id = 'kanban:goal:outcome:O1:verify:run' WHERE id = ?`,
+            ids.attempt_id,
+            ids.task_id,
+          );
+        }),
+      );
+      yield* env.reopen;
+      expect(
+        yield* sqlGet(
+          `SELECT a.status AS attempt_status, t.status AS task_status, t.active_attempt_id
+           FROM agent_run_attempts a JOIN work_tasks t ON t.id = a.task_id WHERE a.id = ?`,
+          ids.attempt_id,
+        ),
+      ).toEqual({ attempt_status: "interrupted", task_status: "failed", active_attempt_id: null });
+    }),
+  );
+});
+
 testAgent({ testProvider: { responder: heldDefaultTurn } })(
   "subagent recovery after restart",
   (it) => {
