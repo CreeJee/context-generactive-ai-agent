@@ -20,6 +20,10 @@
 - `ProjectCommand` — 목록의 한 줄(`command`, `purpose`). 둘 다 한 줄 글이고 `command`는 200자, `purpose`는 120자까지다
 - `SaveProjectCommandsInput` / `saveProjectCommandsSpec` — `save_project_commands`의 입력(`commands?`, `remove?`)과 이름·설명
 - `maxProjectCommands` — 한 프로젝트가 두는 명령 수의 상한 40
+- `ProjectTerms` — `Context.Service` 태그(`"memory-agent/projects/terms/ProjectTerms"`). 프로젝트에서 낱말이 무엇을 뜻하는지 적은 목록이다. Goal을 정하는 대화가 요청의 낱말 뜻을 찾아 적고, 그 프로젝트의 뒤 run과 카드 에이전트·검증자가 목록을 읽고 시작한다. 메서드는 `list(projectId)`, `change(projectId, {terms?, remove?})`, `hookFor(projectId)`(목록을 system 프롬프트 끝에 붙이는 `RunHook`), `toolFor(projectId)`(`save_project_terms` 도구). `ProjectTerms.layer`는 `SqlClient`만 필요하다
+- `ProjectTerm` / `TermSource` — 목록의 한 줄(`term` 80자, `meaning` 400자, `source`, `reference` 300자). `source`는 뜻을 찾은 곳(`user` | `code` | `document` | `web`)이다. 추정은 출처가 아니라서 값에 없다. 대소문자만 다른 낱말은 같은 용어다
+- `SaveProjectTermsInput` / `saveProjectTermsSpec` — `save_project_terms`의 입력(`terms?`, `remove?`)과 이름·설명
+- `maxProjectTerms` — 한 프로젝트가 두는 용어 수의 상한 80
 - `listedCoverage(script, commands)` — sh 스크립트의 모든 단계가 목록의 명령으로 시작하면, 그 명령을 적은 문장을 `Option.some`으로 돌려준다. `save_code_skill`이 이것으로 거부한다(`skills/code-skills.ts`)
 - 하위 디렉터리 없음
 
@@ -46,6 +50,7 @@
 - SQLite `projects` 표 쓰기: `INSERT ... ON CONFLICT(root) DO UPDATE SET hidden_at = NULL ... RETURNING *`, `UPDATE`로 `hidden_at`, `cross_recall_excluded`, `permission_mode`/`permission_full` 변경
 - 파일시스템 읽기: `fs.realPath`(layer 생성 때 저장소 루트를 정규화하고, add 때 요청 루트를 정규화), `fs.stat`(디렉터리 여부 확인)
 - SQLite `project_commands` 표 읽기와 쓰기: `SELECT ... ORDER BY rowid`, `DELETE ... RETURNING`, `INSERT ... ON CONFLICT(project_id, command) DO UPDATE`
+- SQLite `project_terms` 표 읽기와 쓰기: `SELECT ... ORDER BY rowid`, `DELETE ... RETURNING`, `INSERT ... ON CONFLICT(project_id, term) DO UPDATE`
 - `SecureRandom.uuidV4`로 프로젝트 id 생성
 - `Clock.currentTimeMillis`로 `created_at`, `hidden_at` 시각을 읽음
 

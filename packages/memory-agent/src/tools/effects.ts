@@ -59,6 +59,8 @@ export const builtinToolEffects = {
   notify_session: "effectful",
   // Changes the project's command list, which later runs read.
   save_project_commands: "effectful",
+  // Changes the project's term list, which later runs and cards read.
+  save_project_terms: "effectful",
 } as const satisfies Record<string, "read" | "effectful">;
 
 /** Built-ins since replaced, whose calls are still in recorded runs and history. */

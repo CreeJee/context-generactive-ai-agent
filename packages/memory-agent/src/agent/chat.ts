@@ -75,6 +75,7 @@ import { Nodes } from "../memory/nodes.ts";
 import { Recorder } from "../memory/record.ts";
 import { ProgressMemos } from "../memory/progress-memo.ts";
 import { ProjectCommands } from "../projects/commands.ts";
+import { ProjectTerms } from "../projects/terms.ts";
 import { Projects, type Project } from "../projects/projects.ts";
 import { type GateBinding, PermissionGate } from "../permissions/gate.ts";
 import { Sessions } from "../sessions/sessions.ts";
@@ -579,6 +580,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const delivery = yield* QueueDelivery;
   const sessionDispatches = yield* SessionDispatches;
   const projectCommands = yield* ProjectCommands;
+  const projectTerms = yield* ProjectTerms;
   const summaries = yield* TurnSummaries;
   const workflows = yield* Workflows;
   const execution = yield* WorkflowExecution;
@@ -2041,6 +2043,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           sessionDispatches.notifyToolFor(projectId, sessionId, runId),
           // A note for the project's later runs; a listed command still runs through run_command.
           projectCommands.toolFor(projectId),
+          // What a word means in this project, for its later runs and its cards.
+          projectTerms.toolFor(projectId),
         ]);
         const sharedTools =
           reportSource !== null
@@ -2208,6 +2212,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                   Effect.provideContext(workflowRuleContext),
                 ),
                 yield* projectCommands.hookFor(projectId),
+                yield* projectTerms.hookFor(projectId),
               ]),
           // Before the gate, so a refused repeat is never reviewed or put to the user.
           yield* repeatGuardHook,

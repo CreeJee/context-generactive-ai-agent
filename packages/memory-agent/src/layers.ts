@@ -88,6 +88,7 @@ import { SecretSweep } from "./secrets/sweep.ts";
 import { PermissionGate } from "./permissions/gate.ts";
 import { PermissionReviews } from "./permissions/reviews.ts";
 import { ProjectCommands } from "./projects/commands.ts";
+import { ProjectTerms } from "./projects/terms.ts";
 import { Projects } from "./projects/projects.ts";
 import { ActiveProvider } from "./providers/active-provider.ts";
 import { CrossProviderMediaConsent } from "./providers/cross-provider-media-consent.ts";
@@ -308,6 +309,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     ApiUsage.layer,
     Projects.layer,
     ProjectCommands.layer,
+    ProjectTerms.layer,
     Nodes.layer,
     PermissionReviews.layer,
     Attachments.layer,

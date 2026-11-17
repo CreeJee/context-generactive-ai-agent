@@ -87,6 +87,8 @@ const programCallable = {
   notify_session: true,
   // A note for later runs: what is worth keeping is the model's own call, not a program's.
   save_project_commands: false,
+  // What a word means is settled with the user, never by a program.
+  save_project_terms: false,
 } as const satisfies Record<keyof typeof builtinToolEffects, boolean>;
 
 const notCallable = HashSet.fromIterable(

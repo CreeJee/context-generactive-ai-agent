@@ -465,6 +465,11 @@ msgstr "프로젝트 밖 파일 쓰기"
 msgid "프로젝트 밖 파일 읽기"
 msgstr "프로젝트 밖 파일 읽기"
 
+#. Tool call title in the editor
+#: src/acp/tool-view.ts
+msgid "프로젝트 용어 저장"
+msgstr "프로젝트 용어 저장"
+
 #: src/permissions/reviews.ts
 msgid "호출할 때마다 확인하는 도구입니다."
 msgstr "호출할 때마다 확인하는 도구입니다."

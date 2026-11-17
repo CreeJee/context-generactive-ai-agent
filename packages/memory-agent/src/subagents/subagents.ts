@@ -44,6 +44,7 @@ import { ApprovalRequester } from "../approvals/relayed-state.ts";
 import { answeredReason, askEveryCallReason, PermissionReviews } from "../permissions/reviews.ts";
 import { i18n } from "../i18n.ts";
 import { ProjectCommands } from "../projects/commands.ts";
+import { ProjectTerms } from "../projects/terms.ts";
 import type { Project } from "../projects/projects.ts";
 import { CodeTools } from "../tools/code.ts";
 import { SkillReviews } from "../skills/skill-review.ts";
@@ -382,6 +383,7 @@ const make = Effect.gen(function* () {
   const recorder = yield* Recorder;
   const memos = yield* ProgressMemos;
   const projectCommands = yield* ProjectCommands;
+  const projectTerms = yield* ProjectTerms;
 
   // A child cut off by a restart is not rerun on its own (R18).
   yield* sql`UPDATE subagents SET status = 'interrupted', updated_at = ${yield* Clock.currentTimeMillis}
@@ -747,6 +749,7 @@ const make = Effect.gen(function* () {
       const hooks: ReadonlyArray<RunHook<RunStore>> = [
         yield* Effect.provideContext(projectInstructionsHook(binding.project.root), platform),
         yield* projectCommands.hookFor(binding.project.id),
+        yield* projectTerms.hookFor(binding.project.id),
         yield* recorder.hookFor({
           projectId: binding.project.id,
           sessionId: threadId,

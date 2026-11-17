@@ -3169,6 +3169,20 @@ export const migrations: readonly string[] = [
   btwTablesDropMigration,
   boardTasksRestartEndMigration,
   notificationDeliveryMigration,
+  `
+  -- What words mean in a project, one list per project (decisions.md "Goal은 맞춘 뒤에 맡긴다").
+  -- The conversation shaping a Goal saves them and every later run of the project reads them, in
+  -- the order they were first saved (rowid). Letter case does not make another term.
+  CREATE TABLE project_terms (
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    term TEXT NOT NULL COLLATE NOCASE,
+    meaning TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('user', 'code', 'document', 'web')),
+    reference TEXT NOT NULL,
+    saved_at TEXT NOT NULL,
+    UNIQUE (project_id, term)
+  );
+  `,
 ];
 
 /** One of the two startup migrations that may rebuild a referenced table with FK checks suspended;
