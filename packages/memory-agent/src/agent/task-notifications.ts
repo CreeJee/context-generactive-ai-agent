@@ -35,12 +35,15 @@ export const taskNotifications = (services: {
   return {
     consume,
     release,
-    /** Whether the session has something to be told, unless the user stopped its notifications. */
-    untold: (sessionId: string) =>
+    /**
+     * Whether the session has an end that wakes it (`wake` delivery), unless the user stopped its
+     * notifications. A `next_run` end waits for a run that starts anyway.
+     */
+    wakes: (sessionId: string) =>
       Effect.zipWith(
-        trace.pendingParentNotificationSessions,
-        background.untold(sessionId),
-        (sessions, untold) => untold || sessions.includes(sessionId),
+        trace.wakingParentNotificationSessions,
+        background.wakes(sessionId),
+        (sessions, waking) => waking || sessions.includes(sessionId),
       ),
     /**
      * Before each model call of the run, the notifications not told yet join the conversation as

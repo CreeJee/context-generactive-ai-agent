@@ -417,12 +417,15 @@ const make = Effect.gen(function* () {
         sql`UPDATE background_tasks SET delivered_to_run_id = NULL, delivered_at = NULL
           WHERE session_id = ${sessionId} AND delivered_to_run_id = ${runId}`,
       ).pipe(Effect.asVoid),
-    /** Whether the session has an end to be told, unless the user stopped its notifications. */
-    untold: (sessionId: string) =>
+    /**
+     * Whether the session has an end that wakes it, unless the user stopped its notifications. A
+     * `next_run` end waits for a run that starts anyway.
+     */
+    wakes: (sessionId: string) =>
       stored("read")(
         sql`SELECT 1 FROM background_tasks b
           WHERE b.session_id = ${sessionId} AND b.finished_at IS NOT NULL
-            AND b.delivered_at IS NULL
+            AND b.delivered_at IS NULL AND b.delivery = 'wake'
             AND NOT EXISTS (
               SELECT 1 FROM parent_notification_holds h WHERE h.session_id = b.session_id
             )

@@ -2077,10 +2077,14 @@ const make = Effect.gen(function* () {
         first(sql`SELECT 1 FROM parent_notification_holds WHERE session_id = ${sessionId}`),
         (row) => row !== undefined,
       ),
-    /** Durable wake-up source. Reading does not mark a notification delivered. */
-    pendingParentNotificationSessions:
-      sql`SELECT DISTINCT origin_session_id FROM parent_notifications n
-        WHERE delivered_at IS NULL AND origin_session_id IS NOT NULL
+    /**
+     * Durable wake-up source: sessions with a notification of a `wake` task. Reading does not mark
+     * a notification delivered.
+     */
+    wakingParentNotificationSessions:
+      sql`SELECT DISTINCT n.origin_session_id FROM parent_notifications n
+        JOIN work_tasks t ON t.id = n.task_id AND t.delivery = 'wake'
+        WHERE n.delivered_at IS NULL AND n.origin_session_id IS NOT NULL
           AND NOT EXISTS (
             SELECT 1 FROM parent_notification_holds h WHERE h.session_id = n.origin_session_id
           )`.pipe(

@@ -208,6 +208,52 @@ describe("Work Trace task lifecycle", () => {
       ),
   );
 
+  it.effect("only the end of a task a chat run started wakes its session", () =>
+    run(
+      Effect.gen(function* () {
+        const trace = yield* WorkTraceStore;
+        yield* seed();
+        const startFrom = (parentRunId: string) =>
+          trace.startAttempt({
+            sessionId: "s1",
+            parentRunId,
+            parentToolCallId: `${parentRunId}:call`,
+            agentId: "agent-1",
+            title: "Research",
+            request: "Research the code",
+            kind: "start",
+            threadId: "subagent-agent-1",
+          });
+        const finish = (handle: Effect.Success<ReturnType<typeof startFrom>>) =>
+          trace
+            .transitionAttempt(handle, "s1", "running", "attempt_started", "Started")
+            .pipe(
+              Effect.andThen(
+                trace.transitionAttempt(
+                  handle,
+                  "s1",
+                  "completed",
+                  "attempt_completed",
+                  "Done",
+                  null,
+                  false,
+                ),
+              ),
+            );
+        yield* finish(yield* startFrom("kanban:g:S1:1"));
+        expect(yield* trace.wakingParentNotificationSessions).toEqual([]);
+        yield* finish(yield* startFrom("parent-1"));
+        expect(yield* trace.wakingParentNotificationSessions).toEqual(["s1"]);
+        // A run that starts anyway tells both.
+        expect(
+          (yield* trace.consumeParentNotifications("s1", "next-run")).map(
+            ({ parentRunId }) => parentRunId,
+          ),
+        ).toEqual(["kanban:g:S1:1", "parent-1"]);
+      }),
+    ),
+  );
+
   it.effect(
     "purges task payload once while retaining tombstone, lineage, and immutable receipt",
     () =>

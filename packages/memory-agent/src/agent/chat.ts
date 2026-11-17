@@ -2969,7 +2969,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             );
             return;
           }
-          if (restarted || !(yield* notifications.untold(sessionId))) return;
+          if (restarted || !(yield* notifications.wakes(sessionId))) return;
           const pendingApprovals = yield* runStore.pendingInterrupts(sessionId);
           if (pendingApprovals.length > 0) return;
           yield* drain(yield* send(followupRunId, InternalFollowup.notification()));

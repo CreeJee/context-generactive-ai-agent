@@ -407,7 +407,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         ),
       ).toBe(0);
       // Follow-ups start only from notifications the session does not hold; cancel holds them.
-      expect(yield* trace.pendingParentNotificationSessions).not.toContain(sessionId);
+      expect(yield* trace.wakingParentNotificationSessions).not.toContain(sessionId);
       expect((yield* agent.status(sessionId, null)).running).toBeNull();
       expect(
         yield* count("SELECT count(*) AS count FROM chat_runs WHERE thread_id = ?", sessionId),
@@ -534,13 +534,13 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         idempotencyKey: `${sessionId}:held-notification`,
       });
       expect(notificationId).not.toBeNull();
-      expect(yield* trace.pendingParentNotificationSessions).not.toContain(sessionId);
+      expect(yield* trace.wakingParentNotificationSessions).not.toContain(sessionId);
       yield* env.reopen;
       const reopened = yield* env.use(WorkTraceStore);
       expect(yield* reopened.parentNotificationsHeld(sessionId)).toBe(true);
-      expect(yield* reopened.pendingParentNotificationSessions).not.toContain(sessionId);
+      expect(yield* reopened.wakingParentNotificationSessions).not.toContain(sessionId);
       yield* reopened.resumeParentNotifications(sessionId);
-      expect(yield* reopened.pendingParentNotificationSessions).toContain(sessionId);
+      expect(yield* reopened.wakingParentNotificationSessions).toContain(sessionId);
     }),
   );
 

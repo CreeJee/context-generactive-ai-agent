@@ -103,11 +103,11 @@ testAgent()("background task lifecycle", (it) => {
           Effect.as(Deferred.await(gate), "listing"),
         );
         expect((yield* tasks.running(sessionId)).map((task) => task.id)).toEqual([receipt.taskId]);
-        expect(yield* tasks.untold(sessionId)).toBe(false);
+        expect(yield* tasks.wakes(sessionId)).toBe(false);
         yield* Deferred.succeed(gate, undefined);
         yield* Fiber.join(ended);
         expect(yield* tasks.running(sessionId)).toEqual([]);
-        expect(yield* tasks.untold(sessionId)).toBe(true);
+        expect(yield* tasks.wakes(sessionId)).toBe(true);
         const told = [
           {
             taskId: receipt.taskId,
@@ -121,7 +121,7 @@ testAgent()("background task lifecycle", (it) => {
         expect(yield* tasks.consume(sessionId, "next-run")).toEqual([]);
         yield* tasks.release(sessionId, "later-run");
         expect(yield* tasks.consume(sessionId, "next-run")).toEqual(told);
-        expect(yield* tasks.untold(sessionId)).toBe(false);
+        expect(yield* tasks.wakes(sessionId)).toBe(false);
         // A result the run waited for is its own, so its end is not told again.
         const waited = yield* tasks.start(
           run,
@@ -131,7 +131,36 @@ testAgent()("background task lifecycle", (it) => {
           Effect.succeed("/"),
         );
         yield* tasks.waitResult(sessionId, waited.taskId, 2000);
-        expect(yield* tasks.untold(sessionId)).toBe(false);
+        expect(yield* tasks.wakes(sessionId)).toBe(false);
+      }),
+  );
+
+  it.effect(
+    "the end of a task the board started goes with the next run but does not wake the session",
+    () =>
+      Effect.gen(function* () {
+        const sessionId = yield* freshSession;
+        const tasks = yield* BackgroundTasks;
+        const boardRun = {
+          ...(yield* runOf(sessionId)),
+          runId: `kanban:${sessionId}:S1:1`,
+        };
+        const ended = yield* Stream.take(tasks.completions, 1).pipe(
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        const receipt = yield* tasks.start(
+          boardRun,
+          `${sessionId}:board-call`,
+          "shell",
+          "pwd",
+          Effect.succeed("/"),
+        );
+        yield* Fiber.join(ended);
+        expect(yield* tasks.wakes(sessionId)).toBe(false);
+        expect(yield* tasks.consume(sessionId, "next-run")).toMatchObject([
+          { taskId: receipt.taskId, parentRunId: boardRun.runId, status: "completed" },
+        ]);
       }),
   );
 
@@ -379,7 +408,7 @@ testAgent()("background cancellation across restart", (it) => {
       });
       // Its end is told like any other.
       expect(
-        yield* env.use(Effect.flatMap(BackgroundTasks, (tasks) => tasks.untold(session.id))),
+        yield* env.use(Effect.flatMap(BackgroundTasks, (tasks) => tasks.wakes(session.id))),
       ).toBe(true);
     }),
   );
