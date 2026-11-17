@@ -16,6 +16,7 @@ import {
 } from "effect";
 import { SecureRandom } from "effect/crypto";
 import { SqlClient, SqlSchema } from "effect/sql";
+import { deliveryFor } from "../agent/notification-delivery.ts";
 import { BackgroundKind, RunningBackgroundTask } from "../agent/run-state.ts";
 import { AppEvents } from "../events/app-events.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
@@ -221,9 +222,10 @@ const make = Effect.gen(function* () {
         Effect.flatMap(
           Clock.currentTimeMillis,
           (now) => sql`INSERT INTO background_tasks
-            (id, session_id, parent_run_id, tool_call_id, kind, title, status, started_at)
+            (id, session_id, parent_run_id, tool_call_id, kind, title, status, started_at, delivery)
             VALUES (${taskId}, ${sessionId}, ${binding.runId}, ${toolCallId}, ${kind},
-              ${hiddenRequest.text.replace(/\s+/gu, " ").slice(0, 80)}, 'running', ${now})`,
+              ${hiddenRequest.text.replace(/\s+/gu, " ").slice(0, 80)}, 'running', ${now},
+              ${deliveryFor(binding.runId)})`,
         ),
       );
       yield* Ref.update(sessions, HashMap.set(taskId, sessionId));

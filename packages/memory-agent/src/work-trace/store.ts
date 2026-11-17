@@ -2,6 +2,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { Array as EffectArray } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { isBoardRun } from "../kanban/board-run.ts";
+import { deliveryFor } from "../agent/notification-delivery.ts";
 import { logFailure } from "../runtime/logged-failures.ts";
 import { optionalProperty } from "../optional-property.ts";
 import {
@@ -941,10 +942,11 @@ const make = Effect.gen(function* () {
       const agentId = input.agentId;
       const insertedTask = yield* run(sql`INSERT INTO work_tasks
         (id, project_id, origin_session_id, parent_run_id, parent_tool_call_id, agent_id,
-         agent_name, status, title, request, active_attempt_id, created_at, updated_at)
+         agent_name, status, title, request, active_attempt_id, created_at, updated_at, delivery)
         SELECT ${taskId}, s.project_id, s.id, ${input.parentRunId}, ${input.parentToolCallId}, a.id,
           coalesce(a.name, ${input.agentName ?? null}, 'subagent'),
-          'queued', ${input.title}, ${input.request}, NULL, ${now}, ${now}
+          'queued', ${input.title}, ${input.request}, NULL, ${now}, ${now},
+          ${deliveryFor(input.parentRunId)}
         FROM sessions s LEFT JOIN subagents a ON a.session_id = s.id AND a.id = ${agentId}
         WHERE s.id = ${input.sessionId} AND (${agentId} IS NULL OR a.id IS NOT NULL)`);
       yield* Effect.when(

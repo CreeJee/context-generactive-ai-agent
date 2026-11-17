@@ -751,6 +751,20 @@ export const boardTasksRestartEndMigration = `
       AND status IN ('resumable', 'blocked', 'interrupted');
 `;
 
+export const notificationDeliveryMigration = `
+  -- How the conversation hears that a task ended is chosen when the task starts and kept with it
+  -- (decisions.md "작업의 끝은 띄운 쪽이 정한 방식으로 알린다"). 'wake' starts the conversation's
+  -- next run once nothing runs there; 'next_run' waits for a run that starts anyway. A task the
+  -- kanban board started is 'next_run': the board follows its own cards. Earlier tasks take theirs
+  -- from the run that started them, as new ones do.
+  ALTER TABLE background_tasks ADD COLUMN delivery TEXT NOT NULL DEFAULT 'wake'
+    CHECK (delivery IN ('wake', 'next_run'));
+  UPDATE background_tasks SET delivery = 'next_run' WHERE parent_run_id LIKE 'kanban:%';
+  ALTER TABLE work_tasks ADD COLUMN delivery TEXT NOT NULL DEFAULT 'wake'
+    CHECK (delivery IN ('wake', 'next_run'));
+  UPDATE work_tasks SET delivery = 'next_run' WHERE parent_run_id LIKE 'kanban:%';
+`;
+
 /**
  * The cards each workflow revision changed from the revision before it in its session, for the
  * board's history; a revision that changed no card has no row. Revisions never change, so this is
@@ -3154,6 +3168,7 @@ export const migrations: readonly string[] = [
   `,
   btwTablesDropMigration,
   boardTasksRestartEndMigration,
+  notificationDeliveryMigration,
 ];
 
 /** One of the two startup migrations that may rebuild a referenced table with FK checks suspended;
