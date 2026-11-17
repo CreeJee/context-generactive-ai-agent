@@ -5,6 +5,7 @@ import {
   Effect,
   FileSystem,
   HashSet,
+  Iterable,
   Option,
   Schedule,
   Schema,
@@ -73,7 +74,10 @@ export const processTree = (
           ...fresh,
           ...under(
             fresh.flatMap((process) => children[String(process.pid)] ?? []),
-            HashSet.union(seen, HashSet.fromIterable(fresh.map((process) => process.pid))),
+            HashSet.union(
+              seen,
+              HashSet.fromIterable(Iterable.map(fresh, (process) => process.pid)),
+            ),
           ),
         ];
   };
