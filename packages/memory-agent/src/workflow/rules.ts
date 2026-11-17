@@ -54,13 +54,16 @@ export interface ResolvedRules {
 const builtInRuleInputs: readonly Omit<WorkflowRule, "source">[] = [
   {
     id: "workflow.goal.definition",
-    version: 1,
+    version: 2,
     title: "Define outcomes before implementation",
     phases: ["goal"],
     priority: "required",
     instruction:
-      "Record the problem, observable outcomes, constraints, non-goals, assumptions and blocking questions. Do not turn implementation guesses into requirements.",
-    requiredEvidence: ["A saved Goal artifact with no unanswered blocking question before acting"],
+      "Record the problem, observable outcomes, constraints, non-goals, assumptions and blocking questions. Do not turn implementation guesses into requirements. Give every word one meaning: find what an unknown or ambiguous word means and keep it on the project's term list, and ask about a meaning you could not find.",
+    requiredEvidence: [
+      "A saved Goal artifact with no unanswered blocking question before acting",
+      "The words the Goal depends on are on the project's term list with where each meaning was found",
+    ],
   },
   {
     id: "workflow.plan.readonly",

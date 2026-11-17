@@ -6,7 +6,7 @@ import type { JsonValue as Json } from "../../src/json.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import type { ScriptedResponder, ScriptedTurn } from "../../src/testing/scripted-model.ts";
 import { BoardAuthor } from "../../src/workflow/card.ts";
-import { Workflows } from "../../src/workflow/workflow.ts";
+import { Workflows, type UpdateGoal, type UpdatePlan } from "../../src/workflow/workflow.ts";
 import { runTurn } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
@@ -61,8 +61,11 @@ const responder: ScriptedResponder = (invocation) =>
     return turn;
   });
 
-/** A fresh session whose Goal has a ready Plan, answered by `turns`. */
-const planned = Effect.fnUntraced(function* (turns: readonly ScriptedTurn[]) {
+/** A fresh session answered by `turns`, with the Goal and Plan `saved` before any turn. */
+const started = Effect.fnUntraced(function* (
+  turns: readonly ScriptedTurn[],
+  saved: { readonly goal: UpdateGoal | null; readonly plan: UpdatePlan | null },
+) {
   const env = yield* TestEnv;
   const id = (yield* env.use(
     Effect.flatMap(Sessions, (sessions) => sessions.create(env.project.id)),
@@ -73,8 +76,14 @@ const planned = Effect.fnUntraced(function* (turns: readonly ScriptedTurn[]) {
     Effect.gen(function* () {
       yield* selectTestModel();
       const workflows = yield* Workflows;
-      yield* workflows.updateGoal(id, goal);
-      yield* workflows.updatePlan(id, plan);
+      yield* Effect.when(
+        Effect.suspend(() => workflows.updateGoal(id, saved.goal ?? goal)),
+        Effect.succeed(saved.goal !== null),
+      );
+      yield* Effect.when(
+        Effect.suspend(() => workflows.updatePlan(id, saved.plan ?? plan)),
+        Effect.succeed(saved.plan !== null),
+      );
     }),
   );
   const kanban = env.use(
@@ -91,6 +100,12 @@ const planned = Effect.fnUntraced(function* (turns: readonly ScriptedTurn[]) {
     board: Effect.map(kanban, Option.isSome),
   };
 });
+
+/** A fresh session whose Goal has a ready Plan, answered by `turns`. */
+const planned = (turns: readonly ScriptedTurn[]) => started(turns, { goal, plan });
+
+/** Long enough for the follow-up after a run's end to have started a board, had it meant to. */
+const afterFollowup = Effect.sleep("300 millis");
 
 const waitForBoard = <E>(board: Effect.Effect<boolean, E>) =>
   board.pipe(
@@ -146,6 +161,53 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
       const tools = session.invocations()[0]?.toolNames ?? [];
       expect(tools).toEqual(expect.arrayContaining(["update_goal", "update_plan", "write_file"]));
       expect(tools).not.toContain("update_workflow_progress");
+    }),
+  );
+
+  it.effect("Goal mode starts no board in the run that first saves the Goal", () =>
+    Effect.gen(function* () {
+      const env = yield* TestEnv;
+      const session = yield* started(
+        [
+          call("goal", "update_goal", goal),
+          call("plan", "update_plan", plan),
+          { text: "This is what I understood. Is it right?" },
+          { text: "The board will run the cards." },
+        ],
+        { goal: null, plan: null },
+      );
+      yield* env.use(Effect.flatMap(Workflows, (workflows) => workflows.move(session.id, "goal")));
+      yield* runTurn(session.id, `${session.id}-turn`, "Get this done");
+      yield* afterFollowup;
+      // The user has not had a turn to answer the Goal: the ready Plan waits.
+      const state = yield* env.use(
+        Effect.flatMap(Workflows, (workflows) => workflows.get(session.id)),
+      );
+      expect([state.phase, state.plan?.status]).toEqual(["shaping", "ready"]);
+      expect(yield* session.board).toBe(false);
+      // The run that ends after the user answered that Goal starts its board.
+      yield* runTurn(session.id, `${session.id}-answer`, "Yes, go on");
+      yield* waitForBoard(session.board);
+    }),
+  );
+
+  it.effect("Goal mode starts no board while a question that blocks the Goal is open", () =>
+    Effect.gen(function* () {
+      const env = yield* TestEnv;
+      const session = yield* started(
+        [call("plan", "update_plan", plan), { text: "One thing I need to know first." }],
+        {
+          goal: {
+            ...goal,
+            openQuestions: [{ id: "Q1", question: "Which account?", blocking: true }],
+          },
+          plan: null,
+        },
+      );
+      yield* env.use(Effect.flatMap(Workflows, (workflows) => workflows.move(session.id, "goal")));
+      yield* runTurn(session.id, `${session.id}-turn`, "Get this done");
+      yield* afterFollowup;
+      expect(yield* session.board).toBe(false);
     }),
   );
 

@@ -619,12 +619,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             Option.exists((goal) => goal.active),
           ),
     );
-  /** A Goal mode Plan its planner saved ready for the current Goal, waiting for nobody. */
+  /**
+   * A Goal mode Plan its planner saved ready for the current Goal, with no question that blocks
+   * it left open.
+   */
   const goalModeReady = (state: WorkflowState) =>
     state.phase === "shaping" &&
     state.mode === "goal" &&
     state.goal !== null &&
     (state.goal.status === "active" || state.goal.status === "draft") &&
+    !state.goal.openQuestions.some((question) => question.blocking) &&
     state.plan?.status === "ready" &&
     state.plan.goalVersion === state.goal.version;
   /** An approved Plan runs on a kanban board; the chat never executes it. */
@@ -716,6 +720,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     Stream.runForEach(wakeNotifications),
     Effect.forkScoped({ startImmediately: true }),
   );
+  /**
+   * The Goal each session's newest run found when a user's turn started it. Goal mode starts a
+   * board only for such a Goal: the user had a turn after reading it (decisions.md "Goal은 맞춘
+   * 뒤에 맡긴다"). A restart forgets it, and the user's next turn sets it again.
+   */
+  const goalsUserAnswered = yield* Ref.make<Readonly<Record<string, string>>>({});
   // What each board's loop last asked the model about, until a follow-up run takes it.
   const kanbanAttention = yield* Ref.make<
     Readonly<Record<string, readonly KanbanAttentionReason[]>>
@@ -1464,6 +1474,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const lastMessage = messages.at(-1);
         if (turn !== null && isTruthy(lastMessage) && isEmptyUserText(lastMessage))
           return refused({ error: "empty_message" });
+        // A continuation of the user's turn (a tool result, an approval) keeps what the turn found.
+        if (turn !== null || internalFollowup !== null) {
+          const answered =
+            turn !== null && workflow.goal !== null
+              ? yield* workflows.goalInstanceId(sessionId)
+              : null;
+          yield* Ref.update(goalsUserAnswered, ({ [sessionId]: _earlier, ...rest }) =>
+            answered === null ? rest : { ...rest, [sessionId]: answered },
+          );
+        }
         const images = yield* Effect.forEach(turn?.imageUrls ?? [], (url) => {
           const id = attachmentIdOf(url);
           return isTruthy(id) ? attachments.get(id) : Effect.succeed(null);
@@ -2968,10 +2988,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           )
             return;
           const reconciled = yield* workflows.reconcile(sessionId);
-          // Goal mode runs its planner's first cards at once: a ready Plan its run saved for the
-          // current Goal is approved as the user would approve it in Plan mode.
+          // Goal mode runs its planner's cards without a Plan approval, once the user answered the
+          // Goal: a ready Plan saved for the current Goal is approved as the user would approve it
+          // in Plan mode when the run that ended began with a user's turn and that Goal. The run
+          // that first saves a Goal never starts its board.
+          const answered = (yield* Ref.get(goalsUserAnswered))[sessionId];
           const workflow =
-            !restarted && goalModeReady(reconciled)
+            !restarted &&
+            goalModeReady(reconciled) &&
+            answered !== undefined &&
+            answered === (yield* workflows.goalInstanceId(sessionId))
               ? yield* workflows.move(sessionId, "run").pipe(
                   Effect.tap(() => events.publishSession(sessionId, "run-state")),
                   Effect.catchTag("WorkflowTransitionRefused", () => Effect.succeed(reconciled)),
