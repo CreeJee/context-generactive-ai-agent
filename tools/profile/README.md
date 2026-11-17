@@ -2,14 +2,20 @@
 
 ## Overview
 
-`tools/profile`는 에이전트 백엔드를 개발 중에 프로파일링하는 CLI 도구다(`profile` 명령, `effect/cli` 기반). Effect span을 OTLP/JSON HTTP 또는 Effect devtools WebSocket으로 받아 NDJSON 파일에 덧붙이고, span NDJSON이나 V8 `.cpuprofile`을 텍스트 표(total/self, p50/p95, 가장 느린 경로, 소유자별 self)로 요약한다. 런타임 코드에서 import하지 않는 독립 개발 도구이며, `effect-profile` 스킬이 이 도구로 결과를 텍스트로 읽는다.
+`tools/profile`는 에이전트 백엔드를 개발 중에 프로파일링하는 CLI 도구다(`profile` 명령, `effect/cli` 기반). Effect span을 OTLP/JSON HTTP 또는 Effect devtools WebSocket으로 받아 NDJSON 파일에 덧붙이고, 프로세스 하나와 그 아래 프로세스의 메모리를 주기적으로 적는다. span NDJSON, 메모리 표본, V8 `.cpuprofile`을 텍스트 표(total/self, p50/p95, 가장 느린 경로, 소유자별 self)로 요약한다. 런타임 코드에서 import하지 않는 독립 개발 도구이며, `effect-profile` 스킬이 이 도구로 결과를 텍스트로 읽는다.
 
 ## Interface
 
 - `main.ts` (`profile` CLI) — `NodeRuntime.runMain`으로 실행하는 진입점, 하위 명령 `collect-otlp`, `collect-devtools`, `summarize`
 - `profile collect-otlp --out <file> [--port 4318] [--until-stdin-closes]` — 127.0.0.1에서 OTLP/JSON trace를 받아 span NDJSON으로 덧붙임, 플래그가 있으면 stdin이 닫힐 때 종료
 - `profile collect-devtools --out <file> [--port 34437]` — Effect devtools 프로토콜(WebSocket)로 끝난 span을 받아 NDJSON으로 저장 (개발용)
-- `profile summarize <file...> [--top 20]` — `.cpuprofile`로 끝나면 CPU 요약, 아니면 span NDJSON 요약을 stdout에 출력
+- `profile collect-memory --pid <pid> --out <file> [--interval 2]` — `<pid>` 프로세스와 그 아래 모든 프로세스의 resident memory를 `--interval`초마다 NDJSON으로 덧붙임. `<pid>` 프로세스가 사라지면 끝남. 칸반 보드가 카드를 돌릴 때 메모리가 얼마나 드는지 재는 데 쓴다(백엔드 pid를 준다)
+- `profile summarize <file...> [--top 20]` — `.cpuprofile`로 끝나면 CPU 요약, `.memory.ndjson`으로 끝나면 메모리 요약, 아니면 span NDJSON 요약을 stdout에 출력
+- `MemorySample` / `SampledProcess` / `MemoryLine` — 메모리 표본 한 줄 Schema(`atUnixMs`, `rootPid`, `processes[]`의 `pid`·`parentPid`·`rssKb`·`name`)
+- `parseProcesses(text)` — `ps -axo pid=,ppid=,rss=,comm=` 출력을 프로세스 목록으로 바꿈
+- `processTree(processes, rootPid)` — root와 그 아래 프로세스 전부. root가 없으면 빈 배열
+- `memoryCollector(rootPid, file, interval)` — 표본을 덧붙이는 Effect
+- `readMemorySamples(file)` / `summarizeMemory(samples, top)` — root 프로세스·그 아래 프로세스·전체의 min/p50/p95/max(MiB), 전체가 가장 컸던 시점, root 아래 프로그램 이름별 최대 합계·최대 한 개·최대 개수
 - `SpanRecord` — span 한 줄 Schema (traceId, spanId, parentSpanId|null, name, startUnixMs, durationMs, outcome `ok|error|interrupted`, 숫자·불리언만 있는 attributes, SQL 문장 span이면 선택 필드 `query`)
 - `SpanLine` — `Schema.fromJsonString(SpanRecord)`, NDJSON 한 줄 인코딩·디코딩
 - `SpanWriter` — `Context.Service`(키 `tools/profile/span-record/SpanWriter`), `{ file, write(records) }`, `SpanWriter.layer(file)`로 제공
@@ -30,6 +36,8 @@
 - `SpanRecord.attributes`는 숫자(Finite)와 불리언만 담는다. 문자열 값은 프롬프트·경로·provider 오류를 실을 수 있으므로 파일에 쓰지 않는다 (`scalarAttributes`, OTLP Schema는 초과 키를 디코딩 중에 버림).
 - 예외는 `db.query.text` 하나이고 `attributes`가 아니라 `query` 필드에 둔다. Effect SQL 문장 span은 이름이 모두 같아서 문장 없이는 어느 쿼리가 느린지 알 수 없다. 문장은 코드에 쓴 그대로이고 값은 `?` 자리로 빠진다. `sql.literal`·`sql.unsafe`로 넣은 값만 문장에 남는다.
 - 요약은 문장의 공백을 한 칸으로 줄여 같은 문장끼리 묶고, 표와 경로에는 앞 240자만 보인다.
+- 메모리 표본의 `name`은 프로그램 파일 이름뿐이다. 인자는 프롬프트·경로·토큰을 실을 수 있으므로 적지 않는다.
+- resident memory는 프로세스끼리 나눠 쓰는 페이지를 각 프로세스에 모두 센다. 그래서 여러 프로세스의 합은 실제보다 클 수 있는 상한이다. 카드 에이전트는 백엔드 프로세스 안에서 돌므로 root 프로세스 값에 들어 있고, 카드가 띄운 명령(테스트, 빌드, 설치, git)은 그 아래 프로세스로 잡힌다.
 - `SpanWriter.write`는 `Semaphore.make(1)`로 한 번에 한 쓰기만 하여 동시 배치의 줄이 섞이지 않게 한다. 빈 배열이면 쓰지 않는다.
 - 두 수집기와 `summarize`는 같은 `SpanLine`(NDJSON 한 줄 = `SpanRecord` 하나) 형식을 공유한다. 형식을 바꾸면 수집기와 요약기를 함께 바꿔야 한다.
 - OTLP 수집기는 `127.0.0.1`에만 바인딩한다. span은 로컬 프로파일링 데이터이고 네트워크 서비스가 아니다.
@@ -49,6 +57,8 @@
 - 파일 시스템 읽기: `readSpans`, `readCpuProfile`이 입력 파일을 문자열로 읽는다.
 - 네트워크: `otlpCollector`가 `127.0.0.1:<port>`(기본 4318)에 HTTP 서버를 띄운다.
 - 네트워크: `devtoolsCollector`가 `<port>`(기본 34437)에 WebSocket 서버(`NodeSocketServer.layerWebSocket`)를 띄운다.
+- 프로세스: `collect-memory`가 표본마다 `ps -axo pid=,ppid=,rss=,comm=`를 한 번 실행한다(macOS, Linux).
+- 파일 시스템 쓰기: `collect-memory`가 `--out` 파일에 append 모드로 표본을 한 줄씩 덧붙인다.
 - stdin: `--until-stdin-closes`일 때 stdin을 끝까지 drain하고, 닫히면 `Effect.raceFirst`로 수집기를 끝낸다.
 - 콘솔 출력: 수집 시작 메시지와 요약 텍스트를 `Console.log`로 stdout에 쓴다.
 - 프로세스: `NodeRuntime.runMain`으로 Node 프로세스 수명을 관리한다. `workingRoot`는 현재 작업 디렉터리(`path.resolve(".")`)를 읽는다.
