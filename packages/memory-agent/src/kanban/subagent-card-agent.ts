@@ -27,7 +27,7 @@ import { MemoryTools } from "../tools/memory.ts";
 import { OutsideTools } from "../tools/outside.ts";
 import { runTool, type RunTool } from "../tools/run-tool.ts";
 import { SkillTools, type SkillToolset } from "../tools/skills.ts";
-import type { PlanStep } from "../workflow/workflow.ts";
+import type { GoalArtifact, PlanStep } from "../workflow/workflow.ts";
 import { referencedRules, type RulePhase, type WorkflowRule } from "../workflow/rules.ts";
 import { projectWorkflowRules } from "../workflow/sources.ts";
 import { cardAgentToolNames, verifierToolNames } from "../workflow/card-capabilities.ts";
@@ -110,6 +110,19 @@ const cardText = (card: PlanStep) =>
     ...listed("Acceptance criteria", card.acceptanceCriteria),
     ...listed("Required evidence", card.requiredEvidence ?? []),
     ...listed("Expected files", card.boundaries ?? []),
+  ].join("\n");
+
+/**
+ * The Goal a card belongs to, as its agent and its verifier read it: the card alone does not say
+ * what the whole work is for, what must hold across every card or what was left out on purpose.
+ */
+const cardGoalText = (goal: GoalArtifact) =>
+  [
+    "The Goal this card is part of. It is context: do only this card's work, within these limits.",
+    `Goal: ${goal.statement}`,
+    ...listed("Constraints", goal.constraints),
+    ...listed("Non-goals", goal.nonGoals),
+    ...listed("Assumptions", goal.assumptions),
   ].join("\n");
 
 /** The workflow rules a card refers to, with the evidence each asks for; none, nothing. */
@@ -228,6 +241,13 @@ const make = Effect.gen(function* () {
       fallbackLogged("Card Plan version not recorded", Option.none<string>),
     );
 
+  /** The session's Goal as a card reads it; without one, or unread, the card still runs. */
+  const cardGoal = (sessionId: string) =>
+    workflows.get(sessionId).pipe(
+      Effect.map((state) => (state.goal === null ? "" : cardGoalText(state.goal))),
+      fallbackLogged("Card Goal unread", () => ""),
+    );
+
   /**
    * The read-only tools of the project's trusted MCP servers, which run for the project's main
    * folder. Each call asks first as the permission mode says, as in the chat. A server that fails
@@ -321,6 +341,7 @@ const make = Effect.gen(function* () {
                   ]
                 : []),
               ...listed("Since your last run", run.notes),
+              yield* cardGoal(run.sessionId),
               cardText(run.card),
               yield* cardRules(run.projectId, run.card, "execute"),
             ]
@@ -448,18 +469,25 @@ const make = Effect.gen(function* () {
   );
 
   const verify = (input: CardVerification) =>
-    Effect.flatMap(cardRules(input.projectId, input.card, "verify"), (rules) =>
-      runVerifier({
-        sessionId: input.sessionId,
-        projectId: input.projectId,
-        worktree: input.worktree,
-        runPrefix: boardRunId(input.goalInstanceId, input.card.id, "verify"),
-        agent: `card-${input.card.id}-verify`,
-        message: [cardText(input.card), rules, `The card's agent reported:\n${input.report}`]
-          .filter((part) => part !== "")
-          .join("\n\n"),
-        instructions: verifierInstructions,
-      }),
+    Effect.flatMap(
+      Effect.all([cardGoal(input.sessionId), cardRules(input.projectId, input.card, "verify")]),
+      ([goal, rules]) =>
+        runVerifier({
+          sessionId: input.sessionId,
+          projectId: input.projectId,
+          worktree: input.worktree,
+          runPrefix: boardRunId(input.goalInstanceId, input.card.id, "verify"),
+          agent: `card-${input.card.id}-verify`,
+          message: [
+            goal,
+            cardText(input.card),
+            rules,
+            `The card's agent reported:\n${input.report}`,
+          ]
+            .filter((part) => part !== "")
+            .join("\n\n"),
+          instructions: verifierInstructions,
+        }),
     );
 
   const verifyGoal = (input: GoalVerification) =>
