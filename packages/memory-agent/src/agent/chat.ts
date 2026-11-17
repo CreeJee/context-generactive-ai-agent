@@ -379,6 +379,17 @@ type InternalFollowup = Data.TaggedEnum<{
 }>;
 const InternalFollowup = Data.taggedEnum<InternalFollowup>();
 
+/**
+ * What a session's next automatic run answers. Each has its own receiver: the board's loop asks the
+ * planner about its cards, and the conversation hears that tasks it started ended. They are never
+ * merged into one run.
+ */
+type AutomaticRun = Data.TaggedEnum<{
+  board: { readonly reasons: readonly KanbanAttentionReason[] };
+  notifications: {};
+}>;
+const AutomaticRun = Data.taggedEnum<AutomaticRun>();
+
 /** A request to start a run: who sent it, and the run it asks for. */
 export interface ChatRequest {
   /** The page holding the session, from `X-Session-Holder`. */
@@ -2895,6 +2906,30 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ),
         ),
     });
+    /**
+     * Which waiting reason the next automatic run answers. The board's attention goes first: its
+     * loop waits on the planner's answer. The ends of tasks the conversation started that wake it
+     * come next, on a board or not. Only one runs; its end wakes the session again for the other.
+     */
+    const nextAutomatic = Effect.gen(function* () {
+      // The board's loop executes the Plan, so the planner runs only when the loop needs it, and
+      // not past a message waiting in the queue or an approval waiting for the user.
+      const reasons = (yield* kanbanBoard(sessionId))
+        ? (yield* Ref.get(kanbanAttention))[sessionId]
+        : undefined;
+      if (
+        reasons !== undefined &&
+        NextDelivery.$is("empty")((yield* queue.snapshot(sessionId)).nextDelivery) &&
+        (yield* relayed.pending(sessionId)).length === 0
+      )
+        return Option.some(AutomaticRun.board({ reasons }));
+      if (
+        (yield* notifications.wakes(sessionId)) &&
+        (yield* runStore.pendingInterrupts(sessionId)).length === 0
+      )
+        return Option.some(AutomaticRun.notifications());
+      return Option.none<AutomaticRun>();
+    });
     const run = (followupRunId: string) =>
       Effect.gen(function* () {
         yield* Effect.sleep("25 millis");
@@ -2947,32 +2982,30 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               return;
             }
           }
-          // A kanban board's loop executes the Plan; the model runs only when the loop needs it.
-          if (yield* kanbanBoard(sessionId)) {
-            const reasons = (yield* Ref.get(kanbanAttention))[sessionId];
-            if (
-              reasons === undefined ||
-              restarted ||
-              !NextDelivery.$is("empty")((yield* queue.snapshot(sessionId)).nextDelivery) ||
-              (yield* relayed.pending(sessionId)).length > 0
-            )
-              return;
-            yield* Ref.update(kanbanAttention, ({ [sessionId]: _taken, ...rest }) => rest);
-            const started = yield* send(followupRunId, InternalFollowup.kanban({ reasons }));
-            yield* drain(started);
-            // The planner had its turn: a card it left waiting for a replan waits for the user.
-            yield* Effect.when(
-              kanbanOrchestrator
-                .replanUnanswered(sessionId)
-                .pipe(Effect.catch(logFailure("Unanswered replan not shown", { sessionId }))),
-              Effect.succeed(Result.isSuccess(started) && reasons.includes("replan_requested")),
-            );
-            return;
-          }
-          if (restarted || !(yield* notifications.wakes(sessionId))) return;
-          const pendingApprovals = yield* runStore.pendingInterrupts(sessionId);
-          if (pendingApprovals.length > 0) return;
-          yield* drain(yield* send(followupRunId, InternalFollowup.notification()));
+          // A run a restart cut off continues only through its Plan's board, above.
+          if (restarted) return;
+          yield* Option.match(yield* nextAutomatic, {
+            onNone: () => Effect.void,
+            onSome: AutomaticRun.$match({
+              board: ({ reasons }) =>
+                Effect.gen(function* () {
+                  yield* Ref.update(kanbanAttention, ({ [sessionId]: _taken, ...rest }) => rest);
+                  const started = yield* send(followupRunId, InternalFollowup.kanban({ reasons }));
+                  yield* drain(started);
+                  // The planner had its turn: a card it left waiting for a replan waits for the user.
+                  yield* Effect.when(
+                    kanbanOrchestrator
+                      .replanUnanswered(sessionId)
+                      .pipe(Effect.catch(logFailure("Unanswered replan not shown", { sessionId }))),
+                    Effect.succeed(
+                      Result.isSuccess(started) && reasons.includes("replan_requested"),
+                    ),
+                  );
+                }),
+              notifications: () =>
+                Effect.flatMap(send(followupRunId, InternalFollowup.notification()), drain),
+            }),
+          });
         });
         // A run waiting for approvals goes on with their answers first. After a cancel or a failure
         // waiting messages are held, so one waiting now was confirmed by the user since.

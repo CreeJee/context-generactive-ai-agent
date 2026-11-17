@@ -7,6 +7,7 @@ import { messageText } from "../../src/agent/compaction.ts";
 import { Subagents } from "../../src/subagents/subagents.ts";
 import type { ScriptedInvocation, ScriptedTurn } from "../../src/testing/scripted-model.ts";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
+import { Workflows } from "../../src/workflow/workflow.ts";
 import { joinedNotice, selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import {
@@ -313,6 +314,41 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
           ),
         ).toEqual([{ next: "results", ended: { background: 0, subagent: 1 } }]);
       }),
+  );
+
+  it.effect("a task the conversation started wakes it while its kanban board runs", () =>
+    Effect.gen(function* () {
+      const { project } = yield* TestEnv;
+      const { sessionId, turns } = yield* parentSession;
+      const children = yield* current(Subagents);
+      const workflows = yield* current(Workflows);
+      yield* workflows.move(sessionId, "goal");
+      yield* workflows.updateGoal(sessionId, {
+        statement: "Keep the board running",
+        outcomes: [{ id: "O1", text: "The board runs" }],
+        constraints: [],
+        nonGoals: [],
+        assumptions: [],
+        openQuestions: [],
+        status: "active",
+      });
+      yield* sqlRun(
+        `INSERT INTO kanban_goals (goal_instance_id, project_root, mode, goal_version, status,
+           created_at, updated_at)
+         VALUES (?, ?, 'sequential', 1, 'active', 1, 1)`,
+        String(yield* workflows.goalInstanceId(sessionId)),
+        project.root,
+      );
+      yield* receiptFrom(yield* send(sessionId, "dispatch only"));
+      yield* turns.release("nap");
+      const followUp = yield* followedUp(sessionId);
+      yield* until(
+        Effect.map(runningRuns(sessionId), (running) => followUp() && running === 0),
+        "follow-up on a running board",
+      );
+      expect((yield* children.list(sessionId))[0]?.status).toBe("completed");
+      expect(yield* deliveredCompletions(sessionId)).toBe(1);
+    }),
   );
 
   it.effect("concurrent children cannot cause overlapping parent turns", () =>
