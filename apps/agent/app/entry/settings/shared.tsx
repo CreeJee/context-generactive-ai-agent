@@ -127,7 +127,7 @@ export function PageError({ error }: { error: string | null }) {
 export function NoProject() {
   return (
     <FieldDescription>
-      <Trans>위에서 프로젝트를 고르면 그 프로젝트의 설정이 보입니다.</Trans>
+      <Trans>왼쪽 메뉴의 프로젝트 칸에서 프로젝트를 고르면 그 프로젝트의 설정이 보입니다.</Trans>
     </FieldDescription>
   );
 }

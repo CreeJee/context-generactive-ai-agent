@@ -25,7 +25,6 @@ import {
 } from "~/components/ui/dialog";
 import { Alert, AlertAction, AlertDescription } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
-import { FieldDescription, FieldLabel } from "~/components/ui/field";
 import {
   Select,
   SelectContent,
@@ -89,7 +88,8 @@ const settingsGroups = [
     id: "project",
     label: msg({
       message: "프로젝트",
-      comment: "Settings tab group: pages that apply to the project chosen above",
+      comment:
+        "Settings tab group: pages that apply to the project chosen at the top of this group",
     }),
     pages: [
       { value: "permission", icon: ShieldCheckIcon },
@@ -228,42 +228,6 @@ export function SettingsOverlay({
             <Trans>대화 밖에서 쓰는 도구와 연결을 관리합니다.</Trans>
           </DialogDescription>
         </DialogHeader>
-        {showsProject && projects.length > 0 && (
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-center gap-3">
-              <FieldLabel htmlFor="settings-project">
-                <Trans comment="Label of the settings dialog's project picker">프로젝트</Trans>
-              </FieldLabel>
-              <Select
-                value={chosenId}
-                items={projectItems}
-                onValueChange={(value) => setChosenId(value)}
-              >
-                <SelectTrigger id="settings-project" className="w-56">
-                  <SelectValue
-                    placeholder={t({
-                      message: "프로젝트 고르기",
-                      comment: "Placeholder of the settings dialog's project picker",
-                    })}
-                  />
-                </SelectTrigger>
-                <SelectContent>
-                  {projectItems.map((item) => (
-                    <SelectItem key={item.value} value={item.value}>
-                      {item.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <FieldDescription>
-              <Trans comment="Description under the settings dialog's project picker">
-                MCP 서버, 외부 에이전트, 권한, Skills, 보호 브랜치는 여기서 고른 프로젝트의
-                설정입니다.
-              </Trans>
-            </FieldDescription>
-          </div>
-        )}
         {showsProject && project?.folderMissing === true && (
           <MissingFolderAlert project={project} onArchived={onClose} />
         )}
@@ -283,6 +247,40 @@ export function SettingsOverlay({
                   <div className="px-2 pb-1 text-2xs font-medium text-muted-foreground">
                     {t(group.label)}
                   </div>
+                  {group.id === "project" && projects.length > 0 && (
+                    <div className="px-1 pb-1">
+                      <Select
+                        value={chosenId}
+                        items={projectItems}
+                        onValueChange={(value) => setChosenId(value)}
+                      >
+                        <SelectTrigger
+                          id="settings-project"
+                          size="sm"
+                          className="w-full"
+                          aria-label={t({
+                            message: "설정할 프로젝트",
+                            comment:
+                              "Accessible name of the settings sidebar's project picker; the pages in this group and the kanban page's protected branches use the chosen project",
+                          })}
+                        >
+                          <SelectValue
+                            placeholder={t({
+                              message: "프로젝트 고르기",
+                              comment: "Placeholder of the settings dialog's project picker",
+                            })}
+                          />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {projectItems.map((item) => (
+                            <SelectItem key={item.value} value={item.value}>
+                              {item.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                   {group.pages.map((page) => (
                     <TabsTrigger key={page.value} value={page.value}>
                       <page.icon />

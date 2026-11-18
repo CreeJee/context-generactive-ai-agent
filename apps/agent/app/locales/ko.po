@@ -861,11 +861,6 @@ msgstr "MCP 도구 {name} 실행을 승인할까요?"
 msgid "MCP 서버"
 msgstr "MCP 서버"
 
-#. Description under the settings dialog's project picker
-#: app/entry/settings/settings-dialog.tsx
-msgid "MCP 서버, 외부 에이전트, 권한, Skills, 보호 브랜치는 여기서 고른 프로젝트의 설정입니다."
-msgstr "MCP 서버, 외부 에이전트, 권한, Skills, 보호 브랜치는 여기서 고른 프로젝트의 설정입니다."
-
 #: app/entry/settings/pages/mcp-tool-hints.tsx
 msgid "MCP 표준의 도구 표시를 따릅니다. 서버가 표시하지 않은 값은 표준의 조심스러운 기본값을 씁니다. 직접 고른 값이 서버 표시보다 우선합니다. 분류와 상관없이 도구를 부를 때마다 권한 모드대로 묻습니다."
 msgstr "MCP 표준의 도구 표시를 따릅니다. 서버가 표시하지 않은 값은 표준의 조심스러운 기본값을 씁니다. 직접 고른 값이 서버 표시보다 우선합니다. 분류와 상관없이 도구를 부를 때마다 권한 모드대로 묻습니다."
@@ -3519,6 +3514,11 @@ msgstr "설정을 저장하지 못했습니다. 잠시 뒤 다시 시도해 주�
 msgid "설정이 쓰는 환경 변수가 없습니다."
 msgstr "설정이 쓰는 환경 변수가 없습니다."
 
+#. Accessible name of the settings sidebar's project picker; the pages in this group and the kanban page's protected branches use the chosen project
+#: app/entry/settings/settings-dialog.tsx
+msgid "설정할 프로젝트"
+msgstr "설정할 프로젝트"
+
 #. session: session ref; runs/runCount: runs in the bundle / runs in the session
 #: app/entry/report/report-bundle.tsx
 msgid "세션 #{session} · run {runs}/{runCount}개 · 실패 포함 run {failingRuns}개 · 잘린 원문 {cutTexts}개 · 약 {kilobytes}KB"
@@ -4355,6 +4355,10 @@ msgstr "외부 에이전트와 직접 대화할 때, 메시지와 관련된 기�
 msgid "외부 요인으로 막힘"
 msgstr "외부 요인으로 막힘"
 
+#: app/entry/settings/shared.tsx
+msgid "왼쪽 메뉴의 프로젝트 칸에서 프로젝트를 고르면 그 프로젝트의 설정이 보입니다."
+msgstr "왼쪽 메뉴의 프로젝트 칸에서 프로젝트를 고르면 그 프로젝트의 설정이 보입니다."
+
 #: app/entry/index.tsx
 msgid "왼쪽에서 OpenAI 호환 공급자를 설정하거나 구독 계정에 로그인해 주십시오."
 msgstr "왼쪽에서 OpenAI 호환 공급자를 설정하거나 구독 계정에 로그인해 주십시오."
@@ -4461,10 +4465,6 @@ msgstr "웹훅 설정을 확인하지 못했습니다. 복사·저장으로 직�
 #: app/entry/settings/pages/kanban.tsx
 msgid "위 프로젝트의 카드부터 실행합니다. 한 프로젝트 안에서는 칸반 보드의 대화 순서를 따릅니다."
 msgstr "위 프로젝트의 카드부터 실행합니다. 한 프로젝트 안에서는 칸반 보드의 대화 순서를 따릅니다."
-
-#: app/entry/settings/shared.tsx
-msgid "위에서 프로젝트를 고르면 그 프로젝트의 설정이 보입니다."
-msgstr "위에서 프로젝트를 고르면 그 프로젝트의 설정이 보입니다."
 
 #: app/entry/chat/chat-composer.tsx
 msgid "위의 승인 요청에 먼저 답해 주십시오"
@@ -6289,9 +6289,8 @@ msgstr "폴더의 절대 경로를 입력해 주십시오. 등록한 폴더 안�
 msgid "표시 없음, 기본값: {shown}"
 msgstr "표시 없음, 기본값: {shown}"
 
-#. Label of the settings dialog's project picker
 #. Scope badge: set in this project's config
-#. Settings tab group: pages that apply to the project chosen above
+#. Settings tab group: pages that apply to the project chosen at the top of this group
 #: app/entry/settings/settings-dialog.tsx
 #: app/entry/settings/shared.tsx
 msgid "프로젝트"
