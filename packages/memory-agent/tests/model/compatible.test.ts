@@ -407,6 +407,50 @@ describe("compatible language model", () => {
     }),
   );
 
+  it.effect(
+    "sends the model's own reasoning back in reasoning_content, another model's as text",
+    () =>
+      Effect.gen(function* () {
+        const body = yield* compatibleBody({
+          endpoint,
+          reasoningEffort: "default",
+          prompt: providerPrompt(
+            toPrompt(
+              [
+                { role: "user", content: "weather?" },
+                {
+                  role: "assistant",
+                  source: compatibleTarget(endpoint.model).source,
+                  thinking: [{ content: "Look it up." }],
+                  toolCalls: [
+                    {
+                      id: "call-1",
+                      type: "function",
+                      function: { name: "weather", arguments: '{"city":"Seoul"}' },
+                    },
+                  ],
+                },
+                { role: "tool", toolCallId: "call-1", content: "sunny" },
+                {
+                  role: "assistant",
+                  source: { provider: "anthropic", api: "anthropic-messages", model: "other" },
+                  thinking: [{ content: "Sunny. " }],
+                  content: "It is sunny.",
+                },
+              ],
+              [systemPrompt],
+            ),
+            compatibleTarget(endpoint.model),
+          ),
+          tools: [],
+        });
+        expect(body.messages.filter((message) => message.role === "assistant")).toEqual([
+          expect.objectContaining({ content: null, reasoning_content: "Look it up." }),
+          { role: "assistant", content: "Sunny. It is sunny." },
+        ]);
+      }),
+  );
+
   it.effect("replays an earlier image as a note to a model without image input", () =>
     Effect.gen(function* () {
       const body = yield* compatibleBody({

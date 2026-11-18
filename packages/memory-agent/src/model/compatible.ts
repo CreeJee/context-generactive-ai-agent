@@ -300,9 +300,17 @@ const userMessage = (
     },
   );
 
+/**
+ * An assistant turn, with the reasoning it streamed sent back in `reasoning_content`: chat
+ * templates that keep thinking between tool calls (GLM on vLLM) read it there. Another model's
+ * reasoning is already text here (`providerPrompt`).
+ */
 const assistantMessage = (message: Prompt.AssistantMessage): ChatMessage => {
   const text = message.content
     .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join("");
+  const reasoning = message.content
+    .flatMap((part) => (part.type === "reasoning" ? [part.text] : []))
     .join("");
   const toolCalls = message.content.flatMap((part) =>
     part.type === "tool-call" && !part.providerExecuted
@@ -318,6 +326,7 @@ const assistantMessage = (message: Prompt.AssistantMessage): ChatMessage => {
   return {
     role: "assistant",
     content: toolCalls.length > 0 && text === "" ? null : text,
+    ...optionalProperty("reasoning_content", reasoning === "" ? undefined : reasoning),
     ...optionalProperty("tool_calls", toolCalls.length > 0 ? toolCalls : undefined),
   };
 };

@@ -5591,3 +5591,9 @@
   - 사용자가 정했다: 가짜 모델이 아니라 실제 모델로 실제 Goal을 돌려 잰다. 가짜 모델은 테스트와 빌드를 돌리지 않아 가장 큰 부분이 빠진다.
   - 같은 Goal을 동시 실행 수를 바꿔 가며 돌려 카드 하나당 증가분을 구한다.
 - 남은 것: 실제 측정과 그 결과. 앱 안에 heap 지표를 둘지는 그 숫자를 보고 정한다.
+
+## 호환 모델에 그 모델의 이전 추론을 돌려보낸다 (2026-11-18)
+
+- 계기: 사용자가 GLM의 추론 필드 설명을 주고 우리 대응을 확인해 달라고 했다. 받는 쪽(스트림 `delta.reasoning`·`delta.reasoning_content`, `usage.completion_tokens_details.reasoning_tokens`)은 이미 맞았다. 보내는 쪽은 같은 모델이 쓴 assistant 턴의 추론을 요청에서 버리고 있었다.
+- 실측(`GLM-5.3-Flash-NVFP4`, vLLM 직접): tool call 뒤 assistant 메시지에 추론을 붙이면 `reasoning_content`와 `reasoning` 모두 prompt_tokens가 170에서 199로 늘었다. chat template이 tool call 사이의 추론을 읽는다.
+- 결정: 같은 모델이 쓴 assistant 턴의 추론을 `reasoning_content`로 보낸다. vLLM·DeepSeek·llama.cpp가 공통으로 읽는 이름이다. 다른 모델의 턴은 지금처럼 추론을 글로 바꿔 보낸다. 마지막 사용자 메시지 이전 턴의 추론을 버릴지는 template이 정한다.
