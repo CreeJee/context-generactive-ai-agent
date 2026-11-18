@@ -219,7 +219,8 @@ const wholeToolOutputs = (messages: ReadonlyArray<ConversationMessage>) =>
   );
 
 /**
- * The messages with the output of tool calls the model has already answered from cleared. The
+ * The messages with the output of tool calls the model has already answered from cleared, and the
+ * reasoning of the assistant messages that answered run wrote. The
  * answered part ends at the latest assistant message that called no tools; what follows it (the
  * calls of the run in progress) stays whole, since the model is still working with it.
  *
@@ -243,8 +244,13 @@ function clearAnswered<M extends ConversationMessage>(
     ? messages.slice(0, answered + 1).findLastIndex(startsRun)
     : answered + 1;
   const next = messages.map((message, index) => {
+    if (index >= end) return message;
+    // The reasoning of an answered run is let go with its tool output: the model wrote its answer
+    // from it, and a provider that keeps reasoning between turns would read all of it again.
+    if (message.role === "assistant")
+      return isTruthy(message.thinking?.length) ? { ...message, thinking: [] } : message;
     const content =
-      message.role === "tool" && index < end && isTruthy(message.toolCallId)
+      message.role === "tool" && isTruthy(message.toolCallId)
         ? Option.getOrElse(clearedAs(message.toolCallId), () => message.content)
         : message.content;
     return content === message.content ? message : { ...message, content };

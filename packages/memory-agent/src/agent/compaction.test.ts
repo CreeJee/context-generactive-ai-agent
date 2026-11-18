@@ -12,6 +12,7 @@ import {
   requestHistory,
   type Budget,
   type CompactionSources,
+  type ConversationMessage,
 } from "./compaction.ts";
 
 const noLimit = 1_000_000;
@@ -289,6 +290,49 @@ describe("compact", () => {
         );
       expect(yield* clearedWith(null)).toBe("large earlier output");
       expect(yield* clearedWith("node-old-1")).toBe(clearedOutput("node-old-1"));
+    }),
+  );
+
+  it.effect("lets an answered run's reasoning go with its output, keeping the latest runs'", () =>
+    Effect.gen(function* () {
+      const thought = (content: string) => [{ content }];
+      const messages: ReadonlyArray<StoredMessage> = [
+        { role: "user", content: "earlier question" },
+        {
+          role: "assistant",
+          content: null,
+          thinking: thought("earlier call"),
+          toolCalls: [
+            { id: "old-1", type: "function", function: { name: "run_shell", arguments: "{}" } },
+          ],
+        },
+        { role: "tool", toolCallId: "old-1", content: "large earlier output" },
+        { role: "assistant", content: "done", thinking: thought("earlier answer") },
+        { role: "user", content: "follow-up" },
+        { role: "assistant", content: "answered", thinking: thought("latest answer") },
+        { role: "user", content: "current question" },
+        {
+          role: "assistant",
+          content: null,
+          thinking: thought("current call"),
+          toolCalls: [
+            { id: "now-1", type: "function", function: { name: "run_shell", arguments: "{}" } },
+          ],
+        },
+        { role: "tool", toolCallId: "now-1", content: "current output" },
+      ];
+      const compacted = yield* compactEffect({
+        messages,
+        state: fresh,
+        sources: noSources,
+        budget: unlimited,
+      });
+      expect(
+        compacted.messages.flatMap((message: ConversationMessage) =>
+          message.role === "assistant" ? [message.thinking ?? []] : [],
+        ),
+      ).toEqual([[], [], thought("latest answer"), thought("current call")]);
+      expect(compacted.stage).toBe("clear-answered");
     }),
   );
 });
