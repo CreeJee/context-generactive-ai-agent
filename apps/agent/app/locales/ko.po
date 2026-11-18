@@ -2177,6 +2177,11 @@ msgstr "대화 {count}개"
 msgid "대화 가져오기"
 msgstr "대화 가져오기"
 
+#. Placeholder of the searchable conversation picker
+#: app/entry/chat/board/card-peek.tsx
+msgid "대화 검색"
+msgstr "대화 검색"
+
 #: app/entry/navigation/sidebar.tsx
 msgid "대화 목록을 불러오지 못했습니다."
 msgstr "대화 목록을 불러오지 못했습니다."
@@ -2184,11 +2189,6 @@ msgstr "대화 목록을 불러오지 못했습니다."
 #: app/entry/settings/settings-dialog.tsx
 msgid "대화 밖에서 쓰는 도구와 연결을 관리합니다."
 msgstr "대화 밖에서 쓰는 도구와 연결을 관리합니다."
-
-#. Placeholder of the conversation picker
-#: app/entry/chat/board/card-peek.tsx
-msgid "대화 선택"
-msgstr "대화 선택"
 
 #: app/entry/chat/board/project-board.tsx
 msgid "대화 순서와 상태"
@@ -2431,6 +2431,11 @@ msgstr "막힘은 오케스트레이터가 표시합니다."
 #: app/entry/chat/chat-panel.tsx
 msgid "만들기"
 msgstr "만들기"
+
+#. Conversation picker: no conversation matches the search
+#: app/entry/chat/board/card-peek.tsx
+msgid "맞는 대화가 없습니다."
+msgstr "맞는 대화가 없습니다."
 
 #: app/entry/chat/message.tsx
 msgid "맞을 수 있는 skill: {skillNames}"

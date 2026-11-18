@@ -1100,6 +1100,19 @@ const make = (options: KanbanOrchestratorOptions) =>
         before.goal !== null && before.goal.version > stored.goalVersion && stored.hold === null
           ? yield* holdAssignment(stored, before.goal, before.plan?.steps ?? [])
           : stored;
+      // Cards sorted for the Goal's version, with no card held: the Plan follows that version.
+      yield* Effect.when(
+        workflows.cardsReclassified(
+          goal.sessionId,
+          goal.goalVersion,
+          loopAuthor(goal.goalInstanceId),
+        ),
+        Effect.succeed(
+          goal.hold === null &&
+            before.plan !== null &&
+            before.plan.goalVersion !== goal.goalVersion,
+        ),
+      );
 
       yield* blockDeadLetters(goal);
       const pending = yield* attempts.pending(goalInstanceId);

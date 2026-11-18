@@ -23,6 +23,14 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "../../../components/ui/collapsible";
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+} from "../../../components/ui/combobox";
 import { DataList, DataListItem } from "../../../components/ui/data-list";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "../../../components/ui/field";
 import { Input } from "../../../components/ui/input";
@@ -190,7 +198,7 @@ export function CardPeek({
   readonly onSubmit: (edit: BoardEdit) => Promise<string | null>;
 }) {
   const { t } = useLingui();
-  const [transferTo, setTransferTo] = useState<string | null>(null);
+  const [transferTo, setTransferTo] = useState<TransferTarget | null>(null);
   const [rejectError, setRejectError] = useState<string | null>(null);
   const openCardId = Peek.$is("Card")(peek) ? peek.cardId : null;
   const folder = useCardFolderQuery(
@@ -405,44 +413,49 @@ export function CardPeek({
                       <Trans>다른 대화로 옮기기</Trans>
                     </FieldLabel>
                     <span className="flex flex-wrap items-center gap-2">
-                      <Select
+                      <Combobox
+                        items={transferTargets}
                         value={transferTo}
-                        items={transferTargets.map(({ sessionId, label }) => ({
-                          value: sessionId,
-                          label,
-                        }))}
+                        itemToStringLabel={(target: TransferTarget) => target.label}
+                        isItemEqualToValue={(item: TransferTarget, value: TransferTarget) =>
+                          item.sessionId === value.sessionId
+                        }
                         disabled={disabled || closed || intentPending}
                         onValueChange={setTransferTo}
                       >
-                        <SelectTrigger
+                        <ComboboxInput
                           id="card-transfer"
+                          className="min-w-40 flex-1"
                           aria-label={t({
                             message: "옮길 대화",
                             comment: "Picker of the conversation a card moves to",
                           })}
-                          className="min-w-40 flex-1"
-                        >
-                          <SelectValue
-                            placeholder={t({
-                              message: "대화 선택",
-                              comment: "Placeholder of the conversation picker",
-                            })}
-                          />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {transferTargets.map((target) => (
-                            <SelectItem key={target.sessionId} value={target.sessionId}>
-                              {target.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                          placeholder={t({
+                            message: "대화 검색",
+                            comment: "Placeholder of the searchable conversation picker",
+                          })}
+                        />
+                        <ComboboxContent>
+                          <ComboboxEmpty>
+                            <Trans comment="Conversation picker: no conversation matches the search">
+                              맞는 대화가 없습니다.
+                            </Trans>
+                          </ComboboxEmpty>
+                          <ComboboxList>
+                            {(target: TransferTarget) => (
+                              <ComboboxItem key={target.sessionId} value={target}>
+                                <span className="min-w-0 flex-1 truncate">{target.label}</span>
+                              </ComboboxItem>
+                            )}
+                          </ComboboxList>
+                        </ComboboxContent>
+                      </Combobox>
                       <Button
                         type="button"
                         size="sm"
                         disabled={transferTo === null || disabled || closed || intentPending}
                         onClick={() => {
-                          if (transferTo !== null) onTransfer(card.id, transferTo);
+                          if (transferTo !== null) onTransfer(card.id, transferTo.sessionId);
                         }}
                       >
                         <Trans comment="Moves the card to the chosen conversation's Plan">
