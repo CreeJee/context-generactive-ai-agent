@@ -35,7 +35,11 @@ import {
 import { CardVerifier } from "./card-agent.ts";
 import { CardApprovalReviewer } from "./card-approval.ts";
 import { executionSubjects } from "../workflow/execution-subjects.ts";
-import { OwnerWorkflowStorage } from "../workflow/owner-workflow-storage.ts";
+import {
+  OwnerWorkflowAdmission,
+  OwnerWorkflowStorage,
+} from "../workflow/owner-workflow-storage.ts";
+import { workflowName } from "../workflow/owner-workflow-engine.ts";
 import {
   AssignmentHold,
   CardAttempts,
@@ -240,6 +244,7 @@ const make = (options: KanbanOrchestratorOptions) =>
     const projects = yield* Projects;
     const engine = yield* WorkflowEngine.WorkflowEngine;
     const executions = yield* OwnerWorkflowStorage;
+    const admission = yield* OwnerWorkflowAdmission;
     const subjects = yield* executionSubjects;
     const events = yield* AppEvents;
     const decisions = yield* HumanDecisions;
@@ -395,16 +400,22 @@ const make = (options: KanbanOrchestratorOptions) =>
      * Starts an opened attempt's workflow; one already started is not offered again. Its id is the
      * attempt's, so a started one is found whatever notes the card holds now: offered with the
      * card's later notes, it would be refused as another execution under the same id, and the
-     * owner would not start.
+     * owner would not start. The engine resumes a started one itself.
+     *
+     * The execution is admitted here, with its subject, before the engine runs it: the engine
+     * takes a refused admission as a defect, while here it is a storage failure of the attempt.
      */
     const start = Effect.fnUntraced(function* (payload: CardRunPayload) {
       const notStarted = yield* Effect.gen(function* () {
         const executionId = yield* CardAttemptExecution.executionId(payload);
-        const found = yield* executions.execution(executionId);
-        yield* subjects
-          .record(executionId, { sessionId: payload.sessionId, runId: null })
-          .pipe(Effect.when(Effect.succeed(Option.isNone(found))));
-        return Option.isNone(found);
+        const notStarted = Option.isNone(yield* executions.execution(executionId));
+        yield* admission
+          .admit(
+            { workflowName: workflowName(CardAttemptExecution), executionId, payload },
+            subjects.record(executionId, { sessionId: payload.sessionId, runId: null }),
+          )
+          .pipe(Effect.when(Effect.succeed(notStarted)));
+        return notStarted;
       }).pipe(
         Effect.mapError((cause) =>
           KanbanStorageFailed.make({
