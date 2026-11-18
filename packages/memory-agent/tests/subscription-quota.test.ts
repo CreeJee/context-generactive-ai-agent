@@ -10,10 +10,7 @@ import {
   SubscriptionUsage,
   type SubscriptionQuotaWindow,
 } from "../src/oauth/subscription-quota.ts";
-import {
-  SubscriptionUsageCredentialExpired,
-  SubscriptionUsageRateLimited,
-} from "../src/oauth/subscription-usage-probe.ts";
+import { SubscriptionUsageRateLimited } from "../src/oauth/subscription-usage-probe.ts";
 import { OAuthHarnessError, OAuthKeychain } from "../src/oauth/validation-harness.ts";
 
 const fiveHour: SubscriptionQuotaWindow = {
@@ -39,7 +36,9 @@ const quotaService = Effect.fn(function* (
   const usage = Layer.succeed(SubscriptionUsage, {
     read: (_provider, accountId) =>
       Effect.gen(function* () {
-        if (accountId === expiredId) return yield* SubscriptionUsageCredentialExpired.make({});
+        // The client found the account signed out, or its refresh token was just rejected.
+        if (accountId === expiredId)
+          return yield* OAuthHarnessError.fromCode("not_connected", null);
         yield* Ref.update(calls, (count) => count + 1);
         const failure = yield* Ref.get(failing);
         if (failure !== null) return yield* failure;

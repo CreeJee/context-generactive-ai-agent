@@ -459,7 +459,7 @@ export class OAuthKeychain extends Context.Service<
 // Only a definite refresh-token rejection signs the account out. A 403 is also what an edge proxy,
 // region block or rate limiter returns, other 400s can be our own request's fault, and an
 // unreadable success body says nothing about the stored token: those keep the login.
-const invalidatesStoredCredential = (error: OAuthHarnessError) =>
+export const invalidatesStoredCredential = (error: OAuthHarnessError) =>
   error.operation === "token_refresh" &&
   error.code === "provider_rejected" &&
   (error.status === 401 || (error.status === 400 && error.providerCode === "invalid_grant"));
@@ -493,6 +493,11 @@ export interface SubscriptionOAuthClient {
   readonly refreshForValidation: Effect.Effect<OAuthConnectionStatus, OAuthHarnessError>;
   /** The provider's fixed model-catalog pages; credentials never leave the client. */
   readonly modelCatalog: Effect.Effect<ReadonlyArray<JsonValue>, OAuthHarnessError>;
+  /**
+   * One GET of the provider's usage endpoint, refreshing an expiring token first under this
+   * client's refresh lock. The response is returned as is; its status is the caller's to read.
+   */
+  readonly subscriptionUsage: Effect.Effect<Response, OAuthHarnessError>;
   readonly stream: (
     body: string,
   ) => Stream.Stream<NormalizedStreamEvent, SubscriptionClientFailure>;
@@ -1021,10 +1026,12 @@ export const createSubscriptionOAuthClient = Effect.fnUntraced(function* (
       Effect.filterOrElse((credential) => credential.expiresAt > now() + 30_000, refresh),
     );
 
-  const authorizedCatalogRequest = Effect.fn("OAuth.catalogRequest")(function* (
+  /** One authorized GET of a fixed provider endpoint: the model catalog or the usage windows. */
+  const authorizedGet = Effect.fn("OAuth.authorizedGet")(function* (
     url: URL,
     credential: StoredCredential,
     timeout: AbortSignal,
+    operation: "model_catalog" | "subscription_usage",
   ) {
     const headers = new Headers(protocol.modelHeaders);
     headers.set("Accept", "application/json");
@@ -1047,7 +1054,7 @@ export const createSubscriptionOAuthClient = Effect.fnUntraced(function* (
       catch: () =>
         OAuthHarnessError.fromCode("transport_unavailable", null, {
           provider: protocol.provider,
-          operation: "model_catalog",
+          operation,
         }),
     });
   });
@@ -1089,7 +1096,7 @@ export const createSubscriptionOAuthClient = Effect.fnUntraced(function* (
         if (at.afterId !== undefined) url.searchParams.set("after_id", at.afterId);
       }
       const { credential, response } = yield* refreshingOnce(at.credential, (current) =>
-        authorizedCatalogRequest(url, current, timeout),
+        authorizedGet(url, current, timeout, "model_catalog"),
       );
       if (!response.ok)
         return yield* OAuthHarnessError.fromCode("provider_rejected", response.status, context);
@@ -1216,6 +1223,17 @@ export const createSubscriptionOAuthClient = Effect.fnUntraced(function* (
       Effect.andThen(status()),
     ),
     modelCatalog: modelCatalog(),
+    subscriptionUsage: Effect.gen(function* () {
+      const credential = yield* freshCredential({
+        provider: protocol.provider,
+        operation: "subscription_usage",
+      });
+      const timeout = AbortSignal.timeout(30_000);
+      const { response } = yield* refreshingOnce(credential, (current) =>
+        authorizedGet(new URL(protocol.usageUrl), current, timeout, "subscription_usage"),
+      );
+      return response;
+    }).pipe(Effect.withSpan("OAuth.subscriptionUsage")),
     stream: (serializedBody) =>
       Stream.fromEffect(streamResponse(serializedBody)).pipe(
         Stream.flatMap((response) => sseEvents(protocol.provider, response)),

@@ -1,48 +1,85 @@
 import { it } from "@effect/vitest";
-import { DateTime, Duration, Effect, Option, Result } from "effect";
+import { DateTime, Duration, Effect, MutableRef, Option, Result } from "effect";
 import { expect } from "vite-plus/test";
+import { providerProtocols, type OAuthProvider } from "../src/oauth/protocol.ts";
 import {
-  SubscriptionUsageCredentialExpired,
   anthropicSubscriptionUsage,
   anthropicUsageUrl,
   openAiSubscriptionUsage,
   openAiUsageUrl,
 } from "../src/oauth/subscription-usage-probe.ts";
+import {
+  createSubscriptionOAuthClient,
+  type StoredCredential,
+} from "../src/oauth/validation-harness.ts";
 import { withOAuthTestPlatform } from "./support/platform.ts";
 
+const urlOf = (input: Parameters<typeof fetch>[0]) =>
+  input instanceof Request ? input.url : input.toString();
+
+/** One account's client over an in-memory credential, sending every request to `fetch`. */
+const accountClient = (options: {
+  readonly provider: OAuthProvider;
+  readonly credential: StoredCredential;
+  readonly fetch: typeof fetch;
+  readonly now?: () => number;
+}) => {
+  const stored = MutableRef.make<StoredCredential | null>(options.credential);
+  return createSubscriptionOAuthClient({
+    protocol: providerProtocols[options.provider],
+    store: {
+      read: () => Effect.sync(() => MutableRef.get(stored)),
+      write: (_, credential) => Effect.sync(() => MutableRef.set(stored, credential)),
+      remove: () => Effect.sync(() => MutableRef.set(stored, null)),
+    },
+    fetch: options.fetch,
+    now: options.now ?? Date.now,
+  });
+};
+
 it.effect(
-  "quota lookup reads only numbered named windows and never refreshes an expired token",
+  "quota lookups refresh an expiring token once through the account's client, then read the numbered named windows",
   () =>
     Effect.gen(function* () {
-      const now = DateTime.toEpochMillis(DateTime.nowUnsafe());
-      const requests: Parameters<typeof fetch>[0][] = [];
-      const lookup = (expiresAt: number) =>
-        anthropicSubscriptionUsage({
-          store: {
-            read: () =>
-              Effect.succeed({ accessToken: "fixture", refreshToken: "fixture", expiresAt }),
-            write: () => Effect.die("unexpected write"),
-            remove: () => Effect.void,
-          },
-          fetch: (url) => {
-            requests.push(url);
-            return Promise.resolve(
-              Response.json({
-                five_hour: { utilization: 12.5, resets_at: "fixture" },
-                seven_day: { utilization: null, resets_at: null },
-                iguana_necktie: { utilization: 3 },
-              }),
-            );
-          },
-        }).pipe(Effect.result);
-
-      expect(yield* lookup(now + 3600_000)).toMatchObject({
-        success: [
-          { name: "five_hour", usedPercent: 12.5, windowSeconds: 18_000, resetsAt: "fixture" },
-        ],
+      const requests: string[] = [];
+      const client = yield* accountClient({
+        provider: "anthropic",
+        credential: { accessToken: "old", refreshToken: "old-refresh", expiresAt: 0 },
+        fetch: (url, init) => {
+          const target = urlOf(url);
+          requests.push(
+            target === anthropicUsageUrl
+              ? `usage ${new Headers(init?.headers).get("authorization")}`
+              : target,
+          );
+          return Promise.resolve(
+            target === providerProtocols.anthropic.tokenUrl
+              ? Response.json({
+                  access_token: "new",
+                  refresh_token: "new-refresh",
+                  expires_in: 3600,
+                })
+              : Response.json({
+                  five_hour: { utilization: 12.5, resets_at: "fixture" },
+                  seven_day: { utilization: null, resets_at: null },
+                  iguana_necktie: { utilization: 3 },
+                }),
+          );
+        },
       });
-      expect(yield* lookup(now)).toEqual(Result.fail(SubscriptionUsageCredentialExpired.make()));
-      expect(requests).toEqual([anthropicUsageUrl]);
+
+      const lookups = yield* Effect.all(
+        [anthropicSubscriptionUsage({ client }), anthropicSubscriptionUsage({ client })],
+        { concurrency: "unbounded" },
+      );
+      expect(lookups[0]).toEqual([
+        { name: "five_hour", usedPercent: 12.5, windowSeconds: 18_000, resetsAt: "fixture" },
+      ]);
+      expect(requests).toEqual([
+        providerProtocols.anthropic.tokenUrl,
+        "usage Bearer new",
+        "usage Bearer new",
+      ]);
     }).pipe(withOAuthTestPlatform),
 );
 
@@ -55,17 +92,9 @@ it.effect.each([
   ({ retryAfter, waitMillis }) =>
     Effect.gen(function* () {
       const now = Date.UTC(2026, 9, 31, 6, 0, 0);
-      const outcome = yield* anthropicSubscriptionUsage({
-        store: {
-          read: () =>
-            Effect.succeed({
-              accessToken: "fixture",
-              refreshToken: "fixture",
-              expiresAt: now + 3600_000,
-            }),
-          write: () => Effect.die("unexpected write"),
-          remove: () => Effect.void,
-        },
+      const client = yield* accountClient({
+        provider: "anthropic",
+        credential: { accessToken: "fixture", refreshToken: "fixture", expiresAt: now + 3600_000 },
         fetch: () =>
           Promise.resolve(
             Response.json(
@@ -74,7 +103,8 @@ it.effect.each([
             ),
           ),
         now: () => now,
-      }).pipe(
+      });
+      const outcome = yield* anthropicSubscriptionUsage({ client, now: () => now }).pipe(
         Effect.catchTag("SubscriptionUsageRateLimited", (error) =>
           Effect.fail(Option.map(error.retryAfter, Duration.toMillis)),
         ),
@@ -88,21 +118,20 @@ it.effect(
   "OpenAI quota lookup reads Codex's primary and secondary windows for the stored account",
   () =>
     Effect.gen(function* () {
-      const requests: { url: Parameters<typeof fetch>[0]; accountId: string | null }[] = [];
-      const windows = yield* openAiSubscriptionUsage({
-        store: {
-          read: () =>
-            Effect.succeed({
-              accessToken: "fixture",
-              refreshToken: "fixture",
-              expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 3600_000,
-              accountId: "account-fixture",
-            }),
-          write: () => Effect.die("unexpected write"),
-          remove: () => Effect.void,
+      const requests: { url: string; accountId: string | null }[] = [];
+      const client = yield* accountClient({
+        provider: "openai",
+        credential: {
+          accessToken: "fixture",
+          refreshToken: "fixture",
+          expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 3600_000,
+          accountId: "account-fixture",
         },
         fetch: (url, init) => {
-          requests.push({ url, accountId: new Headers(init?.headers).get("chatgpt-account-id") });
+          requests.push({
+            url: urlOf(url),
+            accountId: new Headers(init?.headers).get("chatgpt-account-id"),
+          });
           return Promise.resolve(
             Response.json({
               plan_type: "plus",
@@ -118,6 +147,7 @@ it.effect(
           );
         },
       });
+      const windows = yield* openAiSubscriptionUsage({ client });
       expect(windows).toEqual([
         {
           name: "primary",

@@ -25,12 +25,13 @@ memory-agent의 프로바이더/런 계층은 `OAuthProfiles`·`OAuthAccountLogi
 - `ProfileCredentialStore` / `createProfileCredentialStore(open)` — 프로필 id별 keychain slot에 read/write/remove를 위임하는 어댑터
 - `OAuthAccountLogins` (+`.layer`, `OAuthProfiles` 필요) / `createOAuthAccountLoginManager` — 계정 페이지의 계정 추가 로그인 관리자. profiles/start/cancel/settled를 제공한다
 - `AccountLoginState` — idle/completed/pending{authorizationUrl}/error{login_failed|credential_unavailable} TaggedEnum. 타입은 `contracts.ts`의 Schema에서 꺼내고, `account-login.ts`가 `Data.taggedEnum` 생성자를 붙인다
-- `createAccountBoundSubscriptionClients` / `AccountLoginFailure` — 선택된 계정에 묶인 클라이언트 묶음. catalogKey, forRun(Scope), client{status, modelCatalog, startLogin, disconnect}를 반환한다
+- `createAccountBoundSubscriptionClients` / `AccountLoginFailure` — 선택된 계정에 묶인 클라이언트 묶음. catalogKey, forRun(Scope), account(id), client{status, modelCatalog, startLogin, disconnect}를 반환한다
+- `SubscriptionAccountClients` (+`.layer`, `OAuthProfiles` 필요) — 두 프로바이더의 계정 클라이언트 묶음을 앱에 하나만 둔다. 프로바이더 레지스트리와 `SubscriptionUsage`가 같은 계정 클라이언트를 써서 refresh token을 함께 갱신한다
 - `createChunkedPasswordEntry` / `PasswordEntry` / `OpenPasswordEntry` / `CredentialFragmentsFailed` / `ChunkedPasswordFailure` — OS vault 크기 제한을 넘는 비밀번호를 조각으로 나눠 저장하는 엔트리
 - `prepareAnthropicValidationBody` — `EffectFunction.dual`(sessionId, serializedBody). Anthropic 요청 본문에 Claude Code billing/identity system 블록과 metadata.user_id를 넣고 필요한 beta 목록을 반환한다
 - `SubscriptionQuota`, `SubscriptionUsage` (Context.Service), `SubscriptionQuotaError`, 스키마 `SubscriptionQuotaReport`/`SubscriptionQuotaStatus`/`SubscriptionQuotaWindow`/`SubscriptionAccountQuota`/`SubscriptionQuotaUnavailableReason` — 구독 쿼터 조회 서비스와 보고 스키마. 서비스는 `subscription-quota.ts`, 스키마는 `contracts.ts`에 있고 `subscription-quota.ts`가 다시 내보낸다
 - `contracts.ts` — `/api/accounts`·`/api/accounts/quota`가 브라우저로 보내는 Schema(`OAuthProfile`, `AccountLoginState` 타입, `SubscriptionAccountsView`, 쿼터 스키마). 서버 코드를 import하지 않아 브라우저 번들이 쓴다
-- `anthropicSubscriptionUsage`, `anthropicSubscriptionUsageProbe`, `openAiSubscriptionUsage`, `SubscriptionUsageCredentialExpired`, `SubscriptionUsageProbe`, `SubscriptionUsageWindow` — 프로바이더별 사용량 조회(`subscription-usage-probe.ts`)
+- `anthropicSubscriptionUsage`, `anthropicSubscriptionUsageProbe`, `openAiSubscriptionUsage`, `SubscriptionUsageClient`, `SubscriptionUsageProbe`, `SubscriptionUsageWindow` — 프로바이더별 사용량 조회(`subscription-usage-probe.ts`). 요청은 계정 클라이언트의 `subscriptionUsage`로 보내서, 만료가 가까운 토큰은 그 계정의 모델 요청과 같은 갱신 lock 아래에서 먼저 갱신한다
 - `parseWindowsProxy`, `classifyWindowsProxyOutput`, `windowsTokenProxy`, `fetchOpenAiTokenViaSystemProxy` — Windows 시스템 프록시를 해석하고 그 프록시로 OpenAI 토큰을 요청한다(`windows-token-proxy.ts`)
 - 문구 — Lingui 런타임 매크로 메시지(`msg`)로 쓰는 곳에 두고 `src/i18n.ts`로 푼다. `src/locales/ko.po`로 추출되고 `lint/wording`가 검사한다
 - 하위 디렉터리 없음

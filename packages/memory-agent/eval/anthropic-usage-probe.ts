@@ -2,7 +2,8 @@ import { Console, Data, Effect, Layer, ManagedRuntime } from "effect";
 import { storedOAuthProfiles } from "./stored-profiles.ts";
 import { nodePlatformLayer } from "../src/runtime/node-platform.ts";
 import { anthropicSubscriptionUsageProbe } from "../src/oauth/subscription-usage-probe.ts";
-import { OAuthKeychain } from "../src/oauth/validation-harness.ts";
+import { providerProtocols } from "../src/oauth/protocol.ts";
+import { createSubscriptionOAuthClient, OAuthKeychain } from "../src/oauth/validation-harness.ts";
 
 // V1 evidence probe (docs/subscription-quota-research.md). Opens the user's app DB read-only, picks
 // the single stored Anthropic profile and sends exactly one usage request through app code. Prints
@@ -29,7 +30,11 @@ const program = Effect.gen(function* () {
     return yield* Console.log({ outcome: "not_called", reason: "candidate_count", candidates });
   // A stored profile id is always a valid keychain slot id.
   const store = yield* Effect.orDie((yield* OAuthKeychain).profileStore(profile.id));
-  const probe = yield* anthropicSubscriptionUsageProbe({ store }).pipe(
+  const client = yield* createSubscriptionOAuthClient({
+    protocol: providerProtocols.anthropic,
+    store,
+  });
+  const probe = yield* anthropicSubscriptionUsageProbe({ client }).pipe(
     Effect.map((result) => ({ outcome: "response", ...result })),
     Effect.catchTag("OAuthHarnessError", (error) =>
       Effect.succeed({

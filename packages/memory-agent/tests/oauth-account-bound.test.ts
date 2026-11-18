@@ -60,6 +60,7 @@ const fakeClient = (
 ): SubscriptionOAuthClient => ({
   status: Effect.succeed(connection(provider, true)),
   modelCatalog: Effect.succeed([]),
+  subscriptionUsage: Effect.die("unexpected usage lookup"),
   stream: () => Stream.empty,
   refreshForValidation: Effect.succeed(connection(provider, true)),
   disconnect: Effect.succeed(connection(provider, false)),

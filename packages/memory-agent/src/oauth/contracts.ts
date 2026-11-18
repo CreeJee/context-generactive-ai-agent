@@ -45,9 +45,9 @@ export const SubscriptionQuotaWindow = Schema.Struct({
 export type SubscriptionQuotaWindow = typeof SubscriptionQuotaWindow.Type;
 
 /**
- * Why no quota can be shown. `credential_expired`: the stored token has expired and a quota lookup
- * does not refresh it; a model request with the account renews it. `lookup_failed`: the provider
- * lookup failed and no earlier observation exists.
+ * Why no quota can be shown. `credential_expired`: the account is signed out, or the provider
+ * rejected its refresh token, so it needs a new login. `lookup_failed`: the provider lookup failed
+ * and no earlier observation exists.
  */
 export const SubscriptionQuotaUnavailableReason = Schema.Literals([
   "credential_expired",

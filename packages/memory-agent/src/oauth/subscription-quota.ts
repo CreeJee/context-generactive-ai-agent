@@ -12,9 +12,8 @@ import {
   Result,
   Schema,
 } from "effect";
-import { Digest, SecureRandom } from "effect/crypto";
-import { ChildProcessSpawner } from "effect/process";
 import type { SubscriptionAccountProvider } from "../providers/contracts.ts";
+import { SubscriptionAccountClients } from "./account-bound.ts";
 import { OAuthProfiles } from "./accounts.ts";
 import {
   SubscriptionQuotaStatus,
@@ -25,10 +24,9 @@ import {
 import {
   anthropicSubscriptionUsage,
   openAiSubscriptionUsage,
-  type SubscriptionUsageCredentialExpired,
   type SubscriptionUsageRateLimited,
 } from "./subscription-usage-probe.ts";
-import { OAuthKeychain, type OAuthHarnessError } from "./validation-harness.ts";
+import { invalidatesStoredCredential, type OAuthHarnessError } from "./validation-harness.ts";
 
 export {
   SubscriptionAccountQuota,
@@ -60,26 +58,21 @@ export class SubscriptionUsage extends Context.Service<
       accountId: string,
     ) => Effect.Effect<
       readonly SubscriptionQuotaWindow[],
-      OAuthHarnessError | SubscriptionUsageCredentialExpired | SubscriptionUsageRateLimited
+      OAuthHarnessError | SubscriptionUsageRateLimited
     >;
   }
 >()("memory-agent/oauth/subscription-quota/SubscriptionUsage") {
+  /** Reads through the account's own client, the one its runs use, and so shares its refresh. */
   static readonly layer = Layer.effect(
     SubscriptionUsage,
-    Effect.gen(function* () {
-      const vault = yield* OAuthKeychain;
-      const platform = yield* Effect.context<
-        SecureRandom.SecureRandom | Digest.Digest | ChildProcessSpawner.ChildProcessSpawner
-      >();
-      return SubscriptionUsage.of({
+    Effect.map(SubscriptionAccountClients, (clients) =>
+      SubscriptionUsage.of({
         read: (provider, accountId) =>
-          // Only listed accounts are read, and their ids are valid profile ids.
-          Effect.orDie(vault.profileStore(accountId)).pipe(
-            Effect.flatMap((store) => subscriptionUsageReaders[provider]({ store })),
-            Effect.provideContext(platform),
+          Effect.flatMap(clients[provider].account(accountId), (client) =>
+            subscriptionUsageReaders[provider]({ client }),
           ),
-      });
-    }),
+      }),
+    ),
   );
 }
 
@@ -113,7 +106,8 @@ export class SubscriptionQuota extends Context.Service<
 >()("memory-agent/oauth/subscription-quota/SubscriptionQuota") {
   /**
    * Anthropic reads `/api/oauth/usage` and OpenAI Codex's `/wham/usage` (both adopted 2026-10-12,
-   * see docs/subscription-quota-research.md); a failed lookup keeps the last observation as `stale`,
+   * see docs/subscription-quota-research.md), refreshing an expiring token first (2026-11-18);
+   * a failed lookup keeps the last observation as `stale`,
    * and a rate-limited one is not repeated until the provider's `Retry-After` has passed.
    */
   static readonly layer = Layer.effect(
@@ -130,14 +124,18 @@ export class SubscriptionQuota extends Context.Service<
           Effect.map((windows) =>
             windows.length > 0 ? Result.succeed(windows) : Result.fail("lookup_failed" as const),
           ),
-          Effect.catchTags({
-            SubscriptionUsageCredentialExpired: () =>
-              Effect.succeed(Result.fail("credential_expired" as const)),
-            OAuthHarnessError: (error) =>
+          Effect.catchTag("OAuthHarnessError", (error) => {
+            // A signed-out account, or one whose refresh token the provider just rejected.
+            const signedOut = error.code === "not_connected" || invalidatesStoredCredential(error);
+            const reason: SubscriptionQuotaUnavailableReason = signedOut
+              ? "credential_expired"
+              : "lookup_failed";
+            return Effect.when(
               Effect.logWarning("subscription usage lookup failed").pipe(
                 Effect.annotateLogs({ error: "OAuthHarnessError", code: error.code }),
-                Effect.as(Result.fail("lookup_failed" as const)),
               ),
+              Effect.succeed(!signedOut),
+            ).pipe(Effect.as(Result.fail(reason)));
           }),
           Effect.map((windows): Lookup => ({ windows, holdFor: observationTimeToLive })),
           // Asking again before the provider's wait is over would only prolong the limit.

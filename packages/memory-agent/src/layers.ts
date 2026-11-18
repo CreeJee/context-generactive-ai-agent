@@ -94,6 +94,7 @@ import { ActiveProvider } from "./providers/active-provider.ts";
 import { CrossProviderMediaConsent } from "./providers/cross-provider-media-consent.ts";
 import { ProviderRegistry } from "./providers/registry.ts";
 import { AccountSubscriptionProviderRegistry } from "./providers/subscriptions.ts";
+import { SubscriptionAccountClients } from "./oauth/account-bound.ts";
 import { OAuthProfiles } from "./oauth/accounts.ts";
 import { OAuthAccountLogins } from "./oauth/account-login.ts";
 import { OAuthKeychain } from "./oauth/validation-harness.ts";
@@ -331,7 +332,9 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     RunLogSignals.layer,
     WorkTraceStore.layer,
     OAuthAccountLogins.layer,
-    SubscriptionQuota.layer.pipe(Layer.provide(SubscriptionUsage.layer)),
+    SubscriptionQuota.layer.pipe(
+      Layer.provide(SubscriptionUsage.layer.pipe(Layer.provide(SubscriptionAccountClients.layer))),
+    ),
     providerToolRegistry,
     modelFeatureFlags,
     crossProviderMediaConsent,

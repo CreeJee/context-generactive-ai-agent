@@ -1,7 +1,6 @@
 import { Effect, Layer } from "effect";
 import { GlobalConfig } from "../config/global-config.ts";
-import { OAuthProfiles } from "../oauth/accounts.ts";
-import { createAccountBoundSubscriptionClients } from "../oauth/account-bound.ts";
+import { SubscriptionAccountClients } from "../oauth/account-bound.ts";
 import { providerProtocols } from "../oauth/protocol.ts";
 import { createSubscriptionOAuthClient, OAuthKeychain } from "../oauth/subscription-oauth.ts";
 import { createSubscriptionProvider } from "./subscription-provider.ts";
@@ -51,15 +50,7 @@ export const SubscriptionProviderRegistry = Layer.effect(ProviderRegistry, make)
 /** App runtime: dynamically select only for NEW calls and pin the selected client per run. */
 const makeForAccounts = Effect.gen(function* () {
   const config = yield* GlobalConfig;
-  const profiles = yield* OAuthProfiles;
-  const openaiClient = yield* createAccountBoundSubscriptionClients({
-    profiles,
-    provider: "openai",
-  });
-  const anthropicClient = yield* createAccountBoundSubscriptionClients({
-    profiles,
-    provider: "anthropic",
-  });
+  const { openai: openaiClient, anthropic: anthropicClient } = yield* SubscriptionAccountClients;
   const openai = yield* createSubscriptionProvider({
     protocol: providerProtocols.openai,
     config,
@@ -87,4 +78,7 @@ const makeForAccounts = Effect.gen(function* () {
   });
 });
 
-export const AccountSubscriptionProviderRegistry = Layer.effect(ProviderRegistry, makeForAccounts);
+export const AccountSubscriptionProviderRegistry = Layer.effect(
+  ProviderRegistry,
+  makeForAccounts,
+).pipe(Layer.provide(SubscriptionAccountClients.layer));

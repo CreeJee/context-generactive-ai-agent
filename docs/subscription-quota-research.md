@@ -78,3 +78,10 @@ The user decided to show Anthropic quota from this route despite the credential-
 - Only `rate_limit.primary_window` and `rate_limit.secondary_window` are read: `used_percent`, `limit_window_seconds` and `reset_at` (Unix seconds, shown as ISO). They become the windows `primary` and `secondary`; the sidebar labels them by length (for example 5시간, 7일). `plan_type`, credits and other fields are ignored.
 - The field names come from the Codex backend client cited above. No live response was inspected in this change, so the first real lookup is the verification. If the shape differs, the account shows `lookup_failed` rather than a guessed number.
 - `no_permitted_route` was removed; it was never in a GitHub release.
+
+## Refresh before lookup (2026-11-18)
+
+- Change: a usage lookup now goes through the account's own client (`SubscriptionOAuthClient.subscriptionUsage`), which refreshes an expiring token first. The "No refresh" rule of M5 above and "never refreshes an expired token" of the OpenAI adoption no longer hold.
+- Why: an account that is not selected never sends a model request, so its token stayed expired and its quota stayed `credential_expired` (observed with a Claude organization account). jcode refreshes each saved account before its usage call.
+- Race: `SubscriptionAccountClients` builds each account's client once per app, and both the provider registry and `SubscriptionUsage` use it, so a usage lookup and a model request of the same account share one refresh lock and never spend one rotating refresh token twice.
+- `credential_expired` now means the account is signed out or the provider rejected its refresh token (a new login is needed). Rate rules are unchanged.

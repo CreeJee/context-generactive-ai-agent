@@ -1,11 +1,21 @@
-import { Effect, Fiber, HashMap, Option, Ref, Scope, SynchronizedRef } from "effect";
+import {
+  Context,
+  Effect,
+  Fiber,
+  HashMap,
+  Layer,
+  Option,
+  Ref,
+  Scope,
+  SynchronizedRef,
+} from "effect";
 import { Digest, SecureRandom } from "effect/crypto";
 import { ChildProcessSpawner } from "effect/process";
 import {
   createProfileCredentialStore,
+  OAuthProfiles,
   type OAuthProfile,
   type OAuthProfileRejected,
-  type OAuthProfiles,
   type OAuthProfileStoreFailed,
   type ProfileCredentialStore,
 } from "./accounts.ts";
@@ -202,6 +212,11 @@ export const createAccountBoundSubscriptionClients = Effect.fnUntraced(function*
     },
     /** The selected account's client, held for the run until its scope closes. */
     forRun,
+    /**
+     * A stored account's own client, selected or not. It is the one its runs use, so a usage
+     * lookup refreshes the account's token under the same lock as its model requests.
+     */
+    account: (id: string) => clientFor(id),
     client: {
       status: Effect.flatMap(selection, ({ id, legacyAllowed }) =>
         id !== null || legacyAllowed
@@ -214,3 +229,30 @@ export const createAccountBoundSubscriptionClients = Effect.fnUntraced(function*
     },
   };
 });
+
+type AccountBoundSubscriptionClients = Effect.Success<
+  ReturnType<typeof createAccountBoundSubscriptionClients>
+>;
+
+/**
+ * Both providers' account-bound clients, built once per app so the provider registry and the
+ * subscription usage lookup share each account's client and its refresh lock.
+ */
+export class SubscriptionAccountClients extends Context.Service<
+  SubscriptionAccountClients,
+  Readonly<Record<OAuthProvider, AccountBoundSubscriptionClients>>
+>()("memory-agent/oauth/account-bound/SubscriptionAccountClients") {
+  static readonly layer = Layer.effect(
+    SubscriptionAccountClients,
+    Effect.gen(function* () {
+      const profiles = yield* OAuthProfiles;
+      return SubscriptionAccountClients.of({
+        openai: yield* createAccountBoundSubscriptionClients({ profiles, provider: "openai" }),
+        anthropic: yield* createAccountBoundSubscriptionClients({
+          profiles,
+          provider: "anthropic",
+        }),
+      });
+    }),
+  );
+}

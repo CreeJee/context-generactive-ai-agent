@@ -77,7 +77,7 @@ export const windowLabel = (window: Pick<QuotaWindow, "name" | "windowSeconds">)
 };
 
 const quotaUnavailableReasons = {
-  credential_expired: msg`구독 한도 조회 불가: 저장된 로그인이 만료돼 조회하지 않았습니다`,
+  credential_expired: msg`구독 한도 조회 불가: 저장된 로그인이 만료됐습니다. 다시 로그인해 주십시오`,
   lookup_failed: msg`구독 한도 조회 실패: 공급자에게서 사용량을 받지 못했습니다`,
 } satisfies Record<QuotaUnavailableReason, MessageDescriptor>;
 

@@ -1,18 +1,14 @@
 import { DateTime, Duration, Effect, Option, Schema } from "effect";
-import { isTruthy } from "../truthy.ts";
 import { providerProtocols, type OAuthProvider } from "./protocol.ts";
-import {
-  createSubscriptionOAuthClient,
-  OAuthHarnessError,
-  type CredentialStore,
-  type OAuthHarnessErrorContext,
-} from "./validation-harness.ts";
+import { OAuthHarnessError, type SubscriptionOAuthClient } from "./validation-harness.ts";
 
 /** The internal usage endpoints third-party clients call (docs/subscription-quota-research.md). */
-export const anthropicUsageUrl = "https://api.anthropic.com/api/oauth/usage";
+export const anthropicUsageUrl = providerProtocols.anthropic.usageUrl;
 /** The ChatGPT backend usage endpoint Codex's backend client reads for its rate-limit status. */
-export const openAiUsageUrl = "https://chatgpt.com/backend-api/wham/usage";
-const usageUrls = { anthropic: anthropicUsageUrl, openai: openAiUsageUrl } as const;
+export const openAiUsageUrl = providerProtocols.openai.usageUrl;
+
+/** The one client method a usage lookup needs: the account's own usage request. */
+export type SubscriptionUsageClient = Pick<SubscriptionOAuthClient, "subscriptionUsage">;
 
 const UsageObject = Schema.Record(Schema.String, Schema.Unknown);
 const decodeUsageWindow = Schema.decodeUnknownOption(
@@ -23,7 +19,6 @@ const decodeUsageWindow = Schema.decodeUnknownOption(
 
 /** Secret-free shape of one usage response: names only, never values, tokens or account details. */
 export interface SubscriptionUsageProbe {
-  readonly refreshed: boolean;
   readonly status: number;
   readonly fieldNames: readonly string[];
   readonly windows: readonly { readonly name: string; readonly fieldNames: readonly string[] }[];
@@ -36,12 +31,6 @@ export interface SubscriptionUsageWindow {
   readonly windowSeconds: number | null;
   readonly resetsAt: string | null;
 }
-
-/** The stored access token has expired and this lookup may not refresh it. */
-export class SubscriptionUsageCredentialExpired extends Schema.TaggedError<
-  SubscriptionUsageCredentialExpired,
-  { readonly brand: unique symbol }
->()("SubscriptionUsageCredentialExpired", {}) {}
 
 /** The provider refused the lookup as too frequent (429); `retryAfter` is its `Retry-After` wait. */
 export class SubscriptionUsageRateLimited extends Schema.TaggedError<
@@ -65,64 +54,18 @@ const retryAfterOf = (header: string | null, now: number) =>
   );
 
 /**
- * Sends exactly one usage request with the stored access token and never retries. An expired token
- * is refreshed first only when `refreshExpired` allows it; otherwise the lookup fails without a
- * request so it never races the model path's own refresh of a rotating refresh token. A 429 fails
- * with the provider's `Retry-After` so the caller can wait it out.
+ * Sends one usage request through the account's client, which refreshes an expiring token first
+ * under the same lock its model requests use, so the two never spend one rotating refresh token
+ * twice. A 429 fails with the provider's `Retry-After` so the caller can wait it out.
  */
 const requestUsage = Effect.fn("requestSubscriptionUsage")(function* (options: {
   readonly provider: OAuthProvider;
-  readonly store: CredentialStore;
-  readonly refreshExpired: boolean;
-  readonly fetch?: typeof fetch;
+  readonly client: SubscriptionUsageClient;
   readonly now?: () => number;
 }) {
-  const { provider } = options;
-  const context: OAuthHarnessErrorContext = { provider, operation: "subscription_usage" };
-  const protocol = providerProtocols[provider];
+  const context = { provider: options.provider, operation: "subscription_usage" } as const;
   const now = options.now ?? Date.now;
-  const fetcher = options.fetch ?? fetch;
-  const readCredential = options.store
-    .read(provider)
-    .pipe(
-      Effect.filterOrFail(isTruthy, () =>
-        OAuthHarnessError.fromCode("not_connected", null, context),
-      ),
-    );
-  const stored = yield* readCredential;
-  // The app's own expiry margin: the same credential would be refreshed before a model request.
-  const refreshed = stored.expiresAt <= now() + 30_000;
-  yield* Effect.when(
-    Effect.fail(SubscriptionUsageCredentialExpired.make({})),
-    Effect.succeed(refreshed && !options.refreshExpired),
-  );
-  const credential = refreshed
-    ? yield* createSubscriptionOAuthClient({
-        protocol,
-        store: options.store,
-        fetch: fetcher,
-        now,
-      }).pipe(
-        Effect.flatMap((client) => client.refreshForValidation),
-        Effect.andThen(readCredential),
-      )
-    : stored;
-  const headers = new Headers(protocol.modelHeaders);
-  headers.set("Accept", "application/json");
-  headers.delete("Content-Type");
-  headers.set("Authorization", `Bearer ${credential.accessToken}`);
-  if (provider === "openai" && credential.accountId !== undefined)
-    headers.set("chatgpt-account-id", credential.accountId);
-  const response = yield* Effect.tryPromise({
-    try: (signal) =>
-      fetcher(usageUrls[provider], {
-        method: "GET",
-        headers,
-        redirect: "error",
-        signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
-      }),
-    catch: () => OAuthHarnessError.fromCode("transport_unavailable", null, context),
-  }).pipe(
+  const response = yield* options.client.subscriptionUsage.pipe(
     Effect.filterOrFail(
       (response) => response.ok,
       (response) =>
@@ -139,26 +82,15 @@ const requestUsage = Effect.fn("requestSubscriptionUsage")(function* (options: {
       OAuthHarnessError.fromCode("provider_rejected", response.status, context),
     ),
   );
-  return { refreshed, status: response.status, body };
+  return { status: response.status, body };
 });
 
-/**
- * V1 evidence probe: one request, refreshing an expired token first, reporting only field names.
- */
+/** V1 evidence probe: one request, reporting only field names. */
 export const anthropicSubscriptionUsageProbe = Effect.fn("anthropicSubscriptionUsageProbe")(
-  function* (options: {
-    readonly store: CredentialStore;
-    readonly fetch?: typeof fetch;
-    readonly now?: () => number;
-  }) {
-    const { refreshed, status, body } = yield* requestUsage({
-      ...options,
-      provider: "anthropic",
-      refreshExpired: true,
-    });
+  function* (options: { readonly client: SubscriptionUsageClient }) {
+    const { status, body } = yield* requestUsage({ ...options, provider: "anthropic" });
     const fields = Object.entries(body);
     return {
-      refreshed,
       status,
       fieldNames: fields.map(([name]) => name),
       windows: fields.flatMap(([name, value]) =>
@@ -182,20 +114,12 @@ const decodeQuotaWindow = Schema.decodeUnknownOption(
 
 /**
  * The adopted quota route (decision 2026-10-12): the provider's own utilization for the named
- * windows, read with the stored token and never refreshing it. A window without a number is
- * omitted rather than shown as zero.
+ * windows. Since 2026-11-18 an expiring token is refreshed first, so an account that is not
+ * selected keeps its windows. A window without a number is omitted rather than shown as zero.
  */
 export const anthropicSubscriptionUsage = Effect.fn("anthropicSubscriptionUsage")(
-  function* (options: {
-    readonly store: CredentialStore;
-    readonly fetch?: typeof fetch;
-    readonly now?: () => number;
-  }) {
-    const { body } = yield* requestUsage({
-      ...options,
-      provider: "anthropic",
-      refreshExpired: false,
-    });
+  function* (options: { readonly client: SubscriptionUsageClient; readonly now?: () => number }) {
+    const { body } = yield* requestUsage({ ...options, provider: "anthropic" });
     return Object.entries(anthropicQuotaWindows).flatMap(([name, windowSeconds]) =>
       Option.match(decodeQuotaWindow(body[name]), {
         onNone: () => [],
@@ -236,14 +160,13 @@ const decodeOpenAiRateLimit = Schema.decodeUnknownOption(
 
 /**
  * The adopted OpenAI quota route (decision 2026-10-12): Codex's `/wham/usage` windows for the
- * stored ChatGPT account, read without refreshing its token. A missing window is omitted.
+ * stored ChatGPT account, refreshing an expiring token first. A missing window is omitted.
  */
 export const openAiSubscriptionUsage = Effect.fn("openAiSubscriptionUsage")(function* (options: {
-  readonly store: CredentialStore;
-  readonly fetch?: typeof fetch;
+  readonly client: SubscriptionUsageClient;
   readonly now?: () => number;
 }) {
-  const { body } = yield* requestUsage({ ...options, provider: "openai", refreshExpired: false });
+  const { body } = yield* requestUsage({ ...options, provider: "openai" });
   const limits = Option.getOrUndefined(decodeOpenAiRateLimit(body))?.rate_limit;
   return [
     { name: "primary", window: limits?.primary_window },

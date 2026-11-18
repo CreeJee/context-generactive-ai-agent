@@ -81,6 +81,8 @@ export interface ProviderProtocol {
   readonly scopes: string;
   readonly modelUrl: string;
   readonly catalogUrl: string;
+  /** The internal usage endpoint the provider's own CLI reads (docs/subscription-quota-research.md). */
+  readonly usageUrl: string;
   readonly callbackPath: string;
   readonly callbackPort: number | null;
   readonly callbackRedirectHost: string;
@@ -102,6 +104,7 @@ export const providerProtocols: Readonly<Record<OAuthProvider, ProviderProtocol>
     scopes: "openid profile email offline_access api.connectors.read api.connectors.invoke",
     modelUrl: "https://chatgpt.com/backend-api/codex/responses",
     catalogUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
+    usageUrl: "https://chatgpt.com/backend-api/wham/usage",
     callbackPath: "/auth/callback",
     callbackPort: 1455,
     // Match Codex's registered IPv4 loopback redirect; localhost may resolve to ::1 on Windows.
@@ -129,6 +132,7 @@ export const providerProtocols: Readonly<Record<OAuthProvider, ProviderProtocol>
       "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload",
     modelUrl: "https://api.anthropic.com/v1/messages?beta=true",
     catalogUrl: "https://api.anthropic.com/v1/models",
+    usageUrl: "https://api.anthropic.com/api/oauth/usage",
     callbackPath: "/callback",
     callbackPort: null,
     callbackRedirectHost: "localhost",
