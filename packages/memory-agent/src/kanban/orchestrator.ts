@@ -35,6 +35,7 @@ import {
 import { CardVerifier } from "./card-agent.ts";
 import { CardApprovalReviewer } from "./card-approval.ts";
 import { executionSubjects } from "../workflow/execution-subjects.ts";
+import { OwnerWorkflowStorage } from "../workflow/owner-workflow-storage.ts";
 import {
   AssignmentHold,
   CardAttempts,
@@ -238,6 +239,7 @@ const make = (options: KanbanOrchestratorOptions) =>
     const sessions = yield* Sessions;
     const projects = yield* Projects;
     const engine = yield* WorkflowEngine.WorkflowEngine;
+    const executions = yield* OwnerWorkflowStorage;
     const subjects = yield* executionSubjects;
     const events = yield* AppEvents;
     const decisions = yield* HumanDecisions;
@@ -389,12 +391,21 @@ const make = (options: KanbanOrchestratorOptions) =>
       }));
     });
 
-    /** Starts an opened attempt's workflow; one already started is not offered again. */
-    const start = (payload: CardRunPayload) =>
-      CardAttemptExecution.executionId(payload).pipe(
-        Effect.flatMap((executionId) =>
-          subjects.record(executionId, { sessionId: payload.sessionId, runId: null }),
-        ),
+    /**
+     * Starts an opened attempt's workflow; one already started is not offered again. Its id is the
+     * attempt's, so a started one is found whatever notes the card holds now: offered with the
+     * card's later notes, it would be refused as another execution under the same id, and the
+     * owner would not start.
+     */
+    const start = Effect.fnUntraced(function* (payload: CardRunPayload) {
+      const notStarted = yield* Effect.gen(function* () {
+        const executionId = yield* CardAttemptExecution.executionId(payload);
+        const found = yield* executions.execution(executionId);
+        yield* subjects
+          .record(executionId, { sessionId: payload.sessionId, runId: null })
+          .pipe(Effect.when(Effect.succeed(Option.isNone(found))));
+        return Option.isNone(found);
+      }).pipe(
         Effect.mapError((cause) =>
           KanbanStorageFailed.make({
             operation: "attempt",
@@ -402,9 +413,12 @@ const make = (options: KanbanOrchestratorOptions) =>
             cause,
           }),
         ),
-        Effect.andThen(CardAttemptExecution.execute(payload, { discard: true })),
+      );
+      yield* CardAttemptExecution.execute(payload, { discard: true }).pipe(
+        Effect.when(Effect.succeed(notStarted)),
         Effect.provideService(WorkflowEngine.WorkflowEngine, engine),
       );
+    });
 
     /** A failed attempt or verification climbs the card's ladder. */
     const failCard = Effect.fnUntraced(function* (

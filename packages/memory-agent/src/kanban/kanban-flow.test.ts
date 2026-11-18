@@ -617,6 +617,40 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "restarts with a running card whose notes changed, continuing the attempt it started",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const started = yield* Deferred.make<void>();
+        const firstScope = yield* Scope.make();
+        const first = yield* openKanbanOwner(fixture, firstScope, {
+          // The first owner's card never finishes: the owner stops while it runs.
+          agent: () => Effect.andThen(Deferred.succeed(started, undefined), Effect.never),
+        });
+        const goal = yield* first(
+          Effect.gen(function* () {
+            const goal = yield* executingPlan(fixture, [card("a")]);
+            yield* (yield* KanbanOrchestrator).start(goal.sessionId);
+            yield* Deferred.await(started);
+            // A change made while the attempt runs waits on the card for its next attempt.
+            yield* (yield* CardAttempts).updateLadder(goal.goalInstanceId, "a", (current) => ({
+              ...current,
+              notes: [...current.notes, "use the new name"],
+            }));
+            return goal;
+          }),
+        );
+        yield* Scope.close(firstScope, Exit.void);
+
+        const second = yield* openKanbanOwner(fixture, yield* Effect.scope, {
+          agent: () => Effect.succeed(finished),
+        });
+        yield* second(waitForCards(goal.sessionId, allDone));
+      }),
+    gitTimeout,
+  );
+
+  it.effect(
     "keeps waits for a person, a protected merge and another Goal across a restart, and continues each on its answer",
     () =>
       Effect.gen(function* () {
