@@ -1404,9 +1404,20 @@ const make = (options: KanbanOrchestratorOptions) =>
       );
     });
 
+    // Each board recovers in its own loop: one that cannot stops that board, not the owner, which
+    // otherwise failed to start and every request with it.
     yield* Effect.forEach(
       yield* attempts.activeGoals,
-      (goal) => Effect.andThen(recover(goal), run(goal)),
+      (goal) =>
+        FiberMap.run(
+          loops,
+          goal.goalInstanceId,
+          recover(goal).pipe(
+            health.supervise(goal, "Kanban attempt recovery failed", {}),
+            Effect.andThen(loop(goal)),
+          ),
+          { onlyIfMissing: true },
+        ),
       { discard: true },
     );
 

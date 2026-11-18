@@ -30,7 +30,9 @@ import {
   waitForCards,
   type KanbanFixture,
 } from "../testing/kanban.ts";
+import { SqlClient } from "effect/sql";
 import { AppEvents } from "../events/app-events.ts";
+import { LoopHealth } from "../runtime/loop-health.ts";
 import { Projects } from "../projects/projects.ts";
 import { BoardAuthor } from "../workflow/card.ts";
 import { BoardIntent } from "../workflow/contracts.ts";
@@ -53,6 +55,7 @@ import {
   goalDecisionCardId,
   HumanDecisions,
 } from "./human-decision.ts";
+import { BoardHealth } from "./board-health.ts";
 import { KanbanOrchestrator } from "./orchestrator.ts";
 import { ProjectScheduler } from "./scheduler.ts";
 
@@ -646,6 +649,47 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
           agent: () => Effect.succeed(finished),
         });
         yield* second(waitForCards(goal.sessionId, allDone));
+      }),
+    gitTimeout,
+  );
+
+  it.effect(
+    "starts with a board whose attempt cannot be recovered, running the other boards",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const started = yield* Deferred.make<void>();
+        const firstScope = yield* Scope.make();
+        const first = yield* openKanbanOwner(fixture, firstScope, {
+          agent: () => Effect.andThen(Deferred.succeed(started, undefined), Effect.never),
+        });
+        const broken = yield* first(
+          Effect.gen(function* () {
+            const goal = yield* executingPlan(fixture, [card("a")]);
+            yield* (yield* KanbanOrchestrator).start(goal.sessionId);
+            yield* Deferred.await(started);
+            // The card's stored notes no longer read, so its attempt cannot be offered again.
+            const sql = yield* SqlClient.SqlClient;
+            yield* sql`UPDATE kanban_cards SET notes_json = '{"note": 1}'
+              WHERE goal_instance_id = ${goal.goalInstanceId}`.pipe(Effect.orDie);
+            return goal;
+          }),
+        );
+        yield* Scope.close(firstScope, Exit.void);
+
+        const second = yield* openKanbanOwner(fixture, yield* Effect.scope, {
+          cores: 4,
+          agent: () => Effect.succeed(finished),
+        });
+        yield* second(
+          Effect.gen(function* () {
+            const other = yield* executingSession(broken.projectId, [card("b")]);
+            yield* (yield* KanbanOrchestrator).start(other.sessionId);
+            yield* waitForCards(other.sessionId, allDone);
+            const health = yield* (yield* BoardHealth).get(broken.goalInstanceId);
+            expect(LoopHealth.guards.Healthy(health)).toBe(false);
+          }),
+        );
       }),
     gitTimeout,
   );
