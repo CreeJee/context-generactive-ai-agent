@@ -213,6 +213,7 @@
       {
         "role": "assistant",
         "content": "answer ",
+        "reasoning_content": "thought \ud800",
         "tool_calls": [
           {
             "id": "text-1",

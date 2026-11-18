@@ -301,6 +301,7 @@
       {
         "role": "assistant",
         "content": "own answer",
+        "reasoning_content": "own thought",
         "tool_calls": [
           {
             "id": "call_1_fc_1",
