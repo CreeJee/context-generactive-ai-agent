@@ -67,6 +67,11 @@ export interface ConversationMessage {
     | undefined;
   readonly toolCalls?: ReadonlyArray<ConversationToolCall> | undefined;
   readonly toolCallId?: string | undefined;
+  /**
+   * What the model reasoned before it wrote an assistant message. Providers that keep reasoning
+   * between turns (GLM on vLLM) are sent it with the message.
+   */
+  readonly thinking?: ReadonlyArray<{ readonly content: string }> | undefined;
   /** Present when the orchestrator sent the user message; it is no user turn and has no user node. */
   readonly orchestrator?: OrchestratorNote | undefined;
 }
@@ -171,10 +176,14 @@ const imagesIn = (message: ConversationMessage) =>
  * Tokens of a message, roughly: English and code take about four characters a token, Korean and
  * other scripts about one. The default estimate (characters / 4) would let Korean text grow far
  * past the budget before anything is compacted. Each image counts as {@link imageTokens}.
+ *
+ * Reasoning counts as text: a provider that keeps it between turns reads all of it. On a GLM
+ * conversation it was 450,000 of a 597,000-token request, which the estimate did not see.
  */
 export function estimateTokens(message: ConversationMessage): number {
   const calls = isTruthy(message.toolCalls?.length) ? JSON.stringify(message.toolCalls) : "";
-  const text = messageText(message) + calls;
+  const thinking = (message.thinking ?? []).map(({ content }) => content).join("");
+  const text = thinking + messageText(message) + calls;
   // Only the text outside ASCII is copied; counting it needs no array of its characters.
   const other = text.replace(/\p{ASCII}+/gu, "");
   // Each character outside ASCII is a token; a surrogate pair is one character.

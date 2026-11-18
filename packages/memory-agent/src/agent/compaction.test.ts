@@ -599,3 +599,13 @@ it("counts each image as much as a provider documents one may cost", () => {
     }),
   ).toBe(1 + 2 * 4_784);
 });
+
+it("counts an assistant message's reasoning, which a provider that keeps it reads", () => {
+  expect(
+    estimateTokens({
+      role: "assistant",
+      content: "abcd",
+      thinking: [{ content: "efghijkl" }, { content: "가나" }],
+    }),
+  ).toBe(3 + 2);
+});

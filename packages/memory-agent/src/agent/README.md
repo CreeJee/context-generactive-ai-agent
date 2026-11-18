@@ -63,7 +63,7 @@
 - `Budget.compactAt`은 deprecated 호환 필드이며 항상 0이다. leave-out 기준은 `Math.floor(contextWindow * 0.55)`이다.
 - 진행 메모(`ProgressMemos.hookFor`)는 compaction hook 다음의 `request` hook이라, 메모가 있으면 compaction이 무엇을 빼든 요청 끝에 user 메시지로 붙는다. 저장된 transcript에는 들어가지 않는다. 리포트 분석 세션에는 `update_memo`를 주지 않는다.
 - `Budget.inputCeiling`은 창에서 답할 자리(16,384와 창의 1/5 중 작은 값)를 뺀 값이다. `compactionHook`은 run의 step 사용량이 오면 provider가 센 입력에서 우리 메시지 추정을 뺀 값(시스템 프롬프트, 도구 정의, tokenizer 차이)을 기억한다. 다음 step부터는 `inputCeiling`에서 그 값을 뺀 자리가 `leaveOutAt`보다 작을 때 그 자리를 기준으로 leave-out한다. run의 첫 step은 대화의 마지막 요청에서 잰 값(`measuredOverhead`, 저장된 사용량의 `inputTokens − estimatedTokens`)으로 시작하므로 run이 바뀌거나 서버를 다시 켜도 이어진다. 잰 값이 없는 첫 step과 입력 수를 알리지 않는 provider는 추정만 쓴다.
-- `estimateTokens`는 ASCII 4자당 1토큰, 비ASCII 1자당 1토큰으로 센다(한국어 과소추정 방지). 이미지는 크기를 읽지 않고 하나에 4,784토큰(Anthropic 고해상도 모델의 문서 최대치)으로 센다.
+- `estimateTokens`는 ASCII 4자당 1토큰, 비ASCII 1자당 1토큰으로 센다(한국어 과소추정 방지). assistant 메시지의 추론(`thinking`)도 글로 센다. 추론을 턴 사이에 다시 읽는 provider(vLLM의 GLM)는 그것을 모두 읽기 때문이다. 이미지는 크기를 읽지 않고 하나에 4,784토큰(Anthropic 고해상도 모델의 문서 최대치)으로 센다.
 - `defaultSummaryStartPercent = 25`는 `docs/decisions.md` 2026-10-13 결정이다. run이 끝난 뒤 요약 없이 보내는 대화가 창의 그 비율을 넘으면 `TurnSummaries`가 최신 사용자 턴 두 개 앞까지 세션 요약을 이어 쓴다. 요약이 한 번 생기면 비율과 관계없이 이어 쓴다. 최근 사용자 턴 2개(`recentRawUserTurns`)는 항상 원문으로 보낸다.
 - `handoff-state.ts`는 모델 handoff 루프와 분리되어 있다. 시작 시 TanStack 행 마이그레이션이 루프를 로드하지 않고 상태·fingerprint를 읽기 위해서다. `fingerprint`는 'v2:' 접두와 객체 키 정렬로 UI hydration의 필드 순서 변화에 견딘다. `legacyFingerprint`는 이전 행 비교용으로 남긴다.
 - `HandoffState.handoff.through`는 0보다 큰 정수이다. `context`는 이전 버전 호환용 optional 필드이며 더 이상 전송하지 않는다.
