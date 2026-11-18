@@ -886,8 +886,11 @@ function makeOpenAICompatibleSettingsBody(
           source: compatibleTarget(settings.model).source,
           shownFailure: shownCompatibleFailure,
           historyKey,
-          // A compatible server states no cache lifetime; the shortest common one is assumed.
-          promptCacheFor: Duration.minutes(5),
+          // A compatible server states no cache lifetime. Local servers (vLLM, llama.cpp) keep a
+          // prefix until its memory is needed, not for a set time, and the next request of a
+          // conversation often comes more than five minutes later, so it still appends for an
+          // hour. Appending to an evicted prefix costs no more than rewriting the request would.
+          promptCacheFor: Duration.hours(1),
         };
       }),
     contextWindow: (modelId) => {

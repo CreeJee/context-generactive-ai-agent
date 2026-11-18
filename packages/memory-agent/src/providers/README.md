@@ -43,7 +43,7 @@
 - `AuthProvider`에는 의도적으로 토큰·자격증명 getter가 없다. 추가하지 말 것.
 - `ShownFailure`는 앱의 문구만 담고 공급자 원문 텍스트를 절대 담지 않는다.
 - `RunModel.historyKey`는 자격증명을 보관하지 않고 연결 ID만 고정한다. `RunModel.source`는 모델이 쓰는 모든 메시지에 기록되고 replay가 비교한다.
-- `RunModel.promptCacheFor`는 provider가 요청 앞부분을 캐시하는 시간이다. compaction은 이 시간이 지난 앞 요청에 이어 붙이지 않는다. Anthropic 구독은 요청한 보존(`long` 1시간, `short` 5분), OpenAI 구독은 자동 캐시의 문서 최소치인 5분, compatible은 서버가 밝히지 않으므로 5분이다.
+- `RunModel.promptCacheFor`는 provider가 요청 앞부분을 캐시하는 시간이다. compaction은 이 시간이 지난 앞 요청에 이어 붙이지 않는다. Anthropic 구독은 요청한 보존(`long` 1시간, `short` 5분), OpenAI 구독은 자동 캐시의 문서 최소치인 5분, compatible은 서버가 밝히지 않으므로 1시간이다. 로컬 서버(vLLM, llama.cpp)는 시간이 아니라 메모리가 찰 때 앞부분을 내보내고, 5분일 때는 같은 대화의 다음 요청이 9~13분 뒤에 와서 수백 메시지 요청을 다시 계산한 경우가 하루 로그에 60번 있었다(2026-11-18). 이미 내보낸 앞부분에 이어 붙여도 다시 계산하는 것보다 더 들지 않는다.
 - `AgentModelRuntime.model`은 `Scope.Scope`를 요구한다. 런에 고정된 계정 등은 scope가 닫힐 때 해제된다. 루프는 런마다 모델 하나를 만들고 프롬프트 캐시는 thread로 키잉한다.
 - 역할의 모델은 `plannerModel`·`executorModel`·`verifierModel`에 따로 저장하고, 전역 선택(`provider`·`model`·`reasoningEffort`)을 바꾸지 않는다. 고른 모델이 없는 역할만 전역 선택을 따른다(decisions.md 2026-11-09). skill router 모델은 `skillRouterModel`에 저장하고, 없으면 전역 선택을 따르지 않고 꺼진다.
 - 대화의 자기 모델은 `sessions.model_selection`에 있고 전역 선택을 바꾸지 않는다. 대화를 바꾸는 쪽은 `ActiveProvider.checked(selection)`으로 그 공급자(호환이면 그 엔드포인트 계정)의 목록에 모델과 추론 단계가 있는지 먼저 확인한다. `chooseFor`가 역할 모델을 저장하기 전에 하는 확인과 같은 함수다.
