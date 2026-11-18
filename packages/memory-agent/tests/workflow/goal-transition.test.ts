@@ -722,6 +722,17 @@ testAgent()("new Goal transition across reopening", (it) => {
       const edited = yield* workflows.updateGoal(session, { ...goal, statement: "revised" });
       expect(edited.phase).toBe("running");
       expect(yield* workflows.display(session, edited)).toBe("card_reclassifying");
+      // A status read while the board sorts the cards keeps the run going.
+      expect((yield* workflows.reconcile(session)).phase).toBe("running");
+      const sorted = yield* workflows.cardsReclassified(
+        session,
+        edited.goal?.version ?? 0,
+        BoardAuthor.cases.Orchestrator.make({ runId: "kanban-loop" }),
+      );
+      expect(sorted.phase).toBe("running");
+      expect(sorted.plan?.goalVersion).toBe(edited.goal?.version);
+      expect(yield* workflows.display(session, sorted)).toBeNull();
+      expect(yield* workflows.reconcile(session)).toEqual(sorted);
     }),
   );
 });

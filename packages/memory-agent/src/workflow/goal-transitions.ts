@@ -192,12 +192,21 @@ export const repair = (conflict: GoalStateConflict): GoalState =>
 export const goalStateOf = (standing: Standing): GoalState =>
   Result.match(decodeGoalState(standing), { onSuccess: (state) => state, onFailure: repair });
 
-/** Running stays only while an executing, stopped or finished Plan for the current Goal is there. */
-export const reconciledPhase = ({ phase, goal, plan }: Standing): WorkflowPhase =>
+/**
+ * Running stays only while an executing, stopped or finished Plan for the current Goal is there.
+ * On an active kanban board (`kanban`) it also stays while the board sorts its cards again for a
+ * changed Goal, its Plan still made for the earlier version.
+ */
+export const reconciledPhase = ({
+  phase,
+  goal,
+  plan,
+  kanban,
+}: Standing & { readonly kanban: boolean }): WorkflowPhase =>
   phase !== "running" ||
   (goal !== null &&
     plan !== null &&
-    plan.current &&
+    (plan.current || kanban) &&
     (plan.status === "executing" || plan.status === "completed" || plan.status === "blocked"))
     ? phase
     : "shaping";
@@ -226,6 +235,8 @@ export type GoalEvent = Data.TaggedEnum<{
   BoardEdited: { readonly closes: boolean; readonly done: boolean; readonly proven: boolean };
   /** The verifier judged every outcome of the Goal met and the owner delivered its work. */
   OutcomesMet: {};
+  /** A kanban board sorted its cards for the Goal's current version; its Plan now follows it. */
+  CardsReclassified: {};
 }>;
 export const GoalEvent = Data.taggedEnum<GoalEvent>();
 
@@ -248,6 +259,12 @@ export interface GoalRefusals {
     | "goal_not_active"
     | "plan_not_executing"
     | "steps_incomplete";
+  readonly CardsReclassified:
+    | "goal_missing"
+    | "goal_terminal"
+    | "goal_not_active"
+    | "plan_not_executing"
+    | "plan_current";
 }
 export type GoalRefusal = GoalRefusals[keyof GoalRefusals];
 
@@ -402,6 +419,15 @@ const editBoard =
             proven,
           },
         });
+
+/**
+ * The executing Plan made for an earlier version of an active Goal follows the current one, its
+ * cards sorted again. A draft Goal's board waits for the Goal to become active.
+ */
+const reclassify = ({ standing }: { readonly standing: Standing }) =>
+  standing.goal?.status !== "active" || standing.plan === null
+    ? refused("goal_not_active")
+    : moved({ ...standing, plan: { ...standing.plan, current: true } });
 
 /** The Goal and its Plan complete together; only the outcome verdicts complete them. */
 const meet = ({ standing }: { readonly standing: Standing }) =>
@@ -575,6 +601,18 @@ export const goalTransitions: GoalTransitions = {
       Stopped: terminal,
       Completed: terminal,
     }),
+  CardsReclassified: (state) =>
+    Match.valueTags(state, {
+      NoGoal: () => refused("goal_missing"),
+      GoalChanged: reclassify,
+      Running: () => refused("plan_current"),
+      Shaping: () => refused("plan_not_executing"),
+      Blocked: () => refused("plan_not_executing"),
+      Closed: () => refused("plan_not_executing"),
+      Paused: () => refused("goal_not_active"),
+      Stopped: terminal,
+      Completed: terminal,
+    }),
 };
 
 /** `event` in `state`, whichever event it is. */
@@ -595,5 +633,6 @@ export const transition: {
     NewGoalStarted: (value) => goalTransitions.NewGoalStarted(state, value),
     BoardEdited: (value) => goalTransitions.BoardEdited(state, value),
     OutcomesMet: (value) => goalTransitions.OutcomesMet(state, value),
+    CardsReclassified: (value) => goalTransitions.CardsReclassified(state, value),
   }),
 );

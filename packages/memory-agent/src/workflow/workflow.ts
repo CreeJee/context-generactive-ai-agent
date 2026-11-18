@@ -618,15 +618,26 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
     };
     /** The state of `current`, a conflict 0.0.17 left repaired in memory. */
     const goalState = (current: WorkflowState) => goalStateOf(standingOf(current));
-    /** `current` with a conflict repaired and a stale progress position corrected. */
-    const reconciledState = (current: WorkflowState, now: string) => {
+    /**
+     * `current` with a conflict repaired and a stale progress position corrected; `kanban` when the
+     * session's Goal runs as an active board.
+     */
+    const reconciledState = (current: WorkflowState, now: string, kanban: boolean) => {
       const repaired = goalState(current).standing;
-      return withStanding(current, { ...repaired, phase: reconciledPhase(repaired) }, now);
+      return withStanding(
+        current,
+        { ...repaired, phase: reconciledPhase({ ...repaired, kanban }) },
+        now,
+      );
     };
     /** `current` reconciled, saved if changed. */
-    const reconciled = Effect.fnUntraced(function* (sessionId: string, current: WorkflowState) {
+    const reconciled = Effect.fnUntraced(function* (
+      sessionId: string,
+      current: WorkflowState,
+      kanban: boolean,
+    ) {
       const now = yield* nowIso;
-      const next = reconciledState(current, now);
+      const next = reconciledState(current, now, kanban);
       if (unchanged(next, current)) return current;
       return yield* save(sessionId, {
         ...next,
@@ -923,12 +934,19 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
       /** Repairs stale persisted phases before a new turn or an idle status response. */
       reconcile: (sessionId: string) =>
         // A state that needs no repair is only read. The write transaction, which waits for any
-        // other writer while it holds the app's one connection, is for a repair alone.
+        // other writer while it holds the app's one connection, is for a repair alone. An active
+        // board only keeps a running phase, so a state unchanged without one needs no board read.
         Effect.flatMap(persisted(get(sessionId)), (current) =>
           Effect.flatMap(nowIso, (now) =>
-            unchanged(reconciledState(current, now), current)
+            unchanged(reconciledState(current, now, false), current)
               ? Effect.succeed(current)
-              : transacted(Effect.flatMap(get(sessionId), (fresh) => reconciled(sessionId, fresh))),
+              : transacted(
+                  Effect.flatMap(get(sessionId), (fresh) =>
+                    Effect.flatMap(kanbanBoard(sessionId), (kanban) =>
+                      reconciled(sessionId, fresh, kanban),
+                    ),
+                  ),
+                ),
           ),
         ),
 
@@ -968,7 +986,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                         : Effect.as(
                             transacted(
                               Effect.flatMap(get(sessionId), (stored) =>
-                                reconciled(sessionId, stored),
+                                reconciled(sessionId, stored, false),
                               ),
                             ),
                             [sessionId],
@@ -1207,6 +1225,43 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
               author,
             ),
           ),
+        ),
+
+      /**
+       * Records that the board sorted its cards for Goal `goalVersion`: the Plan made for an
+       * earlier version now follows it. Unchanged when the Goal moved on or the Plan already
+       * follows it.
+       */
+      cardsReclassified: (sessionId: string, goalVersion: number, author: BoardAuthor) =>
+        change(
+          sessionId,
+          Effect.fnUntraced(function* (current) {
+            const outcome = goalTransitions.CardsReclassified(
+              goalState(current),
+              GoalEvent.CardsReclassified(),
+            );
+            if (
+              outcome._tag === "Refused" ||
+              current.plan === null ||
+              current.goal?.version !== goalVersion
+            )
+              return current;
+            const now = yield* nowIso;
+            return {
+              ...current,
+              plan: { ...current.plan, goalVersion, updatedAt: now },
+              ledger: [
+                ...current.ledger,
+                event(
+                  current,
+                  "board_updated",
+                  `plan v${current.plan.version} follows goal v${goalVersion}: cards reclassified`,
+                  now,
+                ),
+              ],
+            };
+          }),
+          author,
         ),
 
       /**

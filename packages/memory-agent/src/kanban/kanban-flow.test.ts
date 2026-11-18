@@ -381,6 +381,12 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
               Option.exists((goal) => goal.goalVersion === 2),
             );
             expect(Option.map(yield* stored, (goal) => goal.hold)).toEqual(Option.some(null));
+            // The Plan follows the new version, so the board runs on without a new approval.
+            const followed = yield* eventually(
+              workflows.get(board.sessionId),
+              (state) => state.plan?.goalVersion === 2,
+            );
+            expect(followed.phase).toBe("running");
 
             // O1 reworded holds a, which serves it; b serves no changed outcome and goes on.
             yield* workflows.updateGoal(board.sessionId, {
@@ -395,6 +401,8 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
             expect(Option.map(held, (goal) => goal.hold)).toEqual(
               Option.some({ _tag: "GoalChanged", fromVersion: 2, toVersion: 3, cards: ["a"] }),
             );
+            // While a card is held the Plan stays with the earlier version.
+            expect((yield* workflows.get(board.sessionId)).plan?.goalVersion).toBe(2);
             yield* Deferred.succeed(release, undefined);
             const cards = yield* waitForCards(
               board.sessionId,
@@ -407,6 +415,10 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
               board.sessionId,
               [GoalChangeVerdict.cases.Continue.make({ cardId: "a" })],
               orchestrator,
+            );
+            yield* eventually(
+              workflows.get(board.sessionId),
+              (state) => state.plan?.goalVersion === 3,
             );
             yield* waitForCards(board.sessionId, allDone);
           }),

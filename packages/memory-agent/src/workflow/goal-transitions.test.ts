@@ -47,6 +47,7 @@ const events: ReadonlyArray<GoalEvent> = [
     steps.map((step) => GoalEvent.BoardEdited({ closes, ...step })),
   ),
   GoalEvent.OutcomesMet(),
+  GoalEvent.CardsReclassified(),
 ];
 
 const keyOf = ({ phase, mode, goal, plan }: Standing) =>
