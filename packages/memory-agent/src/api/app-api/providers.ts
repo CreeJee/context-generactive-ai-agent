@@ -12,6 +12,7 @@ import {
   CompatibleAccountsView,
   CompatibleConnectionInput,
   CompatibleModelInput,
+  CompatibleReasoningLevels,
 } from "../../providers/openai-compatible-config.ts";
 import { NoStore } from "../no-store.ts";
 import { appRefusalFields, refusalWith, SameSite } from "../refusal.ts";
@@ -71,6 +72,8 @@ export const CompatibleModelList = Schema.Struct({
       imageInput: Schema.optional(Schema.Boolean),
       /** The context window, in tokens, the endpoint publishes for the model, when it says. */
       contextWindow: Schema.optional(Schema.Int),
+      /** The reasoning efforts the endpoint publishes for the model, when it publishes any. */
+      reasoning: Schema.optional(CompatibleReasoningLevels),
     }),
   ),
 });

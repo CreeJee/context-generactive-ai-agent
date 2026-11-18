@@ -39,12 +39,14 @@ import {
   CompatibleConnectionInput,
   CompatibleModelInput,
   LEGACY_COMPATIBLE_CREDENTIAL_ENTRY,
+  offeredReasoning,
   reservedOutput,
   selectedCompatibleAccount,
   type CompatibleAccount,
   type CompatibleAccounts,
   type CompatibleAccountStatus,
   type CompatibleModel,
+  type CompatibleReasoningLevels,
   type OpenAICompatibleConfiguration,
   type OpenAICompatibleStatus,
 } from "./openai-compatible-config.ts";
@@ -160,12 +162,27 @@ const isUnusableModel = (value: CompatibleModelInput) =>
   (value.outputBudget !== null &&
     (value.outputBudget < 1 || value.outputBudget >= value.contextWindow)) ||
   !isTruthy(value.id.trim());
+/** How many efforts a user's list may hold. */
+const maxReasoningEfforts = 16;
+/**
+ * A user's effort list the picker cannot offer: a blank, repeated or `default` effort (the server
+ * default is always offered first), too many, or a starting effort not in the list.
+ */
+const isUnusableReasoning = ({ options, default: chosen }: CompatibleReasoningLevels) =>
+  options.length > maxReasoningEfforts ||
+  options.some((effort) => effort.trim() !== effort || effort === "default") ||
+  Arr.dedupe(options).length !== options.length ||
+  (chosen !== undefined && !options.includes(chosen));
 export const validateCompatibleModel = Effect.fnUntraced(function* (
   input: CompatibleModelInput,
 ): Effect.fn.Return<CompatibleModelInput, OpenAICompatibleFailed> {
   const value = yield* Schema.decodeEffect(CompatibleModelInput)(input).pipe(
     Effect.mapError(invalidSettings),
     Effect.filterOrFail((decoded) => !isUnusableModel(decoded), invalidSettings),
+    Effect.filterOrFail(
+      (decoded) => !Option.exists(Option.fromNullishOr(decoded.userReasoning), isUnusableReasoning),
+      invalidSettings,
+    ),
   );
   return { ...value, id: value.id.trim() };
 });
@@ -198,12 +215,22 @@ const replaceAccount = (
   ...all,
   accounts: all.accounts.map((item) => (item.id === account.id ? account : item)),
 });
-const publishedReasoning = (settings: OpenAICompatibleConfiguration) =>
-  settings.reasoning?.model === settings.model ? settings.reasoning.options : null;
 /**
- * The effort a single call uses on a model that published `options`: "low" as on subscription
- * models, or "none" when the conversation already runs without reasoning. A model that published
- * neither keeps the server default, as one that published nothing does (decisions.md 2026-10-25).
+ * The efforts the user wrote or the server published for the model; the standard efforts no one
+ * said the server accepts give none.
+ */
+const knownEfforts = (settings: OpenAICompatibleConfiguration) =>
+  Option.map(
+    Option.liftPredicate(
+      offeredReasoning(settings, settings.model),
+      (offered) => offered.source !== "standard",
+    ),
+    (offered) => offered.options,
+  );
+/**
+ * The effort a single call uses on a model whose efforts are known: "low" as on subscription
+ * models, or "none" when the conversation already runs without reasoning. A model offering
+ * neither keeps the server default, as one with unknown efforts does (decisions.md 2026-10-25).
  */
 const cheapestPublished = (options: ReadonlyArray<string>, current: string) =>
   Option.liftPredicate(current === "none" ? "none" : "low", (effort) => options.includes(effort));
@@ -389,9 +416,15 @@ function makeOpenAICompatibleSettingsBody(
       Effect.gen(function* () {
         const value = yield* validateCompatibleModel(input);
         const existing = account.models.find((model) => model.id === value.id);
+        const { userReasoning, ...limits } = value;
         const saved: CompatibleModel = {
-          ...value,
+          ...limits,
           reasoning: existing?.reasoning,
+          // A save without the list keeps the user's earlier one; null removes it.
+          ...optionalProperty(
+            "userReasoning",
+            userReasoning === undefined ? existing?.userReasoning : (userReasoning ?? undefined),
+          ),
           // A model the user saved keeps the choice; the next model list read never overwrites it.
           // A save without the image input keeps the user's earlier choice, if any.
           ...(value.imageInput === undefined
@@ -524,6 +557,15 @@ function makeOpenAICompatibleSettingsBody(
             const listed = page.data.map((entry) => ({
               id: entry.id,
               ...optionalProperty("contextWindow", readCompatibleContextWindow(entry)),
+              // What the effort editor starts from when the server publishes efforts.
+              ...optionalProperty(
+                "reasoning",
+                Option.fromUndefinedOr(readCompatibleReasoning(entry.id, page)).pipe(
+                  Option.filter((published) => published.options.length > 0),
+                  Option.map(({ source: _source, model: _model, ...levels }) => levels),
+                  Option.getOrUndefined,
+                ),
+              ),
             }));
             const stored = yield* config.read;
             const all = compatibleAccountsOf(stored);
@@ -622,20 +664,29 @@ function makeOpenAICompatibleSettingsBody(
         Effect.as({ ok: true as const }),
       ),
     );
-  const model = (settings: OpenAICompatibleConfiguration, isDefault: boolean): ProviderModel => ({
-    provider,
-    id: settings.model,
-    displayName: settings.model,
-    isDefault,
-    defaultReasoningEffort: "default",
-    supportedReasoningEfforts: ["default", ...(publishedReasoning(settings) ?? [])],
-    contextWindow: settings.contextWindow,
-    capabilities: {
-      inputModalities: settings.imageInput === true ? ["text", "image"] : ["text"],
-      toolCalling: settings.toolCalling,
-      reasoning: publishedReasoning(settings) !== null,
-    },
-  });
+  /**
+   * The model as catalogs list it. It always offers its efforts after the server default; only the
+   * user's list sets the effort a conversation starts on (decisions.md 2026-11-18).
+   */
+  const model = (settings: OpenAICompatibleConfiguration, isDefault: boolean): ProviderModel => {
+    const offered = offeredReasoning(settings, settings.model);
+    return {
+      provider,
+      id: settings.model,
+      displayName: settings.model,
+      isDefault,
+      defaultReasoningEffort:
+        offered.source === "user" ? (offered.default ?? "default") : "default",
+      supportedReasoningEfforts: ["default", ...offered.options],
+      reasoningEffortsSource: offered.source,
+      contextWindow: settings.contextWindow,
+      capabilities: {
+        inputModalities: settings.imageInput === true ? ["text", "image"] : ["text"],
+        toolCalling: settings.toolCalling,
+        reasoning: offered.source !== "standard",
+      },
+    };
+  };
   /** The selected endpoint with the model a compatible choice names, or with its first model. */
   const selectedEndpoint = (settings: Settings) =>
     Option.fromNullishOr(selectedCompatibleAccount(compatibleAccountsOf(settings))).pipe(
@@ -696,7 +747,7 @@ function makeOpenAICompatibleSettingsBody(
         Effect.map((account) =>
           Option.liftPredicate(account, isTruthy).pipe(
             Option.flatMapNullishOr((found) => compatibleEndpointModel(found, selection.model)),
-            Option.flatMapNullishOr(publishedReasoning),
+            Option.flatMap(knownEfforts),
             Option.flatMap((options) => cheapestPublished(options, selection.reasoningEffort)),
             Option.getOrElse(() => "default"),
           ),

@@ -22,7 +22,19 @@ import { Button } from "~/components/ui/button";
 import { Field, FieldDescription, FieldLabel } from "~/components/ui/field";
 import { Input } from "~/components/ui/input";
 import { Spinner } from "~/components/ui/spinner";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "~/components/ui/select";
 import { Switch } from "~/components/ui/switch";
+import {
+  standardReasoningEfforts,
+  type CompatibleReasoningLevels,
+  type ReasoningEffortsSource,
+} from "memory-agent/compatible-config";
 import type { ProviderId } from "../api";
 import { useCompatibleAccountsQuery } from "../queries/global";
 import { useCompatibleAccountMutation } from "../queries/mutations/global";
@@ -78,6 +90,61 @@ const newModel = (id = "", imageInput = false): CompatibleModelInput => ({
   imageInput,
 });
 
+/** A model's reasoning efforts as saved: the user's own list and the one the server published. */
+interface StoredReasoning {
+  readonly user: Option.Option<CompatibleReasoningLevels>;
+  readonly server: Option.Option<CompatibleReasoningLevels>;
+}
+const noStoredReasoning: StoredReasoning = { user: Option.none(), server: Option.none() };
+
+/** The saved efforts of a registered model; the server's count only when they name some. */
+const storedReasoningOf = (model: CompatibleAccountStatus["models"][number]): StoredReasoning => ({
+  user: Option.fromUndefinedOr(model.userReasoning),
+  server: Option.fromUndefinedOr(model.reasoning).pipe(
+    Option.filter((published) => published.model === model.id && published.options.length > 0),
+    Option.map(({ source: _source, model: _model, ...levels }) => levels),
+  ),
+});
+
+/** What the form does to the model's own effort list: leaves it, writes one, or removes it. */
+type ReasoningDraft = Data.TaggedEnum<{
+  kept: {};
+  written: { readonly levels: CompatibleReasoningLevels };
+  removed: {};
+}>;
+const ReasoningDraft = Data.taggedEnum<ReasoningDraft>();
+
+/** The efforts the form shows, and where they come from (decisions.md 2026-11-18). */
+const shownReasoning = (
+  draft: ReasoningDraft,
+  stored: StoredReasoning,
+): { readonly levels: CompatibleReasoningLevels; readonly source: ReasoningEffortsSource } => {
+  const published = Option.match(stored.server, {
+    onNone: () => ({ levels: { options: standardReasoningEfforts }, source: "standard" as const }),
+    onSome: (levels) => ({ levels, source: "server" as const }),
+  });
+  return ReasoningDraft.$match(draft, {
+    kept: () =>
+      Option.match(stored.user, {
+        onNone: () => published,
+        onSome: (levels) => ({ levels, source: "user" as const }),
+      }),
+    written: ({ levels }) => ({ levels, source: "user" as const }),
+    removed: () => published,
+  });
+};
+
+/** The `userReasoning` a save sends: none keeps the list, null removes it. */
+const savedReasoning = (draft: ReasoningDraft) =>
+  ReasoningDraft.$match(draft, {
+    kept: () => ({}),
+    written: ({ levels }) => ({ userReasoning: levels }),
+    removed: () => ({ userReasoning: null }),
+  });
+
+/** How many efforts a list may hold, as the server checks it. */
+const maxReasoningEfforts = 16;
+
 /** The limit a turned-on output limit starts from. */
 const initialOutputBudget = 4096;
 
@@ -85,6 +152,152 @@ const initialOutputBudget = 4096;
 const contextWindowRange = { min: 1024, max: 10_000_000 } as const;
 /** Context windows offered as one-click choices. */
 const contextWindowPresets = [8192, 32_768, 131_072, 262_144, 1_048_576] as const;
+
+/**
+ * The model's reasoning efforts: the `reasoning_effort` values the picker offers, as written, and
+ * the one a new conversation starts on.
+ */
+function ReasoningFields({
+  idPrefix,
+  shown,
+  onWrite,
+  onRemove,
+}: {
+  idPrefix: string;
+  shown: ReturnType<typeof shownReasoning>;
+  onWrite: (levels: CompatibleReasoningLevels) => void;
+  onRemove: () => void;
+}) {
+  const { t } = useLingui();
+  const [adding, setAdding] = useState("");
+  const { options, default: chosen } = shown.levels;
+  const added = adding.trim();
+  const canAdd =
+    added !== "" &&
+    added !== "default" &&
+    !options.includes(added) &&
+    options.length < maxReasoningEfforts;
+  const add = () => {
+    if (!canAdd) return;
+    onWrite({ ...shown.levels, options: [...options, added] });
+    setAdding("");
+  };
+  const drop = (effort: string) =>
+    onWrite({
+      options: options.filter((option) => option !== effort),
+      default: chosen === effort ? undefined : chosen,
+    });
+  const serverDefault = "default";
+  const startItems = [
+    {
+      value: serverDefault,
+      label: t({
+        message: "서버 기본값",
+        comment: "Reasoning effort option: whatever the endpoint server uses by default",
+      }),
+    },
+    ...options.map((effort) => ({ value: effort, label: effort })),
+  ];
+  return (
+    <Field>
+      <FieldLabel htmlFor={`${idPrefix}-effort`}>
+        <Trans comment="Field label: the reasoning effort values the model's picker offers">
+          추론 단계
+        </Trans>
+      </FieldLabel>
+      <div
+        role="group"
+        className="flex flex-wrap gap-1"
+        aria-label={t({
+          message: "추론 단계 목록",
+          comment: "Label of the reasoning efforts the model's picker offers",
+        })}
+      >
+        {options.map((effort) => (
+          <Badge key={effort} variant="secondary">
+            {effort}
+            <button
+              type="button"
+              className="rounded-full hover:text-foreground"
+              aria-label={t({
+                message: `${effort} 빼기`,
+                comment:
+                  "Button that removes a reasoning effort from the list; effort is its value",
+              })}
+              onClick={() => drop(effort)}
+            >
+              <XIcon className="size-2.5" />
+            </button>
+          </Badge>
+        ))}
+      </div>
+      <div className="flex gap-1">
+        <Input
+          id={`${idPrefix}-effort`}
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="xhigh"
+          value={adding}
+          onChange={(event) => setAdding(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            add();
+          }}
+        />
+        <Button type="button" variant="outline" disabled={!canAdd} onClick={add}>
+          <PlusIcon />{" "}
+          <Trans comment="Button that adds the typed reasoning effort to the list">추가</Trans>
+        </Button>
+      </div>
+      <div className="flex items-center gap-2">
+        <FieldLabel htmlFor={`${idPrefix}-effort-start`} className="shrink-0">
+          <Trans comment="Field label: the reasoning effort a new conversation starts on">
+            시작 단계
+          </Trans>
+        </FieldLabel>
+        <Select
+          value={chosen ?? serverDefault}
+          items={startItems}
+          onValueChange={(value) =>
+            onWrite({
+              options,
+              default: value === null || value === serverDefault ? undefined : value,
+            })
+          }
+        >
+          <SelectTrigger id={`${idPrefix}-effort-start`} className="w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {startItems.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <FieldDescription>
+        {i18n._(reasoningSourceNote[shown.source])}
+        {shown.source === "user" && (
+          <Button type="button" variant="link" size="xs" onClick={onRemove}>
+            <Trans comment="Button that drops the user's effort list for the server's or the standard one">
+              서버 값으로 되돌리기
+            </Trans>
+          </Button>
+        )}
+      </FieldDescription>
+    </Field>
+  );
+}
+
+/** What the effort editor says about where the list it shows comes from. */
+const reasoningSourceNote = {
+  user: msg`직접 적은 목록입니다. 값은 요청의 reasoning_effort로 그대로 보냅니다.`,
+  server: msg`서버 모델 목록의 값입니다. 고치면 직접 적은 목록으로 저장합니다.`,
+  standard: msg`서버가 추론 단계를 알려 주지 않아 표준 단계를 채웠습니다. 서버가 이 값을 받는지는 알 수 없습니다.`,
+} satisfies Record<ReasoningEffortsSource, MessageDescriptor>;
 
 function ConnectionFields({
   baseUrl,
@@ -244,12 +457,15 @@ function AddEndpointForm({
 
 function ModelForm({
   initial,
+  reasoning,
   busy,
   onDiscover,
   onSave,
   onClose,
 }: {
   initial: CompatibleModelInput;
+  /** The edited model's saved efforts; none for a new model. */
+  reasoning: StoredReasoning;
   busy: boolean;
   onDiscover: () => Promise<readonly DiscoveredModel[]>;
   onSave: (model: CompatibleModelInput) => void;
@@ -263,6 +479,9 @@ function ModelForm({
   const [suggestions, setSuggestions] = useState<readonly DiscoveredModel[]>([]);
   const [discovering, setDiscovering] = useState(false);
   const [discovery, setDiscovery] = useState<string | null>(null);
+  /** The efforts the server publishes for the model, updated when a listed model is picked. */
+  const [stored, setStored] = useState(reasoning);
+  const [reasoningDraft, setReasoningDraft] = useState<ReasoningDraft>(ReasoningDraft.kept());
   const idPrefix = useId();
   const discover = () => {
     setDiscovering(true);
@@ -292,8 +511,9 @@ function ModelForm({
     setContextListed(listed);
   };
   /** Picks a listed model, with the context window the list published for it when it did. */
-  const pick = ({ id, contextWindow }: DiscoveredModel) => {
+  const pick = ({ id, contextWindow, reasoning: published }: DiscoveredModel) => {
     setModel((current) => ({ ...current, id }));
+    setStored((current) => ({ ...current, server: Option.fromUndefinedOr(published) }));
     Option.match(Option.fromUndefinedOr(contextWindow), {
       onNone: () => undefined,
       onSome: (listed) => setContextWindow(listed, true),
@@ -307,7 +527,13 @@ function ModelForm({
         event.preventDefault();
         Option.match(parsedContext, {
           onNone: () => undefined,
-          onSome: (count) => onSave({ ...model, id: model.id.trim(), contextWindow: count }),
+          onSome: (count) =>
+            onSave({
+              ...model,
+              id: model.id.trim(),
+              contextWindow: count,
+              ...savedReasoning(reasoningDraft),
+            }),
         });
       }}
     >
@@ -481,6 +707,12 @@ function ModelForm({
           </Trans>
         </FieldDescription>
       </div>
+      <ReasoningFields
+        idPrefix={idPrefix}
+        shown={shownReasoning(reasoningDraft, stored)}
+        onWrite={(levels) => setReasoningDraft(ReasoningDraft.written({ levels }))}
+        onRemove={() => setReasoningDraft(ReasoningDraft.removed())}
+      />
       <div className="flex justify-end gap-1">
         <Button type="button" variant="outline" onClick={onClose}>
           <Trans comment="Button that closes the model form">취소</Trans>
@@ -500,7 +732,7 @@ type CardMode = Data.TaggedEnum<{
   view: {};
   rename: {};
   connect: {};
-  model: { readonly initial: CompatibleModelInput };
+  model: { readonly initial: CompatibleModelInput; readonly reasoning: StoredReasoning };
 }>;
 const CardMode = Data.taggedEnum<CardMode>();
 
@@ -763,10 +995,16 @@ function EndpointCard({
                 size="icon-sm"
                 aria-label={t`${modelId} 수정`}
                 onClick={() => {
-                  const { reasoning: _reasoning, imageInputSource: _source, ...input } = model;
+                  const {
+                    reasoning: _reasoning,
+                    userReasoning: _userReasoning,
+                    imageInputSource: _source,
+                    ...input
+                  } = model;
                   setMode(
                     CardMode.model({
                       initial: { ...input, imageInput: input.imageInput === true },
+                      reasoning: storedReasoningOf(model),
                     }),
                   );
                 }}
@@ -799,6 +1037,7 @@ function EndpointCard({
         <ModelForm
           key={mode.initial.id}
           initial={mode.initial}
+          reasoning={mode.reasoning}
           busy={busy}
           onDiscover={() => handlers.onDiscover(account.id)}
           onSave={(model) =>
@@ -814,7 +1053,9 @@ function EndpointCard({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setMode(CardMode.model({ initial: newModel() }))}
+            onClick={() =>
+              setMode(CardMode.model({ initial: newModel(), reasoning: noStoredReasoning }))
+            }
           >
             <PlusIcon /> <Trans>모델 추가</Trans>
           </Button>

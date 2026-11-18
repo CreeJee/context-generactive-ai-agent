@@ -421,6 +421,74 @@ describe("sidebar disclosures", () => {
     }),
   );
 
+  it.live("a model's reasoning efforts start from the server's or the standard ones", () =>
+    Effect.gen(function* () {
+      const changes: CompatibleAccountChange[] = [];
+      const screen = yield* sdkCall(() =>
+        render(
+          <div className="w-96">
+            <CompatibleAccountsList
+              accounts={[
+                {
+                  id: "e",
+                  label: "로컬 서버",
+                  baseUrl: "http://localhost:1234/v1",
+                  models: [],
+                  hasApiKey: false,
+                  selected: true,
+                },
+              ]}
+              activeProvider="openai-compatible"
+              busy={false}
+              failed={false}
+              handlers={{
+                onChange: (change) => Promise.resolve(void changes.push(change)),
+                onTest: () => Promise.resolve(),
+                onDiscover: () =>
+                  Promise.resolve([
+                    {
+                      id: "served-model",
+                      reasoning: { options: ["low", "high"], default: "high" },
+                    },
+                  ]),
+              }}
+            />
+          </div>,
+          withI18n,
+        ),
+      );
+      const endpoint = screen.getByRole("listitem", { name: "로컬 서버 (OpenAI 호환)" });
+      const efforts = endpoint.getByRole("group", { name: "추론 단계 목록" });
+      yield* sdkCall(() => endpoint.getByRole("button", { name: "모델 추가" }).click());
+      yield* sdkCall(() => endpoint.getByRole("textbox", { name: "모델 ID" }).fill("typed-model"));
+      // A server that names no efforts gets the standard ones, marked as unconfirmed.
+      yield* sdkCall(() => expect.element(efforts.getByText("medium")).toBeVisible());
+      yield* sdkCall(() =>
+        expect.element(endpoint.getByText(/서버가 이 값을 받는지는 알 수 없습니다/)).toBeVisible(),
+      );
+      // Saving without touching the efforts keeps them unset.
+      yield* sdkCall(() => endpoint.getByRole("button", { name: "모델 저장" }).click());
+
+      yield* sdkCall(() => endpoint.getByRole("button", { name: "모델 추가" }).click());
+      yield* sdkCall(() => endpoint.getByRole("button", { name: "모델 목록 불러오기" }).click());
+      yield* sdkCall(() => endpoint.getByRole("button", { name: "served-model" }).click());
+      yield* sdkCall(() =>
+        expect.element(endpoint.getByText(/서버 모델 목록의 값입니다/)).toBeVisible(),
+      );
+      yield* sdkCall(() => endpoint.getByRole("button", { name: "low 빼기" }).click());
+      yield* sdkCall(() => endpoint.getByRole("textbox", { name: "추론 단계" }).fill("xhigh"));
+      yield* sdkCall(() => endpoint.getByRole("button", { name: "추가", exact: true }).click());
+      yield* sdkCall(() => endpoint.getByRole("button", { name: "모델 저장" }).click());
+      expect(changes.map((change) => change.intent === "save-model" && change.model)).toEqual([
+        expect.not.objectContaining({ userReasoning: expect.anything() }),
+        expect.objectContaining({
+          id: "served-model",
+          userReasoning: { options: ["high", "xhigh"], default: "high" },
+        }),
+      ]);
+    }),
+  );
+
   /** A conversation row the sidebar groups by its project, as the sessions list reads it. */
   const sessionOf = (projectId: string, id: string, title: string): Session => ({
     id,

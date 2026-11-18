@@ -40,7 +40,8 @@
 - 계정을 바꾸는 호환 명령(`CompatibleAccountChange`)은 응답으로 전체 `CompatibleAccountsView` 목록을 돌려준다(주석). `test`는 `{ok:true}`(`CompatibleTestResult`), `discover`는 `{models:[{id}]}`(`CompatibleModelList`)로 디코딩한다.
 - 요청 Effect는 `Effect.abortSignal`을 fetch에 넘기고 `Effect.scoped`로 감싼다.
 - `providerLabels`는 `satisfies Record<ProviderId, MessageDescriptor>`이다. `ProviderId`를 추가하면 라벨도 함께 추가해야 한다.
-- `effortChoices`: 노력 목록이 1개 이하인 `openai-compatible` 모델은 선택지를 내지 않는다(서버 기본값만 있음). 호환 모델의 `default`는 '서버 기본값'으로 표시한다.
+- `effortChoices`: 노력 목록이 1개 이하인 `openai-compatible` 모델은 선택지를 내지 않는다(서버 기본값만 있음). 호환 모델의 `default`는 '서버 기본값'으로 표시한다. `reasoningEffortsSource`가 `standard`인 레벨에는 '서버 지원 모름'을 붙인다.
+- 모델 편집 폼의 추론 단계는 사용자 목록, 서버가 공개한 목록, 표준 레벨 순서로 채운다. 손대지 않고 저장하면 `userReasoning`을 보내지 않고, 고치면 목록을, '서버 값으로 되돌리기'는 `null`을 보낸다.
 - 계정 전환기의 '사용 중' 계정은 `activeProvider === provider && selected`로 정한다. 사용 계정은 모델 선택을 따른다. 이미 사용 중인 항목을 클릭하면 아무 일도 하지 않는다. 호환 항목 key는 `openai-compatible:` 접두사를 붙인다.
 - 한도는 앱이 추정하지 않는다(주석). `unavailable` 사유는 `credential_expired`·`lookup_failed`뿐이다. `stale` 값은 흐리게 표시한다. 사용률은 0~100으로 자른다.
 - `AccountManager`는 계정 시트가 열려 있는 동안에만 마운트된다(주석).

@@ -1,4 +1,5 @@
 import { Array as EffectArray, Effect, Function as EffectFunction, Option, Schema } from "effect";
+import type { ProviderModel } from "./contracts.ts";
 
 /** Used when the server never reports the model's real context window. */
 export const OPENAI_COMPATIBLE_DEFAULT_CONTEXT_WINDOW = 32_000;
@@ -30,6 +31,59 @@ export const CompatibleReasoning = Schema.Struct({
   default: Schema.optional(Schema.NonEmptyString),
 });
 
+/**
+ * Reasoning efforts the user wrote for a model: the `reasoning_effort` values the picker offers as
+ * written, and the one a new conversation starts on. `default` absent starts on the server's own.
+ */
+export const CompatibleReasoningLevels = Schema.Struct({
+  options: Schema.Array(Schema.NonEmptyString),
+  default: Schema.optional(Schema.NonEmptyString),
+});
+export type CompatibleReasoningLevels = typeof CompatibleReasoningLevels.Type;
+
+/** The efforts a model offers when neither the user nor the server named any (decisions.md 2026-11-18). */
+export const standardReasoningEfforts = ["none", "low", "medium", "high"] as const;
+
+/** Where a model's offered efforts come from: the user's list, the server's, or the standard one. */
+export type ReasoningEffortsSource = NonNullable<ProviderModel["reasoningEffortsSource"]>;
+
+/** The efforts a model offers, the one a conversation starts on, and where they come from. */
+export interface OfferedReasoning extends CompatibleReasoningLevels {
+  readonly source: ReasoningEffortsSource;
+}
+
+/** A model's published and user-written reasoning efforts, as accounts store them. */
+interface ReasoningSettings {
+  readonly reasoning?: typeof CompatibleReasoning.Type | undefined;
+  readonly userReasoning?: CompatibleReasoningLevels | undefined;
+}
+
+/**
+ * The efforts a model offers: the user's list, else the server's non-empty one, else the standard
+ * efforts, which no one said the server accepts.
+ */
+export const offeredReasoning: {
+  (modelId: string): (model: ReasoningSettings) => OfferedReasoning;
+} & typeof offeredReasoningBody = EffectFunction.dual(2, offeredReasoningBody);
+function offeredReasoningBody(model: ReasoningSettings, modelId: string): OfferedReasoning {
+  return Option.fromUndefinedOr(model.userReasoning).pipe(
+    Option.map((levels): OfferedReasoning => ({ source: "user", ...levels })),
+    Option.orElse(() =>
+      Option.fromUndefinedOr(model.reasoning).pipe(
+        Option.filter((published) => published.model === modelId && published.options.length > 0),
+        Option.map(({ source: _source, model: _model, ...levels }): OfferedReasoning => ({
+          source: "server",
+          ...levels,
+        })),
+      ),
+    ),
+    Option.getOrElse((): OfferedReasoning => ({
+      source: "standard",
+      options: standardReasoningEfforts,
+    })),
+  );
+}
+
 const connectionFields = {
   baseUrl: Schema.NonEmptyString,
   model: Schema.NonEmptyString,
@@ -46,6 +100,12 @@ const imageInputFields = {
   /** Where the stored `imageInput` came from; a list-derived one is updated by the next list read. */
   imageInputSource: Schema.optionalKey(CompatibleImageInputSource),
 };
+const reasoningFields = {
+  /** Reasoning efforts the endpoint's model list published, or its known server accepts, for this model. */
+  reasoning: Schema.optional(CompatibleReasoning),
+  /** Reasoning efforts the user wrote; they replace the published ones, and model list reads keep them. */
+  userReasoning: Schema.optionalKey(CompatibleReasoningLevels),
+};
 /**
  * One endpoint and one of its models, as a run or test uses them. Also the shape of
  * the single endpoint stored before compatible accounts.
@@ -53,7 +113,7 @@ const imageInputFields = {
 export const OpenAICompatibleConfiguration = Schema.Struct({
   ...connectionFields,
   ...imageInputFields,
-  reasoning: Schema.optional(CompatibleReasoning),
+  ...reasoningFields,
 });
 export type OpenAICompatibleConfiguration = typeof OpenAICompatibleConfiguration.Type;
 
@@ -64,8 +124,7 @@ export const CompatibleModel = Schema.Struct({
   outputBudget: CompatibleOutputBudget,
   toolCalling: Schema.Boolean,
   ...imageInputFields,
-  /** Reasoning efforts the endpoint's model list published, or its known server accepts, for this model. */
-  reasoning: Schema.optional(CompatibleReasoning),
+  ...reasoningFields,
 });
 export type CompatibleModel = typeof CompatibleModel.Type;
 export const CompatibleModelInput = Schema.Struct({
@@ -76,6 +135,8 @@ export const CompatibleModelInput = Schema.Struct({
   // Absent leaves the choice unset, so the model list may still suggest it; the UI always
   // sends it when the user touched the setting.
   imageInput: Schema.optionalKey(Schema.Boolean),
+  // Absent keeps the user's list; null removes it, so the published or standard efforts apply.
+  userReasoning: Schema.optionalKey(Schema.NullOr(CompatibleReasoningLevels)),
 });
 export type CompatibleModelInput = typeof CompatibleModelInput.Type;
 

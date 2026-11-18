@@ -230,7 +230,7 @@ describe("OpenAI compatible settings", () => {
         const f = fixture(undefined, {
           provider: "openai-compatible",
           model: configuration.model,
-          reasoningEffort: "low",
+          reasoningEffort: "xhigh",
           openaiCompatible: configuration,
         });
         const layer = ActiveProvider.layer.pipe(
@@ -249,7 +249,7 @@ describe("OpenAI compatible settings", () => {
           model: configuration.model,
           reasoningEffort: "default",
         });
-        expect(f.saved().reasoningEffort).toBe("low");
+        expect(f.saved().reasoningEffort).toBe("xhigh");
         yield* Effect.scoped((yield* f.api.runtime).model(selection!, run));
       }),
   );
@@ -350,8 +350,16 @@ describe("OpenAI compatible settings", () => {
       );
       yield* f.api.update(configuration);
       const model = (yield* f.api.services.models.list)[0];
-      expect(model?.capabilities.reasoning).toBe(true);
-      expect(model?.supportedReasoningEfforts).toEqual(["default"]);
+      // Parameter support names no levels: the standard ones are offered as unconfirmed.
+      expect(model?.capabilities.reasoning).toBe(false);
+      expect(model?.reasoningEffortsSource).toBe("standard");
+      expect(model?.supportedReasoningEfforts).toEqual([
+        "default",
+        "none",
+        "low",
+        "medium",
+        "high",
+      ]);
       expect(paths).toEqual(["/v1/models"]);
     }),
   );
@@ -517,10 +525,77 @@ describe("OpenAI compatible settings", () => {
       );
       yield* f.api.update(configuration);
       expect(yield* f.api.listModels).toEqual([{ id: configuration.model }]);
-      expect((yield* f.api.services.models.list)[0]?.supportedReasoningEfforts).toEqual([
-        "default",
-      ]);
+      expect((yield* f.api.services.models.list)[0]?.reasoningEffortsSource).toBe("standard");
       expect(endpointOf(f.saved())?.reasoning).toBeUndefined();
+    }),
+  );
+  effectTest.effect(
+    "offers the user's own efforts over the server's, through model list reads, until removed",
+    () =>
+      Effect.gen(function* () {
+        const f = fixture(
+          nativeFetch(() =>
+            Effect.sync(() =>
+              Response.json({
+                data: [
+                  {
+                    id: configuration.model,
+                    capabilities: {
+                      reasoning: { allowed_options: ["low", "high"], default: "high" },
+                    },
+                  },
+                ],
+              }),
+            ),
+          ),
+        );
+        yield* f.api.update(configuration);
+        // The editor starts from what the server publishes.
+        expect(yield* f.api.listModels).toEqual([
+          { id: configuration.model, reasoning: { options: ["low", "high"], default: "high" } },
+        ]);
+        const id = selectedAccountId(f.saved()) ?? "";
+        const { baseUrl: _baseUrl, model, ...limits } = configuration;
+        yield* f.api.saveModel(id, {
+          ...limits,
+          id: model,
+          userReasoning: { options: ["medium", "low"], default: "medium" },
+        });
+        const offered = (yield* f.api.services.models.list)[0];
+        expect(offered).toMatchObject({
+          reasoningEffortsSource: "user",
+          supportedReasoningEfforts: ["default", "medium", "low"],
+          defaultReasoningEffort: "medium",
+        });
+        // A save that leaves the list out keeps it.
+        yield* f.api.saveModel(id, { ...limits, id: model });
+        expect((yield* f.api.services.models.list)[0]?.reasoningEffortsSource).toBe("user");
+        yield* f.api.saveModel(id, { ...limits, id: model, userReasoning: null });
+        expect((yield* f.api.services.models.list)[0]).toMatchObject({
+          reasoningEffortsSource: "server",
+          supportedReasoningEfforts: ["default", "low", "high"],
+          defaultReasoningEffort: "default",
+        });
+      }),
+  );
+  effectTest.effect.each([
+    { options: ["low", "low"] },
+    { options: ["default"] },
+    { options: [" low"] },
+    { options: ["low"], default: "high" },
+  ])("refuses an effort list the picker cannot offer: %j", (userReasoning) =>
+    Effect.gen(function* () {
+      const f = fixture();
+      yield* f.api.update(configuration);
+      const { baseUrl: _baseUrl, model, ...limits } = configuration;
+      const failure = yield* Effect.flip(
+        f.api.saveModel(selectedAccountId(f.saved()) ?? "", {
+          ...limits,
+          id: model,
+          userReasoning,
+        }),
+      );
+      expect(failure).toBeInstanceOf(OpenAICompatibleFailed);
     }),
   );
   effectTest.effect(

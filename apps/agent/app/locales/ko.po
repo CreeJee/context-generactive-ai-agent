@@ -243,6 +243,11 @@ msgstr "{done} / {size} ({percent}%)"
 msgid "{effort} (현재)"
 msgstr "{effort} (현재)"
 
+#. Button that removes a reasoning effort from the list; effort is its value
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "{effort} 빼기"
+msgstr "{effort} 빼기"
+
 #. Badge with the number of events in a run
 #: app/entry/report/report-bundle.tsx
 msgid "{eventCount}개"
@@ -3273,10 +3278,21 @@ msgstr "생성한 이미지"
 msgid "서로 기다리는 Goal이 생겨서 지정할 수 없습니다."
 msgstr "서로 기다리는 Goal이 생겨서 지정할 수 없습니다."
 
+#. Button that drops the user's effort list for the server's or the standard one
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "서버 값으로 되돌리기"
+msgstr "서버 값으로 되돌리기"
+
 #. Reasoning effort option: whatever the endpoint server uses by default
+#. Reasoning effort option: whatever the endpoint server uses by default
+#: app/entry/navigation/compatible-accounts.tsx
 #: app/entry/navigation/providers.ts
 msgid "서버 기본값"
 msgstr "서버 기본값"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "서버 모델 목록의 값입니다. 고치면 직접 적은 목록으로 저장합니다."
+msgstr "서버 모델 목록의 값입니다. 고치면 직접 적은 목록으로 저장합니다."
 
 #: app/root.tsx
 msgid "서버 연결이 바뀌었습니다. 페이지를 새로고침한 뒤 작업을 이어가 주십시오."
@@ -3312,6 +3328,10 @@ msgstr "서버가 제시간에 도구 목록을 주지 않았습니다."
 #: app/entry/settings/pages/mcp.tsx
 msgid "서버가 제시간에 연결되지 않았습니다."
 msgstr "서버가 제시간에 연결되지 않았습니다."
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "서버가 추론 단계를 알려 주지 않아 표준 단계를 채웠습니다. 서버가 이 값을 받는지는 알 수 없습니다."
+msgstr "서버가 추론 단계를 알려 주지 않아 표준 단계를 채웠습니다. 서버가 이 값을 받는지는 알 수 없습니다."
 
 #: app/entry/settings/pages/mcp.tsx
 msgid "서버를 시작하거나 연결하지 못했습니다."
@@ -3670,6 +3690,11 @@ msgstr "시도를 모두 실패"
 #: app/entry/shared/theme.tsx
 msgid "시스템 테마"
 msgstr "시스템 테마"
+
+#. Field label: the reasoning effort a new conversation starts on
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "시작 단계"
+msgstr "시작 단계"
 
 #. Badge on an MCP server that failed to start
 #: app/entry/settings/pages/mcp.tsx
@@ -5523,6 +5548,10 @@ msgstr "직접 입력"
 msgid "직접 입력한 클라이언트 이름"
 msgstr "직접 입력한 클라이언트 이름"
 
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "직접 적은 목록입니다. 값은 요청의 reasoning_effort로 그대로 보냅니다."
+msgstr "직접 적은 목록입니다. 값은 요청의 reasoning_effort로 그대로 보냅니다."
+
 #. Badge on an MCP tool whose hints the user changed
 #: app/entry/settings/pages/mcp-tool-hints.tsx
 msgid "직접 지정"
@@ -5669,6 +5698,7 @@ msgstr "최종 제보 문안: 전송·복사·저장 전에 민감정보를 확�
 
 #. Button that adds the endpoint
 #. Button that adds the project
+#. Button that adds the typed reasoning effort to the list
 #: app/entry/navigation/compatible-accounts.tsx
 #: app/entry/navigation/sidebar.tsx
 msgid "추가"
@@ -5697,6 +5727,11 @@ msgstr "추론"
 msgid "추론 {effort}"
 msgstr "추론 {effort}"
 
+#. Reasoning effort option the server never said it accepts; effort is the level id
+#: app/entry/navigation/providers.ts
+msgid "추론 {effort} · 서버 지원 모름"
+msgstr "추론 {effort} · 서버 지원 모름"
+
 #. Picker of the model's reasoning effort
 #: app/entry/navigation/sidebar.tsx
 msgid "추론 강도"
@@ -5715,10 +5750,17 @@ msgstr "추론 강도를 골라 주십시오."
 msgid "추론 내용"
 msgstr "추론 내용"
 
+#. Field label: the reasoning effort values the model's picker offers
 #. Select in the model picker: how much the model reasons
 #: app/entry/chat/model-picker.tsx
+#: app/entry/navigation/compatible-accounts.tsx
 msgid "추론 단계"
 msgstr "추론 단계"
+
+#. Label of the reasoning efforts the model's picker offers
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "추론 단계 목록"
+msgstr "추론 단계 목록"
 
 #. Title of the model's reasoning while it is still thinking
 #: app/entry/chat/message.tsx

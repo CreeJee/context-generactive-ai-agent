@@ -15,7 +15,8 @@ export const providerLabels = {
 
 /**
  * The reasoning efforts the selected model lets the user pick, as the sidebar and `/effort` offer
- * them. A compatible endpoint that published no effort list has only its server default, so none.
+ * them. A compatible model offering only its server default has none. Standard efforts no one said
+ * the server accepts say so (decisions.md 2026-11-18).
  */
 export const effortChoices: {
   (model: ProviderModel): (selection: ModelSelection) => ReadonlyArray<EffortChoice>;
@@ -23,6 +24,7 @@ export const effortChoices: {
 } = EffectFunction.dual(2, (selection: ModelSelection, model: ProviderModel) => {
   const compatible = selection.provider === "openai-compatible";
   if (compatible && model.supportedReasoningEfforts.length <= 1) return [];
+  const unconfirmed = model.reasoningEffortsSource === "standard";
   return model.supportedReasoningEfforts.map((effort) => ({
     id: effort,
     label:
@@ -31,10 +33,16 @@ export const effortChoices: {
             message: "서버 기본값",
             comment: "Reasoning effort option: whatever the endpoint server uses by default",
           })
-        : t({
-            message: `추론 ${effort}`,
-            comment: "Reasoning effort option; effort is the level id, such as low or high",
-          }),
+        : unconfirmed
+          ? t({
+              message: `추론 ${effort} · 서버 지원 모름`,
+              comment:
+                "Reasoning effort option the server never said it accepts; effort is the level id",
+            })
+          : t({
+              message: `추론 ${effort}`,
+              comment: "Reasoning effort option; effort is the level id, such as low or high",
+            }),
   }));
 });
 

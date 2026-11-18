@@ -108,6 +108,11 @@ export const ProviderModel = Schema.Struct({
   isDefault: Schema.Boolean,
   defaultReasoningEffort: Schema.String,
   supportedReasoningEfforts: Schema.Array(Schema.String),
+  /**
+   * A compatible model's efforts' source: the user's list, the server's, or the standard ones no one
+   * said the server accepts. Subscription models leave it out.
+   */
+  reasoningEffortsSource: Schema.optionalKey(Schema.Literals(["user", "server", "standard"])),
   /** Model-advertised input context size, when the provider catalog supplies one. */
   contextWindow: Schema.optional(Schema.Finite),
   capabilities: ModelCapabilities,

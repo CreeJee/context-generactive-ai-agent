@@ -5597,3 +5597,12 @@
 - 계기: 사용자가 GLM의 추론 필드 설명을 주고 우리 대응을 확인해 달라고 했다. 받는 쪽(스트림 `delta.reasoning`·`delta.reasoning_content`, `usage.completion_tokens_details.reasoning_tokens`)은 이미 맞았다. 보내는 쪽은 같은 모델이 쓴 assistant 턴의 추론을 요청에서 버리고 있었다.
 - 실측(`GLM-5.3-Flash-NVFP4`, vLLM 직접): tool call 뒤 assistant 메시지에 추론을 붙이면 `reasoning_content`와 `reasoning` 모두 prompt_tokens가 170에서 199로 늘었다. chat template이 tool call 사이의 추론을 읽는다.
 - 결정: 같은 모델이 쓴 assistant 턴의 추론을 `reasoning_content`로 보낸다. vLLM·DeepSeek·llama.cpp가 공통으로 읽는 이름이다. 다른 모델의 턴은 지금처럼 추론을 글로 바꿔 보낸다. 마지막 사용자 메시지 이전 턴의 추론을 버릴지는 template이 정한다.
+
+## 호환 모델의 추론 단계는 모델마다 사용자가 고칠 수 있는 목록이다 (2026-11-18)
+
+- 계기: GLM(vLLM)은 `/v1/models`에 추론 단계를 공개하지 않아 단계 선택기가 숨겨졌다. 그런데 실측하면 `reasoning_effort`가 동작을 바꿨다(`low`·`high`는 3번 모두 추론 토큰 0, `none`·`medium`·보내지 않음은 추론함). 2026-10-25의 "GLM-5.3 템플릿은 `reasoning_effort`를 반영하지 않았다"는 지금 서버와 맞지 않는다. 사용자: 서버가 이상한 것과 우리가 선택기를 안 보여 주는 것은 다른 문제다.
+- 결정: 모델이 내놓는 단계는 사용자가 그 모델에 적은 목록, 서버가 공개한 비지 않은 목록, 표준 단계(`none`·`low`·`medium`·`high`) 순서로 정한다. 선택기는 항상 `default`(전송 안 함)를 먼저 둔다. 표준 단계는 "서버 지원 모름"으로 표시하고, `cheapestEffort`는 쓰지 않는다.
+  - 우리가 정하는 것은 편집 화면의 초기값뿐이다. 서버가 공개한 목록과 `default`가 있으면 그것, 없으면 표준 단계로 채운다. 손대지 않고 저장하면 사용자 목록을 만들지 않는다.
+  - 사용자 목록은 값과 시작 단계(`default`)를 갖고, 값은 `reasoning_effort`로 그대로 보낸다. 모델 목록을 다시 읽어도, 엔드포인트 주소를 바꿔도 남는다. "서버 값으로 되돌리기"가 지운다.
+- 버린 안: 보이는 이름과 보내는 값을 따로 적기(예: "생각 끔" → `low`). 지금 GLM처럼 서버가 값을 이상하게 처리할 때만 필요하고, 그건 서버 템플릿을 고칠 문제다. 필요해지면 이 목록 위에 이름 칸을 더한다.
+- 2026-10-25의 "공개된 강도 목록이 없으면 강도 선택기를 숨긴다"를 이 결정이 바꾼다.
