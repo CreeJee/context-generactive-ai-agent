@@ -37,7 +37,7 @@ memory-agent의 사용자 전역 설정 계층이다. `<storage>/config.json`(`G
 - `config.json`이 없으면 `read`는 빈 설정 `{}`를 돌려준다(`MissingFile`만 성공으로 바꾼다)
 - 하위호환: 0.0.17까지의 `gpuCheck`(`status` 필드 형식)와 provider 없이 model+reasoningEffort만 있는 설정(provider를 `openai`로 간주)은 첫 read 때 현재 형식으로 한 번 다시 쓴다
 - `ModelFeatureFlagSettings`에 항목이 없으면 접근을 거부한다. `CrossProviderMediaConsentSettings` 항목은 로그인·권한으로 자동 생성하지 않는다
-- `SummaryStartPercent`는 0~50으로, 오래된 메시지를 빼는 비율(55%)보다 낮게 유지한다
+- `SummaryStartPercent`는 0~50으로, 오래된 메시지를 빼는 비율(55%)보다 낮게 유지한다. 비율은 compaction이 쓰는 창(`workingWindow`, 약 232k 이하)에 대한 것이다
 - `kanbanConcurrency`가 없으면 `defaultKanbanConcurrency(cores)`(코어 절반, 1~4)를 쓴다. `setConcurrency`는 `KanbanConcurrency`(1~32) 디코드로 범위를 검사한 뒤 저장하고, 저장 후 다시 읽은 값을 PubSub로 알린다
 - `embeddingDevice` 변경은 앱이 다음에 시작할 때 적용된다
 - `StorageRoot`는 프로젝트 내부에 두지 않는다

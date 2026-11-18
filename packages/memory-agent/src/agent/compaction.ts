@@ -119,6 +119,22 @@ export class CompactionFailed extends Schema.TaggedError<
 export const leaveOutAtShare = 0.55;
 
 /**
+ * The most a request carries before its oldest messages are left out, whatever the window. A run
+ * appends to its previous request until then, so the cache is rewritten about once per this many
+ * tokens of new steps; a large window would otherwise let requests grow to hundreds of thousands
+ * of tokens that every step sends again.
+ */
+export const leaveOutAtMost = 128_000;
+
+/**
+ * The part of a context window that compaction works in: all of it, up to the window whose share
+ * reaches {@link leaveOutAtMost}. Shares of the window, such as where summaries start, are taken of
+ * this.
+ */
+export const workingWindow = (contextWindow: number) =>
+  Math.min(contextWindow, Math.floor(leaveOutAtMost / leaveOutAtShare));
+
+/**
  * Room a request leaves in the window for its answer, reasoning included: pi's default, and at most
  * a fifth of a small window.
  */
@@ -138,7 +154,7 @@ export interface Budget {
 
 export const budgetFor = (contextWindow: number): Budget => ({
   compactAt: 0,
-  leaveOutAt: Math.floor(contextWindow * leaveOutAtShare),
+  leaveOutAt: Math.min(Math.floor(contextWindow * leaveOutAtShare), leaveOutAtMost),
   inputCeiling: contextWindow - answerRoom(contextWindow),
 });
 

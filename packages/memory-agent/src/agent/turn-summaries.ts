@@ -16,6 +16,7 @@ import {
   compactionStateEffect,
   summarizeEarlierTurns,
   summaryWriter,
+  workingWindow,
   type CompactionSources,
   type SummaryOutcome,
 } from "./compaction.ts";
@@ -91,7 +92,7 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
           }),
         }),
         threshold: Option.liftPredicate(
-          (runtime.contextWindow(selection.model) * percent) / 100,
+          (workingWindow(runtime.contextWindow(selection.model)) * percent) / 100,
           () => !whole,
         ),
       });

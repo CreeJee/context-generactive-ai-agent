@@ -498,6 +498,17 @@ describe("request history", () => {
   );
 });
 
+describe("budget", () => {
+  it("leaves out past the same share of a small window and at most 128k of a large one", () => {
+    expect(budgetFor(200_000).leaveOutAt).toBe(110_000);
+    expect(budgetFor(1_048_576)).toEqual({
+      compactAt: 0,
+      leaveOutAt: 128_000,
+      inputCeiling: 1_048_576 - 16_384,
+    });
+  });
+});
+
 describe("lightweight tool results", () => {
   const exchange = (name: string, args: string, content: string): StoredMessage[] => [
     {

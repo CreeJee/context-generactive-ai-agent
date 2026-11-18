@@ -6,7 +6,7 @@ import { Schema } from "effect";
  */
 
 /**
- * Percent of the context window a conversation fills before its turns are summarized; 0 summarizes
+ * Percent of the context window compaction works in (`workingWindow`) a conversation fills before its turns are summarized; 0 summarizes
  * from the start. It stays below the share where the oldest messages are left out (55%), so the
  * summaries are ready before anything has to go.
  */
