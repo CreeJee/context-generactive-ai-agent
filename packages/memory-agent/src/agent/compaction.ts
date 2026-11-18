@@ -617,17 +617,26 @@ const alwaysSent = (messages: ReadonlyArray<ConversationMessage>) =>
     runStart(messages),
   );
 
-/** A tool output that its pointer makes smaller, and by how many tokens. */
+/** What giving a message way does: a tool output becomes its pointer, a step's reasoning goes. */
+type Clearing = Data.TaggedEnum<{
+  Output: { readonly pointer: string };
+  Reasoning: {};
+}>;
+const Clearing = Data.taggedEnum<Clearing>();
+
+/** A message that giving way makes smaller, and by how many tokens. */
 interface Clearable {
   readonly index: number;
-  readonly pointer: string;
+  readonly clearing: Clearing;
   readonly saved: number;
 }
 
 /**
- * The tool outputs of `messages` from `from` up to `to` that their pointer makes smaller. In the
- * conversation the pointer is the one clearing the answered output makes after the run, so each
- * result still changes only once and the request prefix before it stays cacheable.
+ * The messages of `messages` from `from` up to `to` that giving way makes smaller, oldest first:
+ * tool outputs their pointer replaces, and the reasoning of the steps that called them. In the
+ * conversation the pointer is the one clearing the answered output makes after the run, and the
+ * reasoning goes then too, so each message still changes only once and the request prefix before
+ * it stays cacheable.
  */
 const clearable = (
   messages: ReadonlyArray<ConversationMessage>,
@@ -637,18 +646,38 @@ const clearable = (
   EffectArray.getSomes(
     messages.map((message, index) =>
       Option.gen(function* () {
-        const toolCallId = yield* Option.liftPredicate(
-          message.role === "tool" && index >= from && index < to ? message.toolCallId : undefined,
-          isTruthy,
+        yield* Option.liftPredicate(index, (at) => at >= from && at < to);
+        const clearing = yield* Match.value(message).pipe(
+          Match.when({ role: "tool" }, ({ toolCallId }) =>
+            Option.map(
+              Option.flatMap(Option.liftPredicate(toolCallId, isTruthy), recall.cleared),
+              (pointer) => Clearing.Output({ pointer }),
+            ),
+          ),
+          Match.when({ role: "assistant" }, ({ thinking }) =>
+            Option.as(Option.liftPredicate(thinking?.length, isTruthy), Clearing.Reasoning()),
+          ),
+          Match.orElse(() => Option.none<Clearing>()),
         );
-        const pointer = yield* recall.cleared(toolCallId);
-        const saved = estimateTokens(message) - estimateTokens({ role: "tool", content: pointer });
-        return yield* Option.liftPredicate({ index, pointer, saved }, (output) => output.saved > 0);
+        const saved = estimateTokens(message) - estimateTokens(cleared(message, clearing));
+        return yield* Option.liftPredicate({ index, clearing, saved }, (it) => it.saved > 0);
       }),
     ),
   );
 
-/** `messages` with the oldest of `outputs` given way to their pointers until they save `over`. */
+/** `message` given way as `clearing` says. */
+const cleared = <M extends ConversationMessage | CompactionMessage>(
+  message: M,
+  clearing: Clearing,
+): M => ({
+  ...message,
+  ...Clearing.$match(clearing, {
+    Output: ({ pointer }) => ({ content: pointer }),
+    Reasoning: () => ({ thinking: [] }),
+  }),
+});
+
+/** `messages` with the oldest of `outputs` given way until they save `over`. */
 const clearedOldest = <M extends ConversationMessage>(
   messages: ReadonlyArray<M | CompactionMessage>,
   outputs: ReadonlyArray<Clearable>,
@@ -658,16 +687,16 @@ const clearedOldest = <M extends ConversationMessage>(
     EffectArray.scan(outputs, 0, (freed, output) => freed + output.saved),
     (freed) => freed < over,
   ).length;
-  const pointers = HashMap.fromIterable(
+  const clearings = HashMap.fromIterable(
     Iterable.map(
       EffectArray.take(outputs, needed),
-      (output) => [output.index, output.pointer] as const,
+      (output) => [output.index, output.clearing] as const,
     ),
   );
   return messages.map((message, index) =>
-    Option.match(HashMap.get(pointers, index), {
+    Option.match(HashMap.get(clearings, index), {
       onNone: () => message,
-      onSome: (content) => ({ ...message, content }),
+      onSome: (clearing) => cleared(message, clearing),
     }),
   );
 };

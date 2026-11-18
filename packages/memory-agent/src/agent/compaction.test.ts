@@ -6,6 +6,7 @@ import {
   budgetFor,
   clearedOutput,
   compactEffect,
+  estimateConversation,
   estimateTokens,
   lightweightToolResults,
   lookupSources,
@@ -427,6 +428,45 @@ describe("request history", () => {
         expect(results[0]?.content).toBe(clearedOutput("node-read-0"));
         expect(results.at(-1)).toEqual(steps.at(-1));
       }),
+  );
+
+  it.effect("lets a long run's older reasoning go when nothing of it can be left out", () =>
+    Effect.gen(function* () {
+      const reasoning = [{ content: "추론 ".repeat(300) }];
+      const steps: StoredMessage[] = Array.from({ length: 12 }, (_, index) => [
+        {
+          role: "assistant" as const,
+          content: null,
+          thinking: reasoning,
+          toolCalls: [
+            {
+              id: `read-${index}`,
+              type: "function" as const,
+              function: { name: "read_file", arguments: "{}" },
+            },
+          ],
+        },
+        { role: "tool" as const, toolCallId: `read-${index}`, content: "ok" },
+      ]).flat();
+      // Nothing is recorded yet, so no message of the run can be left out.
+      const sent = yield* firstSent(
+        [{ role: "user", content: "이어서 해줘" }, ...steps],
+        noSources,
+        {
+          compactAt: 0,
+          leaveOutAt: 3_000,
+          inputCeiling: noLimit,
+        },
+      );
+      const calls: ReadonlyArray<ConversationMessage> = sent.filter(
+        (message) => message.role === "assistant",
+      );
+      expect(calls).toHaveLength(12);
+      expect(calls[0]?.thinking).toEqual([]);
+      // The step the model just took keeps what it reasoned.
+      expect(calls.at(-1)?.thinking).toEqual(reasoning);
+      expect(estimateConversation(sent)).toBeLessThanOrEqual(1_500);
+    }),
   );
 
   it.effect("clears outputs before the run before it leaves out older messages", () =>
