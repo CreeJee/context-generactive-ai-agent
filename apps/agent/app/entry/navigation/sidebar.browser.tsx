@@ -209,7 +209,9 @@ describe("sidebar disclosures", () => {
       yield* sdkCall(() =>
         expect
           .element(
-            personal.getByText("구독 한도 조회 불가: 저장된 로그인이 만료돼 조회하지 않았습니다"),
+            personal.getByText(
+              "구독 한도 조회 불가: 저장된 로그인이 만료됐습니다. 다시 로그인해 주십시오",
+            ),
           )
           .toBeVisible(),
       );
