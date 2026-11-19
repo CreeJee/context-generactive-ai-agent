@@ -880,6 +880,13 @@ export function SessionSection({
       message: `${ph({ name })}에 새 대화`,
       comment: "Button on a project's header that starts a conversation in it",
     });
+  // Projects with a conversation at work lead the list, the rest keep the server's order.
+  const groupAtWork = (group: ProjectGroup) =>
+    group.sessions.some((session) => atWork(session, workingOf(group.projectId)));
+  const orderedGroups = [
+    ...groups.filter(groupAtWork),
+    ...groups.filter((group) => !groupAtWork(group)),
+  ];
   const deleteTitle = deleteAsk === null ? null : label(deleteAsk.session);
   const row = (session: Session) => {
     // The project's working set the row is judged by: the one its own project's group leads with.
@@ -985,7 +992,7 @@ export function SessionSection({
         )}
         {/* One project group after another: same heading shape, that project's conversations.
             A project without conversations is a group too: its header starts the first one. */}
-        {groups.map((group) => (
+        {orderedGroups.map((group) => (
           <ProjectSessionGroup
             key={group.projectId}
             group={group}

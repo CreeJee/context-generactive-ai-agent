@@ -898,6 +898,53 @@ describe("sidebar disclosures", () => {
     }),
   );
 
+  it.live("projects with a conversation at work lead the list in their own order", () =>
+    Effect.gen(function* () {
+      const screen = yield* sdkCall(() =>
+        render(
+          <div className="w-72">
+            <SessionSection
+              groups={[
+                group("alpha", "Alpha", [sessionOf("alpha", "a1", "알파 질문")]),
+                group("beta", "Beta", [sessionOf("beta", "b1", "베타 질문")]),
+                group("gamma", "Gamma", [sessionOf("gamma", "g1", "감마 질문")]),
+                group("delta", "Delta", []),
+              ]}
+              // Gamma answers and beta runs its board; alpha and delta stay quiet.
+              working={[...answeringIn("gamma", "g1"), ...boardRunningIn("beta", "b1")]}
+              loading={false}
+              projectId={null}
+              sessionId={null}
+              archiveError={null}
+              onCreate={() => {}}
+              onArchive={() => {}}
+              onDelete={() => {}}
+              onRestore={() => {}}
+              header={null}
+              projectActions={() => null}
+            />
+          </div>,
+          withSidebar,
+        ),
+      );
+
+      // Working projects first, each part keeping the order the server sent.
+      const headers = ["Alpha", "Beta", "Gamma", "Delta"].map((name) => ({
+        name,
+        element: screen.getByRole("button", { name: headerName(name) }).element(),
+      }));
+      const inDocumentOrder = headers.toSorted((a, b) =>
+        a.element.compareDocumentPosition(b.element) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+      );
+      expect(inDocumentOrder.map((header) => header.name)).toEqual([
+        "Beta",
+        "Gamma",
+        "Alpha",
+        "Delta",
+      ]);
+    }),
+  );
+
   it.live("the header badge counts the project's own working conversations", () =>
     Effect.gen(function* () {
       const screen = yield* sdkCall(() =>
