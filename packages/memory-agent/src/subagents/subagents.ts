@@ -689,8 +689,9 @@ const make = Effect.gen(function* () {
       const model = yield* runtime.model(binding.selection, {
         threadId,
         runId: handle.chatRunId,
-        // Same 1-hour cache as the main conversation.
-        cacheRetention: "long",
+        // A named helper is continued later, maybe after minutes, so it keeps the 1-hour cache of
+        // the main conversation. A one-off ends within its own loop, so 5 minutes covers it.
+        cacheRetention: row.name === null ? "short" : "long",
       });
       const started = yield* Ref.make(HashSet.empty<string>());
       const relayGateHook: RunHook = {
