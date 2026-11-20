@@ -242,7 +242,7 @@ describe("compact", () => {
         retrievalAppendix: () =>
           Ref.update(appendixCalls, (calls) => calls + 1).pipe(
             Effect.as({
-              role: "assistant" as const,
+              role: "user" as const,
               content: "[Retrieval appendix]\n- node omitted-node",
             }),
           ),
@@ -255,7 +255,7 @@ describe("compact", () => {
       });
       expect(yield* Ref.get(appendixCalls)).toBe(1);
       expect(compacted.messages.at(-2)).toEqual({
-        role: "assistant",
+        role: "user",
         content: "[Retrieval appendix]\n- node omitted-node",
       });
       expect(compacted.messages.at(-1)).toEqual({ role: "user", content: "current question" });

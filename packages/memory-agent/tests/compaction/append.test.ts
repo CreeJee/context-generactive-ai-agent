@@ -167,7 +167,7 @@ testAgent()("requests append to the one before", (it) => {
       const { project } = yield* TestEnv;
       const session = yield* (yield* Sessions).create(project.id);
       const metadata = (yield* RunStore).chatMetadata;
-      const leads: CompactionMessage = { role: "assistant", content: "[Retrieval appendix] lead" };
+      const leads: CompactionMessage = { role: "user", content: "[Retrieval appendix] lead" };
       const withLeads = { ...sources, retrievalAppendix: () => Effect.succeed(leads) };
       const asked: StoredMessage = { role: "user", content: "질문" };
       // A request that left content out, with leads before its turn.

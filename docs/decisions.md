@@ -616,6 +616,7 @@
 - 도구는 이름 순서로 복사 정렬해 등록 순서에 따른 요청 변동을 없앤다. 스키마 내부 순서는 바꾸지 않는다. 지침·메시지·도구 fingerprint에는 원문 대신 SHA-256만 기록한다.
 - 완료된 run의 도구 결과는 다음 모델 요청부터 immutable memory node pointer로 바꾼다. 최근 user turns 2개는 원문으로 유지하고, 그 이전은 4턴마다 독립적인 불변 요약 블록으로 단조롭게 누적한다. 새 블록 때문에 이전 요약 메시지를 다시 쓰지 않는다.
 - compact가 원문을 생략한 요청에만 현재 질문 기반의 세션 우선 retrieval appendix를 넣는다. 최대 5개·600 estimated tokens이며 최신 user 메시지 바로 앞에 둔다. 결과는 lead일 뿐이므로 답에 쓸 때 `read_evidence`와 `trace_evidence`로 원문과 정정을 확인한다.
+  - 2026-11-20: appendix는 `user` 역할로 보낸다. Anthropic은 역할이 같은 메시지를 하나로 합치므로, `assistant`이면 appendix가 직전 답변 끝에 붙는다. 그러면 모델이 자기 답변 끝에 appendix 형식을 흉내 내 없는 node id를 지어냈다. 도구 결과도 Anthropic에서는 `user` 쪽이므로 같은 쪽에 둔다.
 - Anthropic 요청은 안정된 system/tool prefix에 ephemeral cache marker를 쓰고, 해당 기능만 거부되면 stream 시작 전에 marker 없이 한 번 재시도한다. ChatGPT Responses는 지원이 확인되지 않은 cache field를 보내지 않고 provider 자동 prefix cache를 사용한다.
 - 장기 대화 결정론적 평가에서 현재 기본값은 기존 10턴 결합 요약·최근 4턴 프로파일보다 평균 입력 토큰 39.9% 감소, byte-identical cacheable prefix 2.9%p 증가를 보였다. 대신 summary provider call은 2회에서 6회로 늘었다. 4턴·2턴·600-token 기본값을 유지하고 실제 `cachedTokens`는 운영 context usage로 관측한다. 상세 방법과 재실행 명령은 [긴 대화 compact 평가](./compaction-evaluation.md)에 기록한다.
 - 실제 서버 캐시 적중은 provider TTL·라우팅·최소 prefix 길이에 좌우되므로 보장하지 않는다. deterministic 평가는 wire-prefix 안정성을, runtime 지표는 provider가 보고한 `cachedTokens`와 cache ratio를 각각 측정한다.
