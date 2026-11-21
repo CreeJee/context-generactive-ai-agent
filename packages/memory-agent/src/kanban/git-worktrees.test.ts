@@ -350,7 +350,7 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
           ).toBe(path.join(own.toolRoot, "a.txt"));
           const outside = (target: string, kind: "file" | "directory" | "new-or-file") =>
             resolveFencedOutsidePath(tools.toolFence, tools.root, storage, target, kind).pipe(
-              Effect.map(() => "allowed"),
+              Effect.as("allowed"),
               Effect.catchTag("PathRejected", (rejection) => Effect.succeed(rejection.reason)),
             );
           expect(

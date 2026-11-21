@@ -158,7 +158,7 @@ scripts/       package.ts(실행 파일 만들기), smoke-package.ts(배포물 �
 - `default` (`vite.browser.config.ts`) — 브라우저 테스트용 Vite+ 설정. Playwright chromium headless, `app/entry/...*.browser.tsx` 포함, `@dnd-kit/*`·`jotai`를 `optimizeDeps.include`로 미리 번들한다
 - `package.json` `imports["#server-build"]` — `./build/server/index.js`(React Router 서버 빌드) 별칭
 - `package.json` scripts — `dev`/`dev:agent`(`vp run memory-agent#build` 후 `node --experimental-strip-types scripts/dev.ts [agent]`), `dev:web`(`scripts/dev.ts web`), `start`(`node dist/context-agent.mjs`)
-- `tsconfig.json` — 앱 타입체크 설정. `~/*` → `./app/*` 경로 별칭, `.react-router/types` rootDirs, `server/tests`·`build`·`dist` 제외, `@effect/language-service` 진단 심각도 표
+- `tsconfig.json` — 앱 타입체크 설정. `~/*` → `./app/*` 경로 별칭, `.react-router/types` rootDirs, `server/tests`·`build`·`dist` 제외. `@effect/language-service`는 편집기 기능만 켜고 진단은 끈다(Effect 규칙은 루트 `vite.config.ts`의 Oxlint 설정)
 - `components.json` — shadcn 설정(style `base-mira`, css `app/app.css`, baseColor zinc, lucide, 별칭 `~/components`, `~/components/ui`, `~/lib/utils`, `~/lib`, `~/hooks`)
 - `entitlements.plist` — macOS hardened runtime 권한 `allow-jit`, `allow-unsigned-executable-memory`, `disable-library-validation`
 - [AGENTS.md](./AGENTS.md) — 앱 작업 지침

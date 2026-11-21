@@ -202,9 +202,10 @@ const migrateInTransaction = Effect.fnUntraced(function* (sqlite: DatabaseSync) 
     );
     return { applied, loader };
   });
-  yield* Effect.flatMap(migrationClient(sqlite), (client) =>
-    Migrator.make({})({ loader }).pipe(Effect.provideService(SqlClient.SqlClient, client)),
-  ).pipe(Effect.catchDefect((defect) => Effect.fail(migrationFailure(defect))));
+  yield* Migrator.make({})({ loader }).pipe(
+    Effect.provideServiceEffect(SqlClient.SqlClient, migrationClient(sqlite)),
+    Effect.catchDefect((defect) => Effect.fail(migrationFailure(defect))),
+  );
   yield* attempt(() => {
     if (
       applied < migrations.length &&

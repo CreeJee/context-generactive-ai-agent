@@ -23,7 +23,7 @@ if (!isMainThread) {
         // Initialization is required before any native SQLite call and may be repeated safely.
         const refusedBeforeInitialization = yield* Effect.try(
           () => new binding.MemoryReadSession(path),
-        ).pipe(Effect.match({ onFailure: () => true, onSuccess: () => false }));
+        ).pipe(Effect.isFailure);
         if (!refusedBeforeInitialization) throw new Error("Uninitialized SQLite must fail closed");
         initializeNodeSqlite(addon.addonPath);
         initializeNodeSqlite(addon.addonPath);

@@ -1,6 +1,53 @@
+import { strict as effectStrict } from "@effect/tsgo/oxlint-presets";
 import { defineConfig } from "vite-plus";
 
 import { notWording, wordingExempt, wordingScope } from "./lint/wording/policy.ts";
+
+/**
+ * Effect Language Service rules that are off by default and that these packages adopted, on top of
+ * the `strict` preset (every default rule as an error). Effect errors and warnings both fail the
+ * check (docs/decisions.md), so every adopted rule is an error.
+ */
+const effectAdoptedRules = {
+  "effecttsgo/any-unknown-in-error-context": "error",
+  "effecttsgo/async-function": "error",
+  "effecttsgo/crypto-random-uuid": "error",
+  "effecttsgo/crypto-random-uuid-in-effect": "error",
+  "effecttsgo/deterministic-keys": "error",
+  "effecttsgo/effect-do-notation": "error",
+  "effecttsgo/extends-native-error": "error",
+  "effecttsgo/global-console": "error",
+  "effecttsgo/global-console-in-effect": "error",
+  "effecttsgo/global-date": "error",
+  "effecttsgo/global-date-in-effect": "error",
+  "effecttsgo/global-fetch": "error",
+  "effecttsgo/global-fetch-in-effect": "error",
+  "effecttsgo/global-json-in-effect": "error",
+  "effecttsgo/global-random": "error",
+  "effecttsgo/global-random-in-effect": "error",
+  "effecttsgo/global-timers": "error",
+  "effecttsgo/global-timers-in-effect": "error",
+  "effecttsgo/instance-of-schema": "error",
+  "effecttsgo/missed-pipeable-opportunity": "error",
+  "effecttsgo/missing-effect-service-dependency": "error",
+  "effecttsgo/missing-pipeable-signature": "error",
+  "effecttsgo/nested-effect-gen-yield": "error",
+  "effecttsgo/new-promise": "error",
+  "effecttsgo/new-schema-class": "error",
+  "effecttsgo/node-builtin-import": "error",
+  "effecttsgo/prefer-schema-type-property": "error",
+  "effecttsgo/process-env": "error",
+  "effecttsgo/process-env-in-effect": "error",
+  "effecttsgo/schema-sync": "error",
+  "effecttsgo/schema-union-of-literals": "error",
+  "effecttsgo/service-not-as-class": "error",
+  "effecttsgo/strict-boolean-expressions": "error",
+  "effecttsgo/strict-effect-provide": "error",
+  "effecttsgo/unnecessary-arrow-block": "error",
+  "effecttsgo/unsafe-effect-type-assertion": "error",
+  // The official Effect RPC, Workflow and SQL modules are kept despite being unstable.
+  "effecttsgo/unstable-api-usage": "off",
+} as const;
 
 const agentAndVendoredIgnorePatterns = [
   ".agent/**",
@@ -125,6 +172,13 @@ export default defineConfig({
           "lingui/no-unlocalized-strings": "off",
           "wording/content": "off",
         },
+      },
+      {
+        // The Effect Language Service rules, through the Oxlint integration `effect-tsgo patch
+        // --oxlint` installs. Scoped to the projects whose type check ran them before.
+        files: ["apps/agent/**", "packages/memory-agent/**"],
+        plugins: ["effecttsgo"],
+        rules: { ...effectStrict.rules, ...effectAdoptedRules },
       },
       {
         // Packages keep collections in Effect's types (docs/map-set-audit-2026-10-06.md).

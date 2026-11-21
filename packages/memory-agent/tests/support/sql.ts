@@ -47,4 +47,4 @@ export const sqlTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 
 /** Runs an app Effect that needs a `SqlClient` on the open agent's. */
 export const withOpenSql = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  Effect.flatMap(client, (sql) => Effect.provideService(effect, SqlClient.SqlClient, sql));
+  Effect.provideServiceEffect(effect, SqlClient.SqlClient, client);

@@ -635,12 +635,10 @@ const make = Effect.gen(function* () {
 
   /** Whether a run leaves this configuration of the server alone: it failed, and its wait is on. */
   const waiting = (key: string, server: ConfiguredServer) =>
-    Effect.flatMap(Ref.get(failedStarts), (current) =>
-      Effect.map(Clock.currentTimeMillis, (now) =>
-        Option.exists(
-          HashMap.get(current, key),
-          (failed) => failed.fingerprint === server.fingerprint && now < failed.retryAt,
-        ),
+    Effect.zipWith(Ref.get(failedStarts), Clock.currentTimeMillis, (current, now) =>
+      Option.exists(
+        HashMap.get(current, key),
+        (failed) => failed.fingerprint === server.fingerprint && now < failed.retryAt,
       ),
     );
 

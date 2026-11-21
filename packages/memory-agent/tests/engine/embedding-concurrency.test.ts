@@ -22,10 +22,7 @@ vi.spyOn(NativeOwner, "layer").mockImplementation((setup, workerFile) =>
       ...owner,
       execute: (command) =>
         OwnerCommand.guards.save(command)
-          ? Ref.get(beforeSave).pipe(
-              Effect.flatMap((hook) => hook),
-              Effect.andThen(owner.execute(command)),
-            )
+          ? Ref.get(beforeSave).pipe(Effect.flatten, Effect.andThen(owner.execute(command)))
           : owner.execute(command),
     })),
   ).pipe(Layer.provide(openOwner(setup, workerFile))),

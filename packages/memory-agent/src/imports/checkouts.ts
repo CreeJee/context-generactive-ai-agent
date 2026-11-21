@@ -132,22 +132,20 @@ const make = Effect.gen(function* () {
       "--git-dir",
       "--git-common-dir",
     ]).pipe(
-      Effect.flatMap((answer) =>
-        Effect.map(
-          canonicalPath(cwd).pipe(Effect.catchTag("PlatformError", () => Effect.succeed(cwd))),
-          (real) =>
-            Option.flatMap(answer, (text) => {
-              const [top, gitDir, common] = lines(text);
-              const linked =
-                top !== undefined &&
-                common !== undefined &&
-                gitDir !== common &&
-                basename(common) === ".git";
-              return linked
-                ? Option.some({ path: join(dirname(common), relative(top, real)), worktree: top })
-                : Option.none();
-            }),
-        ),
+      Effect.zipWith(
+        canonicalPath(cwd).pipe(Effect.catchTag("PlatformError", () => Effect.succeed(cwd))),
+        (answer, real) =>
+          Option.flatMap(answer, (text) => {
+            const [top, gitDir, common] = lines(text);
+            const linked =
+              top !== undefined &&
+              common !== undefined &&
+              gitDir !== common &&
+              basename(common) === ".git";
+            return linked
+              ? Option.some({ path: join(dirname(common), relative(top, real)), worktree: top })
+              : Option.none();
+          }),
       ),
     );
 

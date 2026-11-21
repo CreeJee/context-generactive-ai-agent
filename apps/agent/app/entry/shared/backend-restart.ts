@@ -147,7 +147,7 @@ const sdkHttpTransport: typeof fetch = (input, init) => {
           referrer: request.referrer,
           referrerPolicy: request.referrerPolicy,
         }),
-        Effect.onExit((exit) => (Exit.isFailure(exit) ? release : Effect.void)),
+        Effect.onError(() => release),
       ),
       { signal: request.signal },
     )

@@ -106,10 +106,7 @@ function createAppApiBody(baseUrl: string, fetcher: typeof fetch = fetch) {
         });
         return yield* requestFailure({ status: response.status, code, reason: "RequestRejected" });
       }
-      const json: unknown = yield* Result.match(parsed, {
-        onFailure: Effect.fail,
-        onSuccess: Effect.succeed,
-      });
+      const json: unknown = yield* Effect.fromResult(parsed);
       return yield* Schema.decodeUnknownEffect(schema)(json).pipe(
         Effect.mapError(() =>
           requestFailure({

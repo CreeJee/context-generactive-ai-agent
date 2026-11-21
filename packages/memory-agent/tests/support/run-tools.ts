@@ -23,6 +23,6 @@ function callToolBody(tools: ReadonlyArray<RunTool>, name: string, params: JsonV
 /** The code of the failure the model reads, or `resolved`. */
 export const failureCode = <A, E>(call: Effect.Effect<A, E | ToolFailed>) =>
   call.pipe(
-    Effect.map(() => "resolved"),
+    Effect.as("resolved"),
     Effect.catchIf(Schema.is(ToolFailed), (error) => Effect.succeed(error.code)),
   );

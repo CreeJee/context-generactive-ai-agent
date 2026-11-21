@@ -4,7 +4,8 @@ import { inProcessChatApi } from "../../src/testing/chat-api.ts";
 import { TestEnv } from "./test-env.ts";
 
 /** A typed client of the chat API, answered in-process by the test's agent. */
-export const chatApi = Effect.flatMap(
+export const chatApi = Effect.provideServiceEffect(
+  inProcessChatApi,
+  AgentChat,
   Effect.flatMap(TestEnv, (env) => env.use(AgentChat)),
-  (agent) => Effect.provideService(inProcessChatApi, AgentChat, agent),
 );
