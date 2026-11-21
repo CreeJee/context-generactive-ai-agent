@@ -27,6 +27,7 @@ export const GlobalEventTopic = Schema.Literals([
   "projects",
   "kanban",
   "skillRouter",
+  "improvementModel",
 ]);
 export type GlobalEventTopic = typeof GlobalEventTopic.Type;
 

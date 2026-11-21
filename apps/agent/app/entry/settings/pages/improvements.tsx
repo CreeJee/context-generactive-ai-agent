@@ -11,10 +11,16 @@ import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { FieldDescription, FieldGroup } from "~/components/ui/field";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
-import { api, refusalOf, ScanCommand } from "../../api";
+import { api, isApiError, refusalOf, ScanCommand } from "../../api";
 import { koreanLocalTime } from "../../shared/local-time";
-import { globalQueries, useImprovementsQuery } from "../../queries/global";
+import {
+  globalQueries,
+  useImprovementModelQuery,
+  useImprovementsQuery,
+} from "../../queries/global";
+import { useImprovementModelMutation } from "../../queries/mutations/global";
 import { PageError, PageHeader, pageTitles, shortPath, useClipboardCopy } from "../shared";
+import { ModelSelectionField } from "../model-selection-field";
 
 /** Why a request failed, as the server names it. */
 const FailureReason = Schema.Literals(["report"]);
@@ -133,6 +139,48 @@ function Report({ report }: { report: ImprovementReport }) {
 }
 
 /**
+ * The model that interprets improvement items during a scan, or the selected model when the user
+ * chose none. It is the same for every project.
+ */
+function InterpretationModelField() {
+  const { t } = useLingui();
+  const { data } = useImprovementModelQuery();
+  const mutation = useImprovementModelMutation();
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <ModelSelectionField
+      id="improvement-model"
+      label={t`개선 항목 해석 모델`}
+      description={
+        <Trans>
+          찾기를 실행하면 이 모델이 저장소마다 모은 증거를 읽고 고칠 항목을 판정합니다. 모든
+          프로젝트에 같이 쓰입니다.
+        </Trans>
+      }
+      saved={data.model}
+      unsetLabel={t({
+        message: "선택된 모델",
+        comment: "Option: interpret improvement items on the model selected in the chat",
+      })}
+      unsetNote={<Trans>지금은 채팅에서 선택한 모델로 해석합니다.</Trans>}
+      busy={mutation.isPending}
+      error={error}
+      onSave={(model) => {
+        setError(null);
+        mutation.mutate(model, {
+          onError: (failure) =>
+            setError(
+              isApiError(failure) && failure.code === "role_model_unavailable"
+                ? t`이 모델을 쓸 수 없습니다. 그 제공자 로그인 상태와 모델, 추론 단계가 맞는지 확인해 주십시오.`
+                : t`설정을 바꾸지 못했습니다.`,
+            ),
+        });
+      }}
+    />
+  );
+}
+
+/**
  * What to improve in the repositories behind the open projects. The app only records it: each
  * report is a document the user hands to an agent or tool of their choice.
  */
@@ -193,6 +241,15 @@ export function ImprovementSettings() {
       />
       {line !== null && <FieldDescription role="status">{line}</FieldDescription>}
       <PageError error={error} />
+      {/* The interpreter's own model; a failed scan's model_unavailable names this section. */}
+      <section className="flex flex-col gap-2 rounded-md border p-3">
+        <h3 className="text-sm font-medium">
+          <Trans comment="Heading of the section that picks the improvement interpreter's model">
+            해석 모델
+          </Trans>
+        </h3>
+        <InterpretationModelField />
+      </section>
       {latest === null ? (
         <FieldDescription>
           <Trans>아직 개선 항목을 찾은 적이 없습니다.</Trans>

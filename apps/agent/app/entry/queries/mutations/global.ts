@@ -94,6 +94,16 @@ export function useSkillRouterMutation() {
   });
 }
 
+/** Gives the improvement interpreter its own model, or null to run it on the selected model. */
+export function useImprovementModelMutation() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: api.setImprovementModel,
+    onSuccess: (settings) =>
+      client.setQueryData(globalQueries.improvementModel().queryKey, settings),
+  });
+}
+
 /** Moves a project in the scheduler's order of projects. */
 export function useProjectOrderMutation() {
   const client = useQueryClient();

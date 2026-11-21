@@ -104,11 +104,11 @@ const make = Effect.gen(function* () {
     InterpretationUnavailable.make({ reason: "model_unavailable", cause });
 
   /**
-   * The model the user chats with, checked once per scan so a missing sign-in fails the scan
-   * instead of every item.
+   * The improvement interpreter's model: its own when the user chose one, else the one the user
+   * chats with, checked once per scan so a missing sign-in fails the scan instead of every item.
    */
   const model = Effect.gen(function* () {
-    const selection = yield* active.selected.pipe(
+    const selection = yield* active.selectedFor("improvement").pipe(
       Effect.mapError(unavailable),
       Effect.flatMap((selected) =>
         Effect.fromOption(Option.fromNullishOr(selected), () => unavailable(null)),
@@ -177,7 +177,7 @@ const make = Effect.gen(function* () {
   return { model };
 });
 
-/** Reads improvement items with the user's selected model. */
+/** Reads improvement items with the interpreter's model (`ActiveProvider.selectedFor`). */
 export class ImprovementInterpreter extends Context.Service<
   ImprovementInterpreter,
   Effect.Success<typeof make>

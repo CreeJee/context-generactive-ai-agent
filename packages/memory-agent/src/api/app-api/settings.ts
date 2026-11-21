@@ -57,7 +57,7 @@ export const KanbanSettings = Schema.Struct({
 });
 export type KanbanSettings = typeof KanbanSettings.Type;
 
-/** The model that chooses find_skill's results; null when the skill router is off. */
+/** A user-wide role's own model; null runs the skill router off, the interpreter on the selected model. */
 export const SkillRouterSettings = Schema.Struct({ model: Schema.NullOr(ModelSelection) });
 export type SkillRouterSettings = typeof SkillRouterSettings.Type;
 
@@ -222,6 +222,20 @@ export class SettingsGroup extends HttpApiGroup.make("settings")
      * provider does not list is refused.
      */
     HttpApiEndpoint.post("setSkillRouter", "/api/settings/skill-router", {
+      payload: SkillRouterSettings,
+      success: SkillRouterSettings,
+      error: SkillRouterRefusals,
+    }),
+    /** The model that interprets improvement items, if the user chose one. */
+    HttpApiEndpoint.get("improvementModel", "/api/settings/improvement-model", {
+      success: SkillRouterSettings,
+      error: SkillRouterRefusals,
+    }),
+    /**
+     * The improvement scan interprets items with this model from its next scan; null goes back to
+     * the selected model. A model the provider does not list is refused.
+     */
+    HttpApiEndpoint.post("setImprovementModel", "/api/settings/improvement-model", {
       payload: SkillRouterSettings,
       success: SkillRouterSettings,
       error: SkillRouterRefusals,

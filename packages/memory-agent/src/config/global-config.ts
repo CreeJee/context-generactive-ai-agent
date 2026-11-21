@@ -112,6 +112,8 @@ export const Settings = Schema.Struct({
   verifierModel: Schema.optional(ModelSelection),
   /** The model that picks find_skill's results among the search's; off when unset. */
   skillRouterModel: Schema.optional(ModelSelection),
+  /** The improvement interpreter's model; the selected model when unset. */
+  improvementModel: Schema.optional(ModelSelection),
   /** Also search other projects' memory (those not excluded). Off when unset. */
   crossProjectRecall: Schema.optional(Schema.Boolean),
   /** Send matching memory to an external agent in a direct conversation. Off when unset. */

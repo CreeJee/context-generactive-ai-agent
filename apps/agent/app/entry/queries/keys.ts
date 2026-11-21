@@ -18,6 +18,7 @@ export const appQueryKeys = {
     recall: ["app", "global", "recall"] as const,
     kanban: ["app", "global", "kanban"] as const,
     skillRouter: ["app", "global", "skillRouter"] as const,
+    improvementModel: ["app", "global", "improvementModel"] as const,
     improvements: ["app", "global", "improvements"] as const,
     modelsRoot: ["app", "global", "models"] as const,
     models: (provider: string) => [...appQueryKeys.global.modelsRoot, provider] as const,

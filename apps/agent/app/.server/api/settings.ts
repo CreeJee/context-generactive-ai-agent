@@ -162,6 +162,25 @@ export const SettingsApiHandlers = HttpApiBuilder.group(
               Effect.fail({ error: "role_model_unavailable" } as const),
           }),
         ),
+      improvementModel: () =>
+        active.chosenFor("improvement").pipe(
+          Effect.map((model) => ({ model })),
+          Effect.catchTag("GlobalConfigFailed", settingsFailed),
+        ),
+      setImprovementModel: ({ payload }) =>
+        active.chooseFor("improvement", payload.model).pipe(
+          Effect.map((model) => ({ model })),
+          // Other windows' improvement settings show the model, so they read it again.
+          Effect.tap(() => events.publishGlobal("improvementModel")),
+          Effect.catchTags({
+            GlobalConfigFailed: settingsFailed,
+            // A model the provider does not list, or a provider that cannot list its models now.
+            ModelUnavailable: () => Effect.fail({ error: "role_model_unavailable" } as const),
+            ProviderUnavailable: () => Effect.fail({ error: "role_model_unavailable" } as const),
+            ProviderOperationFailed: () =>
+              Effect.fail({ error: "role_model_unavailable" } as const),
+          }),
+        ),
       kagi: () =>
         kagi.status.pipe(
           Effect.catchTags({

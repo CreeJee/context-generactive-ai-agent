@@ -5614,3 +5614,12 @@
 - 결정: 사용량 조회를 그 계정의 클라이언트(`SubscriptionOAuthClient.subscriptionUsage`)로 보낸다. 만료가 가까운 토큰은 먼저 갱신한다. 계정 클라이언트는 `SubscriptionAccountClients`가 앱에 하나만 두고, 프로바이더 레지스트리도 같은 것을 쓴다. 그래서 같은 계정의 모델 요청과 사용량 조회가 갱신 lock을 함께 쓰고, 회전하는 refresh token을 두 번 쓰지 않는다.
 - `credential_expired`는 이제 로그인이 없거나 provider가 refresh token을 거절해 다시 로그인해야 한다는 뜻이다. 화면 문구도 "다시 로그인해 주십시오"로 바꿨다.
 - 2026-10-12 M5의 "조회는 토큰을 갱신하지 않는다"를 이 결정이 바꾼다. 조회 빈도(계정마다 5분에 한 번, 429면 `Retry-After`까지 기다림)는 그대로다.
+
+## 개선 항목 해석에도 모델을 따로 고른다 (2026-11-21)
+
+- 계기: 프로젝트 개선 찾기가 항목을 해석할 때 채팅에서 선택한 모델(`ActiveProvider.selected`)을 그대로 썼고, 그 사실을 알리는 선택기는 어디에도 없었다. 사용자가 설정에서 찾지 못했고, `model_unavailable` 실패 문구도 "채팅에서 모델을 고르고"만 안내했다.
+- 결정(사용자): 개선 해석도 역할 모델로 둔다.
+  - `ModelRole`에 `improvement`를 더하고 `improvementModel` 설정 키에 저장한다. skill router와 달리 고르지 않으면 전역 선택을 따른다(해석은 사용자가 시작하는 일이라 기본값이 필요하고, router처럼 꺼둘 수 없다).
+  - API는 GET·POST `/api/settings/improvement-model` `{model}`이고, skill router와 같은 검증(`ActiveProvider.chooseFor`)과 거부(`role_model_unavailable`)를 쓴다. 바꾸면 `improvementModel` 이벤트로 다른 창에 알린다.
+  - 선택기는 개선 찾기 화면의 별도 "해석 모델" 섹션에 둔다. 스캔이 `model_unavailable`로 실패하면 문구가 그 섹션을 가리킨다.
+- 버린 안: 칸반 설정의 Goal 역할 모델 옆에 두기. 개선 찾기는 칸반이 아니라 개선 화면에서 시작하므로 그곳에서 고르는 게 맞다.

@@ -833,6 +833,10 @@ export const api = {
   /** find_skill's results are chosen by this model from its next call; null turns it off. */
   setSkillRouterModel: (model: ModelSelection | null) =>
     appCall((client) => client.settings.setSkillRouter({ payload: { model } })),
+  improvementModelSettings: () => appCall((client) => client.settings.improvementModel()),
+  /** The improvement scan interprets items with this model from its next scan; null goes back to the selected model. */
+  setImprovementModel: (model: ModelSelection | null) =>
+    appCall((client) => client.settings.setImprovementModel({ payload: { model } })),
   /** Puts the project in front of `before` (or last) in the scheduler's order of projects. */
   moveProject: (projectId: string, before: string | null) =>
     appCall((client) =>

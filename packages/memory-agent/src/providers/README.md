@@ -13,7 +13,7 @@
 - `AuthConnectionState` / `AuthStatus` / `AuthProvider` — signed-out|pending|signed-in|error 로그인 상태 TaggedEnum과 status/connect/cancel/disconnect 인증 수명주기 인터페이스. 타입은 비공개 TaggedUnion Schema에서 꺼낸다
 - `ProviderAuthState` — 브라우저가 받는 `AuthConnectionState` Schema. pending의 `authorizationUrl`이 `authUrl`이다
 - `ModelCatalog` / `AgentModelRuntime` / `RunModel` / `ModelRun` / `ShownFailure` / `ProviderConfiguration` / `ProviderServices` — 모델 목록·선택, 런 단위 Effect AI 모델 생성(Scope 필요), 컨텍스트 창, 사용자 표시용 실패 계약
-- `ActiveProvider` — GlobalConfig와 ProviderRegistry로 저장된 공급자/모델을 resolve하고 models/runtime/auth/authFor를 제공하는 Context.Service(`ActiveProvider.layer`). 역할별 모델: `chosenFor(role)`(그 역할에 고른 모델, 없으면 null), `selectedFor(role)`(Goal 역할만: 고른 모델, 없으면 `selected`), `chooseFor(role, selection | null)`(공급자 목록에 그 모델·추론 단계가 있을 때만 저장, null이면 지움). `role`은 `ModelRole`이다
+- `ActiveProvider` — GlobalConfig와 ProviderRegistry로 저장된 공급자/모델을 resolve하고 models/runtime/auth/authFor를 제공하는 Context.Service(`ActiveProvider.layer`). 역할별 모델: `chosenFor(role)`(그 역할에 고른 모델, 없으면 null), `selectedFor(role)`(Goal 역할과 개선 해석: 고른 모델, 없으면 `selected`), `chooseFor(role, selection | null)`(공급자 목록에 그 모델·추론 단계가 있을 때만 저장, null이면 지움). `role`은 `ModelRole`이다
 - `AgentRole` — Goal 역할 `planner`·`executor`·`verifier` 리터럴 Schema(`contracts.ts`)
 - `ModelRole` — 사용자가 모델을 따로 고를 수 있는 역할: `AgentRole`과 `find_skill`의 `skillRouter` 리터럴 Schema(`contracts.ts`)
 - `ProviderRegistry` / `ProviderRegistryApi` / `providerRegistryFrom` — 공급자 configuration 조회(`get(provider)`), 선택이 보는 configuration(`configurationOf(target)`)과 runtime(`runtime(selection)`) 조회 레지스트리 서비스(registry.ts). 호환 선택은 그 선택이 적은 계정의 모델 목록과 runtime을 받는다

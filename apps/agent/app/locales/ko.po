@@ -1149,6 +1149,10 @@ msgid "개선 항목 찾기"
 msgstr "개선 항목 찾기"
 
 #: app/entry/settings/pages/improvements.tsx
+msgid "개선 항목 해석 모델"
+msgstr "개선 항목 해석 모델"
+
+#: app/entry/settings/pages/improvements.tsx
 msgid "개선 항목을 찾는 중 오류가 났습니다. 다시 시도해 주십시오."
 msgstr "개선 항목을 찾는 중 오류가 났습니다. 다시 시도해 주십시오."
 
@@ -3393,7 +3397,9 @@ msgstr "서브에이전트 작업: {title}"
 msgid "서브에이전트에게 메시지 보내기"
 msgstr "서브에이전트에게 메시지 보내기"
 
+#. Option: interpret improvement items on the model selected in the chat
 #. Option: run this role on the model selected in the chat
+#: app/entry/settings/pages/improvements.tsx
 #: app/entry/settings/pages/kanban.tsx
 msgid "선택된 모델"
 msgstr "선택된 모델"
@@ -3496,6 +3502,7 @@ msgstr "설정된 에이전트가 없습니다."
 msgid "설정에서 이미지 생성을 먼저 켜 주십시오"
 msgstr "설정에서 이미지 생성을 먼저 켜 주십시오"
 
+#: app/entry/settings/pages/improvements.tsx
 #: app/entry/settings/pages/kanban.tsx
 #: app/entry/settings/pages/skills.tsx
 #: app/entry/settings/shared.tsx
@@ -4602,6 +4609,7 @@ msgstr "이 메시지를 보내지 못했습니다. 보내기를 누르면 다�
 msgid "이 명령을 실행할까요?"
 msgstr "이 명령을 실행할까요?"
 
+#: app/entry/settings/pages/improvements.tsx
 #: app/entry/settings/pages/kanban.tsx
 #: app/entry/settings/pages/skills.tsx
 msgid "이 모델을 쓸 수 없습니다. 그 제공자 로그인 상태와 모델, 추론 단계가 맞는지 확인해 주십시오."
@@ -5500,6 +5508,10 @@ msgstr "지금은 선택된 모델로 실행합니다."
 msgid "지금은 쓰지 않고, 검색 순위의 앞쪽을 그대로 줍니다."
 msgstr "지금은 쓰지 않고, 검색 순위의 앞쪽을 그대로 줍니다."
 
+#: app/entry/settings/pages/improvements.tsx
+msgid "지금은 채팅에서 선택한 모델로 해석합니다."
+msgstr "지금은 채팅에서 선택한 모델로 해석합니다."
+
 #: app/entry/chat/context-meter.tsx
 msgid "지난 대화 일부를 요약으로 바꿔 보냈습니다."
 msgstr "지난 대화 일부를 요약으로 바꿔 보냈습니다."
@@ -5639,6 +5651,10 @@ msgstr "질문"
 #: app/entry/report/report-bundle.tsx
 msgid "짧게 걸린 span 경로는 빠졌습니다."
 msgstr "짧게 걸린 span 경로는 빠졌습니다."
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "찾기를 실행하면 이 모델이 저장소마다 모은 증거를 읽고 고칠 항목을 판정합니다. 모든 프로젝트에 같이 쓰입니다."
+msgstr "찾기를 실행하면 이 모델이 저장소마다 모은 증거를 읽고 고칠 항목을 판정합니다. 모든 프로젝트에 같이 쓰입니다."
 
 #: app/entry/settings/pages/improvements.tsx
 msgid "찾기를 중지했습니다. 이전 결과는 그대로입니다."
@@ -6461,6 +6477,11 @@ msgstr "한도 확인 중"
 #: app/entry/settings/pages/image.tsx
 msgid "항상 허용"
 msgstr "항상 허용"
+
+#. Heading of the section that picks the improvement interpreter's model
+#: app/entry/settings/pages/improvements.tsx
+msgid "해석 모델"
+msgstr "해석 모델"
 
 #. Count of user statements the memory interpreter could not label
 #: app/entry/settings/pages/failed-interpretations.tsx

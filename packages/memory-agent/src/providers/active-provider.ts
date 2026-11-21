@@ -4,7 +4,6 @@ import { i18n } from "../i18n.ts";
 import { Array as Arr, Context, Effect, Layer, Predicate } from "effect";
 import { GlobalConfig, type Settings } from "../config/global-config.ts";
 import {
-  type AgentRole,
   AuthConnectionState,
   type ModelRole,
   ModelUnavailable,
@@ -19,6 +18,7 @@ const roleModelKeys = {
   planner: "plannerModel",
   executor: "executorModel",
   verifier: "verifierModel",
+  improvement: "improvementModel",
   skillRouter: "skillRouterModel",
 } as const satisfies Record<ModelRole, keyof Settings>;
 
@@ -44,8 +44,11 @@ const make = Effect.gen(function* () {
   /** A role's own model, or null when the user chose none. */
   const chosenFor = (role: ModelRole) =>
     Effect.map(config.read, (settings) => settings[roleModelKeys[role]] ?? null);
-  /** The model a role runs on: its own when the user chose one, else the selected model. */
-  const selectedFor = (role: AgentRole) =>
+  /**
+   * The model a role runs on: its own when the user chose one, else the selected model. The skill
+   * router is the exception: unset turns it off, so it reads `chosenFor` itself.
+   */
+  const selectedFor = (role: Exclude<ModelRole, "skillRouter">) =>
     Effect.filterOrElse(chosenFor(role), Predicate.isNotNull, () => selected);
   /** Fails unless the selection's provider lists that model with that effort. */
   const checked = Effect.fn("ActiveProvider.checked")(function* (selection: ModelSelection) {
