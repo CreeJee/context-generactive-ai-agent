@@ -6,6 +6,7 @@ import {
   HashMap,
   Iterable,
   Layer,
+  MutableHashMap,
   Option,
   Order,
   Schema,
@@ -16,6 +17,7 @@ import { Hex } from "effect/encoding";
 import { SqlClient, SqlSchema } from "effect/sql";
 import type { Fenced } from "../files/paths.ts";
 import { Embedder } from "../memory/embedding/embedder.ts";
+import { fuseRanks } from "../memory/rank-fusion.ts";
 import type { Project } from "../projects/projects.ts";
 import { fallbackLogged, logFailure } from "../runtime/logged-failures.ts";
 import { ProjectSkills } from "./project-skills.ts";
@@ -23,12 +25,6 @@ import type { Skill } from "./skills.ts";
 
 /** What a skill's vector is made from: what the model reads of it before reading the skill. */
 const embeddedText = (skill: Skill) => `${skill.name}: ${skill.description}`;
-
-/**
- * Reciprocal rank fusion's constant (Cormack et al., 2009): a skill's score from each ranking is
- * 1 / (k + rank), so the word match and the meaning match add up without comparing their scores.
- */
-const fusionK = 60;
 
 /** Hashes per statement, below SQLite's variable limit. */
 const hashesPerStatement = 500;
@@ -105,22 +101,16 @@ export const rankSkills = (input: {
         ),
       ),
   });
-  const fused = [byWords(catalog, query), byMeaning].reduce(
-    (scores, ranking) =>
-      EffectArray.sort(ranking, byScore).reduce(
-        (sum, { skill }, index) =>
-          HashMap.set(
-            sum,
-            skill.name,
-            Option.getOrElse(HashMap.get(sum, skill.name), () => 0) + 1 / (fusionK + index + 1),
-          ),
-        scores,
-      ),
-    HashMap.empty<string, number>(),
-  );
+  const fused = fuseRanks({
+    lists: [byWords(catalog, query), byMeaning].map((ranking) =>
+      EffectArray.sort(ranking, byScore).map(({ skill }) => skill.name),
+    ),
+  });
   return EffectArray.sort(
     catalog.flatMap((skill) =>
-      Option.toArray(Option.map(HashMap.get(fused, skill.name), (score) => ({ skill, score }))),
+      Option.toArray(
+        Option.map(MutableHashMap.get(fused, skill.name), (score) => ({ skill, score })),
+      ),
     ),
     byScore,
   )
