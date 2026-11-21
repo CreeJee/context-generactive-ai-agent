@@ -1,9 +1,12 @@
 import { Effect, FileSystem, Path } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { expect } from "vite-plus/test";
-import { CardAgent, CardVerifier } from "../src/kanban/card-agent.ts";
+import { CardAgent, CardVerdict, CardVerifier } from "../src/kanban/card-agent.ts";
+import { VerdictFailure } from "../src/kanban/failures.ts";
+import type { ScriptedInvocation, ScriptedTurn } from "../src/testing/scripted-model.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
-import { selectTestModel } from "./support/provider.ts";
+import { defaultTestResponder, selectTestModel } from "./support/provider.ts";
 import { TestEnv, testAgent } from "./support/test-env.ts";
 
 /** A project of its own, and the folder its skill catalog is read from. */
@@ -87,6 +90,7 @@ testAgent({ testProvider: {} })("kanban card agents read project skills", (it) =
         const child = yield* subagentSince(before);
         expect(child?.system.join("\n")).toContain("find them with find_skill");
         expect(child?.toolNames).toContain("read_skill");
+        expect(child?.toolNames).toContain("find_skill");
       }),
   );
 
@@ -111,48 +115,170 @@ testAgent({ testProvider: {} })("kanban card agents read project skills", (it) =
         register: () => Effect.void,
       });
       const child = yield* subagentSince(before);
-      // Skills are not listed any more: the model finds them with find_skill (decisions.md),
-      // which the card's tool list does not include, so the catalog line stays out either way.
+      // Skills are not listed any more: the model finds them with find_skill (decisions.md), so
+      // the catalog line stays out either way.
       expect(child?.system.join("\n")).not.toContain("- review (project): Review the work.");
       expect(child?.toolNames).toContain("read_skill");
+      expect(child?.toolNames).toContain("find_skill");
     }),
   );
 
-  it.effect("a verifier gets read_skill and still no write tools, with and without skills", () =>
+  it.effect("a verifier gets the card agent's tools, find_skill and record_card_verdict", () =>
     Effect.gen(function* () {
       const env = yield* TestEnv;
-      const noWrite = ["write_file", "edit_file", "delete_file", "save_code_skill"];
       const run = Effect.fnUntraced(function* (skill: "none" | "sh" | "plain") {
         const { project, skills } = yield* freshProject;
         if (skill === "sh") yield* writeSkill(skills);
         if (skill === "plain") yield* writeReadonlySkill(skills);
         yield* selectTestModel();
         const session = (yield* (yield* Sessions).create(project.id)).id;
-        const before = env.provider?.invocations.length ?? 0;
+        const worktree = { toolRoot: project.root, deniedRoots: [] };
+        const beforeCard = env.provider?.invocations.length ?? 0;
+        yield* (yield* CardAgent).run({
+          sessionId: session,
+          projectId: project.id,
+          goalInstanceId: `goal-${skill}`,
+          card,
+          attemptNo: 1,
+          worktree,
+          continuation: false,
+          notes: [],
+          generation: 1,
+          register: () => Effect.void,
+        });
+        const worker = yield* subagentSince(beforeCard);
+        const beforeVerifier = env.provider?.invocations.length ?? 0;
         yield* (yield* CardVerifier).verify({
           sessionId: session,
           projectId: project.id,
-          goalInstanceId: "goal",
+          goalInstanceId: `goal-${skill}`,
           card,
-          worktree: { toolRoot: project.root, deniedRoots: [] },
+          worktree,
           report: "Named every helper file.",
         });
-        return yield* subagentSince(before);
+        return { worker, verifier: yield* subagentSince(beforeVerifier) };
       });
-      const without = yield* run("none");
-      expect(without?.toolNames).toContain("read_skill");
-      noWrite.forEach((tool) => expect(without?.toolNames).not.toContain(tool));
-      const withSkill = yield* run("plain");
-      // Skills are not listed any more: the model finds them with find_skill (decisions.md).
-      expect(withSkill?.system.join("\n")).not.toContain(
-        "- glossary (project): Explain the project's words.",
+      yield* Effect.forEach(["none", "plain", "sh"] as const, (skill) =>
+        Effect.gen(function* () {
+          const { worker, verifier } = yield* run(skill);
+          const given = verifier?.toolNames ?? [];
+          expect(worker?.toolNames.length).toBeGreaterThan(0);
+          worker?.toolNames.forEach((tool) => expect(given).toContain(tool));
+          // save_code_skill is lazy: the model sees it only after asking for it, so it is not listed.
+          [
+            "find_skill",
+            "run_command",
+            "save_project_commands",
+            "write_file",
+            "edit_file",
+            "record_card_verdict",
+          ].forEach((tool) => expect(given).toContain(tool));
+          // Skills are not listed any more: the model finds them with find_skill (decisions.md).
+          const system = verifier?.system.join("\n");
+          expect(system).not.toContain("- review (project): Review the work.");
+          expect(system).not.toContain("- glossary (project): Explain the project's words.");
+        }),
       );
-      expect(withSkill?.toolNames).toContain("read_skill");
-      noWrite.forEach((tool) => expect(withSkill?.toolNames).not.toContain(tool));
-      const withShSkill = yield* run("sh");
-      expect(withShSkill?.system.join("\n")).not.toContain("- review (project): Review the work.");
-      expect(withShSkill?.toolNames).toContain("read_skill");
-      noWrite.forEach((tool) => expect(withShSkill?.toolNames).not.toContain(tool));
     }),
   );
 });
+
+const git = (cwd: string, ...args: ReadonlyArray<string>) =>
+  ChildProcessSpawner.ChildProcessSpawner.use((spawner) =>
+    spawner.string(ChildProcess.make("git", args, { cwd })),
+  );
+
+/** A verifier that changes `tracked.txt` as it passes the card, or only passes it. */
+const verifierTurn =
+  (edit: boolean) =>
+  (invocation: ScriptedInvocation): ScriptedTurn => {
+    if (!invocation.system.join("\n").includes("You verify one finished card"))
+      return defaultTestResponder(invocation);
+    const last = invocation.history.at(-1);
+    if (last?.role !== "tool")
+      return edit
+        ? {
+            toolCalls: [
+              {
+                id: "edit-1",
+                name: "edit_file",
+                arguments: JSON.stringify({
+                  path: "tracked.txt",
+                  oldText: "before",
+                  newText: "after",
+                }),
+              },
+            ],
+          }
+        : { toolCalls: [verdictCall] };
+    return last.toolCallId === "edit-1" ? { toolCalls: [verdictCall] } : { text: "Verified." };
+  };
+
+const verdictCall = {
+  id: "verdict-1",
+  name: "record_card_verdict",
+  arguments: JSON.stringify({ passed: true, evidence: ["Named every helper file."] }),
+};
+
+/** A committed repository with one tracked file, and a verifier of the card run in it. */
+const verifiedInRepository = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const { project } = yield* freshProject;
+  yield* fs.writeFileString(path.join(project.root, "tracked.txt"), "before\n");
+  yield* git(project.root, "init", "-q");
+  yield* git(project.root, "add", "tracked.txt");
+  yield* git(
+    project.root,
+    "-c",
+    "user.name=t",
+    "-c",
+    "user.email=t@example.com",
+    "commit",
+    "-q",
+    "-m",
+    "work",
+  );
+  yield* selectTestModel();
+  const session = (yield* (yield* Sessions).create(project.id)).id;
+  return yield* (yield* CardVerifier).verify({
+    sessionId: session,
+    projectId: project.id,
+    goalInstanceId: "goal-changed",
+    card,
+    worktree: { toolRoot: project.root, deniedRoots: [] },
+    report: "Named every helper file.",
+  });
+});
+
+testAgent({ testProvider: { responder: verifierTurn(true) } })(
+  "a verifier that changes the work it judges",
+  (it) => {
+    it.effect("does not pass it, and names the files it changed", () =>
+      Effect.gen(function* () {
+        const verdict = yield* verifiedInRepository;
+        expect(
+          CardVerdict.$match(verdict, {
+            Passed: () => "passed",
+            Failed: ({ failure }) =>
+              VerdictFailure.guards.ChangedWork(failure) ? failure.files : "other",
+          }),
+        ).toEqual(["tracked.txt"]);
+      }),
+    );
+  },
+);
+
+testAgent({ testProvider: { responder: verifierTurn(false) } })(
+  "a verifier that leaves the work as it is",
+  (it) => {
+    it.effect("passes it as it recorded", () =>
+      Effect.gen(function* () {
+        const verdict = yield* verifiedInRepository;
+        expect(
+          CardVerdict.$match(verdict, { Passed: () => "passed", Failed: () => "failed" }),
+        ).toBe("passed");
+      }),
+    );
+  },
+);

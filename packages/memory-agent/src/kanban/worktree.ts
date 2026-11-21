@@ -213,6 +213,7 @@ export class CardWorktreeFailed extends Schema.TaggedError<
     "list",
     "remove_goal_folder",
     "prune",
+    "changes",
   ]),
   reason: CardWorktreeFailedReason,
   cause: Schema.optional(Schema.Defect()),
@@ -362,6 +363,20 @@ export interface CardWorktreesApi extends CardWorkspace {
   ) => Effect.Effect<readonly string[], CardWorktreeFailed>;
   /** Makes the project's repository forget worktrees whose folders are gone (`git worktree prune`). */
   readonly prune: (projectRoot: string) => Effect.Effect<void, CardWorktreeFailed>;
+  /**
+   * The tracked files of the checkout at `root` that differ from its HEAD, each with its change as
+   * a binary-safe diff. Files git does not track are not in it. Two readings differ where a file's
+   * content changed in between.
+   */
+  readonly trackedChanges: (
+    root: string,
+  ) => Effect.Effect<readonly TrackedChange[], CardWorktreeFailed>;
+}
+
+/** A tracked file that differs from HEAD: its path from the repository top and its diff. */
+export interface TrackedChange {
+  readonly file: string;
+  readonly diff: string;
 }
 
 /** Card worktrees and Goal branches of kanban execution. Owner process only. */

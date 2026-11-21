@@ -1,8 +1,10 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
+  Array as Arr,
   Context,
   Effect,
   FileSystem,
+  HashMap,
   HashSet,
   Iterable,
   Layer,
@@ -13,7 +15,8 @@ import {
   Schema,
 } from "effect";
 import { McpServers, mcpInstructionsForMode } from "../mcp/servers.ts";
-import { SecureRandom } from "effect/crypto";
+import { Digest, SecureRandom } from "effect/crypto";
+import { Hex } from "effect/encoding";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import type { AgentRole } from "../providers/contracts.ts";
 import { ProjectCommands } from "../projects/commands.ts";
@@ -30,7 +33,7 @@ import { SkillTools, type SkillToolset } from "../tools/skills.ts";
 import type { GoalArtifact, PlanStep } from "../workflow/workflow.ts";
 import { referencedRules, type RulePhase, type WorkflowRule } from "../workflow/rules.ts";
 import { projectWorkflowRules } from "../workflow/sources.ts";
-import { cardAgentToolNames, verifierToolNames } from "../workflow/card-capabilities.ts";
+import { cardToolNames } from "../workflow/card-capabilities.ts";
 import {
   CardAgent,
   CardAgentOutcome,
@@ -45,7 +48,7 @@ import {
   type GoalVerification,
   type OutcomeVerification,
 } from "./card-agent.ts";
-import { cardToolProject, type CardWorktree } from "./worktree.ts";
+import { cardToolProject, CardWorktrees, type CardWorktree } from "./worktree.ts";
 import { CardFailure, VerdictFailure, type AgentFailureCode } from "./failures.ts";
 import { fallbackLogged, logFailure } from "../runtime/logged-failures.ts";
 import { PlanNodes } from "../workflow/plan-nodes.ts";
@@ -63,27 +66,30 @@ const cardInstructions = [
   "You carry out one card of a kanban board. Your file tools and code skills are rooted at the folder this card works in.",
   "- Do the card's work in that folder and nowhere else. Other cards may run at the same time in folders of their own.",
   '- Leave your changes in the files and do not commit, branch, merge or otherwise change git state; the owner handles that after you finish. Read-only git commands (git status, git diff, git log, git show) are fine with run_command and access "read".',
-  "- When a check the card needs (tests, a build, a lint) has no code skill yet, save one with save_code_skill and run it: the card's verifier cannot save skills and runs the one you saved.",
+  "- Run the checks the card needs (tests, a build, a lint) with the lines of the project's command list: call run_command with access \"write\". When the list lacks a check, find its command and add it with save_project_commands, then run it. The card's verifier reads the same list and runs checks the same way. Save a code skill only for a program of several steps that one list line cannot hold.",
   "- Follow the workflow rules listed with the card, and gather the evidence each one asks for.",
   "- When the card is done, reply with a short report of what you changed and how you checked it against the acceptance criteria.",
   "- If you cannot finish, say exactly what is missing; do not claim the card is done.",
 ].join("\n");
 
 const verifierInstructions = [
-  "You verify one finished card of a kanban board. Your tools are rooted at the folder holding the card's work; read its files and run its checks, but change nothing.",
-  "- Check every acceptance criterion, every piece of required evidence and the evidence each listed workflow rule asks for. When a criterion depends on tests or a build, run them with the code skill that runs them; when no saved skill covers a check, report it as not run, since you cannot save skills.",
+  "You verify one finished card of a kanban board. Your tools are rooted at the folder holding the card's work; read its files and run its checks.",
+  '- Check every acceptance criterion, every piece of required evidence and the evidence each listed workflow rule asks for. When a criterion depends on tests or a build, run them with the lines of the project\'s command list (run_command with access "write") or with the code skill that runs them; when the list lacks a check, find its command, add it with save_project_commands and run it.',
+  "- Do not change the files of the work you judge. When something needs fixing, do not pass the work, and give what must be fixed as the reason. If you change them, your verdict does not pass.",
   "- Call record_card_verdict exactly once with your verdict before your final message.",
 ].join("\n");
 
 const goalVerifierInstructions = [
-  "You verify a whole Goal branch after every card of its kanban board was integrated, before it merges into the user's branch. Your tools are rooted at a checkout of that branch; read its files and run its checks, but change nothing.",
-  "- Check that the cards together meet the Goal's outcomes and constraints. Run the project's tests or builds with the code skills that run them; when no saved skill covers a check, report it as not run, since you cannot save skills.",
+  "You verify a whole Goal branch after every card of its kanban board was integrated, before it merges into the user's branch. Your tools are rooted at a checkout of that branch; read its files and run its checks.",
+  "- Check that the cards together meet the Goal's outcomes and constraints. Run the project's tests or builds with the lines of the project's command list (run_command with access \"write\") or with the code skill that runs them; when the list lacks a check, find its command, add it with save_project_commands and run it.",
+  "- Do not change the files of the work you judge. When something needs fixing, do not pass the work, and give what must be fixed as the reason. If you change them, your verdict does not pass.",
   "- Call record_card_verdict exactly once with your verdict before your final message.",
 ].join("\n");
 
 const outcomeVerifierInstructions = [
-  "You check whether one outcome of a Goal is met, now that every card serving it is done. Your tools are rooted at the Goal's work; read its files and run its checks, but change nothing.",
-  "- Judge the outcome itself, not only the cards' acceptance criteria: the cards are how the outcome was meant to be reached. When the outcome depends on tests or a build, run them with the code skill that runs them; when no saved skill covers a check, report it as not run, since you cannot save skills.",
+  "You check whether one outcome of a Goal is met, now that every card serving it is done. Your tools are rooted at the Goal's work; read its files and run its checks.",
+  "- Judge the outcome itself, not only the cards' acceptance criteria: the cards are how the outcome was meant to be reached. When the outcome depends on tests or a build, run them with the lines of the project's command list (run_command with access \"write\") or with the code skill that runs them; when the list lacks a check, find its command, add it with save_project_commands and run it.",
+  "- Do not change the files of the work you judge. When something needs fixing, do not pass the work, and give what must be fixed as the reason. If you change them, your verdict does not pass.",
   "- Call record_card_verdict exactly once before your final message: passed when the outcome is met, otherwise not passed with what is missing as the reason.",
 ].join("\n");
 
@@ -92,7 +98,7 @@ const conflictResolverInstructions = [
   "- Resolve every conflict block (the lines between <<<<<<<, ======= and >>>>>>>) so the Goal's work and the user's branch's changes both stay. When they cannot both stay, keep what the user's branch does and adapt the Goal's change to it.",
   "- Remove every conflict marker, and change only what the resolution needs.",
   '- Do not commit, abort the merge or otherwise change git state; the owner commits the merge after you finish. Read-only git commands (git status, git diff, git log, git show) are fine with run_command and access "read".',
-  "- When the project's checks (tests, a build, a lint) have code skills that cover the files you changed, run them.",
+  "- When the project's command list has checks (tests, a build, a lint) that cover the files you changed, run them with run_command.",
   "- Reply with a short report of how you resolved each file. If you cannot resolve one, say why; do not claim it is resolved.",
 ].join("\n");
 
@@ -195,6 +201,8 @@ const make = Effect.gen(function* () {
   const mcpServers = yield* McpServers;
   const skillTools = yield* SkillTools;
   const crypto = yield* SecureRandom.SecureRandom;
+  const digest = yield* Digest.Digest;
+  const worktrees = yield* CardWorktrees;
   const workflows = yield* Workflows;
   const planNodes = yield* PlanNodes;
   const ruleContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
@@ -277,7 +285,7 @@ const make = Effect.gen(function* () {
     const project = yield* projects.get(projectId);
     const selection = yield* active.selectedFor(role);
     const carded = cardToolProject(project, worktree);
-    // Skills as the chat offers them: a catalog of the card's own folder, or none.
+    // Skills as the chat offers them: find_skill and read_skill over the catalog of the card's folder.
     const skills: SkillToolset = yield* skillTools.toolsFor(carded, sessionId);
     return {
       project: carded,
@@ -305,7 +313,7 @@ const make = Effect.gen(function* () {
           }),
         ),
     });
-  /** The tools a working subagent gets in `project`: the card agent's, which the planner was told. */
+  /** The tools a card agent and a verifier get in `project`: the ones the planner was told. */
   const workTools = (
     project: Project,
     projectId: string,
@@ -313,7 +321,7 @@ const make = Effect.gen(function* () {
     mcp: { readonly tools: readonly RunTool[] },
     skills: SkillToolset,
   ) => [
-    ...allowed(cardAgentToolNames)([
+    ...allowed(cardToolNames)([
       ...fileTools.toolsFor(project),
       ...outsideTools.toolsFor(project),
       ...approvedTools.toolsFor(project, sessionId, "gate"),
@@ -384,7 +392,41 @@ const make = Effect.gen(function* () {
     ),
   });
 
-  /** One read-only verifier run that must record a verdict. */
+  /**
+   * The tracked files of the checkout at `root` that differ from its HEAD, each with a digest of
+   * its change; none when git could not tell, which the logs say.
+   */
+  const trackedStateAt = (root: string) =>
+    worktrees.trackedChanges(root).pipe(
+      Effect.flatMap(
+        Effect.forEach(({ file, diff }) =>
+          Effect.map(
+            digest.digest(Digest.sha256, new TextEncoder().encode(diff)),
+            (hash) => [file, Hex.encode(hash)] as const,
+          ),
+        ),
+      ),
+      Effect.asSome,
+      Effect.catch((error) =>
+        Effect.as(logFailure("Verifier's tracked changes unread")(error), Option.none()),
+      ),
+    );
+
+  /** The files whose change differs between two readings, in either one. */
+  const changedBetween = (
+    before: readonly (readonly [string, string])[],
+    after: readonly (readonly [string, string])[],
+  ) => {
+    const was = HashMap.fromIterable(before);
+    const now = HashMap.fromIterable(after);
+    return Arr.dedupe([...before, ...after].map(([file]) => file)).filter(
+      (file) =>
+        Option.getOrUndefined(HashMap.get(was, file)) !==
+        Option.getOrUndefined(HashMap.get(now, file)),
+    );
+  };
+
+  /** One verifier run that must record a verdict, and does not pass work it changed. */
   const runVerifier = Effect.fnUntraced(
     function* (input: {
       readonly sessionId: string;
@@ -413,16 +455,11 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const recorder = yield* verdictRecorder;
           const tools: RunTool[] = [
-            ...allowed(verifierToolNames)([
-              ...fileTools.toolsFor(project),
-              ...approvedTools.toolsFor(project, input.sessionId, "gate"),
-              ...evidenceTools(input.projectId, input.sessionId),
-              ...skills.tools,
-            ]),
-            ...mcp.tools,
+            ...workTools(project, input.projectId, input.sessionId, mcp, skills),
             recorder.runTool,
           ];
           const origin = yield* planOrigin(input.sessionId);
+          const before = yield* trackedStateAt(project.root);
           const outcome = yield* subagents.runAttempt(
             {
               project,
@@ -444,13 +481,22 @@ const make = Effect.gen(function* () {
             },
             () => Effect.void,
           );
-          return Option.getOrElse(yield* recorder.verdict, () =>
-            rejected(
-              outcome?.status === "completed"
-                ? VerdictFailure.cases.NoVerdict.make({})
-                : VerdictFailure.cases.NotFinished.make({}),
-            ),
-          );
+          const after = yield* trackedStateAt(project.root);
+          // The card's work was committed before this run, so what the verifier changed would not
+          // be integrated: a verdict that passes it would pass something else than what merges.
+          const changed = Option.match(Option.all([before, after]), {
+            onNone: () => [],
+            onSome: ([was, now]) => changedBetween(was, now),
+          });
+          return Arr.isReadonlyArrayNonEmpty(changed)
+            ? rejected(VerdictFailure.cases.ChangedWork.make({ files: changed }))
+            : Option.getOrElse(yield* recorder.verdict, () =>
+                rejected(
+                  outcome?.status === "completed"
+                    ? VerdictFailure.cases.NoVerdict.make({})
+                    : VerdictFailure.cases.NotFinished.make({}),
+                ),
+              );
         });
       return yield* Option.match(selection, {
         onNone: () =>

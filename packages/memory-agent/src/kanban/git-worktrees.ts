@@ -1310,6 +1310,23 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
       const { repository } = yield* repositoryOf("prune", projectRoot);
       yield* expect("prune", repository, ["worktree", "prune"]);
     }),
+
+    trackedChanges: Effect.fn("CardWorktrees.trackedChanges")(function* (root: string) {
+      const diff = ["diff", "HEAD", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames"];
+      const raw = (args: ReadonlyArray<string>) =>
+        Effect.flatMap(run("changes", root, [...diff, ...args]), (output) =>
+          output.exitCode === 0
+            ? Effect.succeed(output.stdout)
+            : fail("changes", reasons.GitFailed.make({ exitCode: output.exitCode })),
+        );
+      const files = nulSeparated(yield* raw(["--name-only", "-z"]));
+      return yield* Effect.forEach(files, (file) =>
+        Effect.map(raw(["--binary", "--", `:(top,literal)${file}`]), (text) => ({
+          file,
+          diff: text,
+        })),
+      );
+    }),
   });
 });
 

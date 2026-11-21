@@ -5654,3 +5654,14 @@
 - 128,000 상한(`leaveOutAtMost`)의 이유는 `compaction.ts`의 doc comment대로다. 한 run이 앞 요청에 이어 붙이므로 큰 창에서 매 step 수십만 토큰을 다시 보내지 않게 하는 상한이다. 이 상한을 결정 기록에 처음 적는다.
 - 한계: `leaveOutAtTokens`는 메시지 추정치 기준이고 `usedTokens`는 공급자가 센 전체(지침·도구 포함)라 경고가 조금 일찍 켜진다.
 - 확인: `apps/agent/app/entry/chat/context-meter.browser.tsx`(창 1,000,000, 생략 시작 128,000, 사용 110,000이면 경고 색), `packages/memory-agent/tests/compaction/agent-chat.test.ts`.
+
+## 검증자는 카드 에이전트와 같은 도구를 받고, 검사는 프로젝트 명령으로 돌린다 (2026-11-21)
+
+- 계기: 카드 지침은 검사(테스트, 빌드, lint)에 코드 스킬이 없으면 `save_code_skill`로 저장하라고 했다. 그런데 권한 모드가 `ask`가 아니면 모든 단계가 프로젝트 명령 목록의 명령인 sh 스킬을 `project_command`로 거부한다(`skills/code-skills.ts`). 검증자는 `run_command`도 스킬 저장도 없어서, 테스트가 목록에 있는 `vp test`뿐이면 그 검사를 돌릴 길이 없어 "실행 안 됨"으로 남을 수 있었다. 카드와 검증자의 스킬 지침은 `find_skill`을 말했지만 도구 목록에서 걸러졌다.
+- 결정(사용자: "검증자가 실행자보다 작은 권한을 가질 이유는 없다"):
+  - 카드 에이전트와 검증자는 같은 도구 이름 집합(`cardToolNames`, `find_skill` 포함)을 받는다. 검증자는 여기에 `record_card_verdict`만 더 받는다. `verifierToolNames`는 없앴다.
+  - 검사는 프로젝트 명령 목록의 줄을 `run_command`(access "write")로 돌린다. 목록에 없는 검사 명령은 `save_project_commands`로 목록에 넣는다. 코드 스킬은 목록 한 줄로 담을 수 없는 여러 단계 프로그램에만 쓴다. 그래서 `project_command` 거부와 부딪히지 않는다(그 규칙은 바꾸지 않았다).
+  - 검증자가 판정 대상 작업을 고치면 그 판정은 통과가 아니다. 카드 작업은 검증 전에 카드 브랜치에 commit되므로(`card-queue.ts`의 `commitWork`) 검증자가 고친 내용은 통합되지 않고, 고친 채로 통과하면 통과한 것과 합쳐지는 것이 달라진다. owner가 검증 전후의 추적 파일 변경(`git diff HEAD`의 파일별 해시)을 비교해 달라졌으면 판정과 관계없이 `VerdictFailure.ChangedWork`(고친 파일 이름을 담는다)로 처리한다. 추적하지 않는 새 파일은 비교하지 않는다(테스트가 만드는 산출물 때문이다). 고친 내용은 되돌리지 않는다(프로젝트 폴더 자체에서 도는 경우 사용자 변경과 섞여 있을 수 있다). git을 읽지 못하면 기록한 판정을 쓰고 로그만 남긴다.
+- 대체하는 결정: "카드 에이전트와 검증자도 스킬 카탈로그와 read_skill을 받는다 (2026-11-13)"의 "검증자는 쓰기 도구가 없다", "스킬은 목록으로 보이지 않고 find_skill로 찾는다 (2026-11-13)"의 "카드 에이전트와 검증자는 스킬 도구가 없고 `run_skill`만 쓴다", "호스트 명령은 접근 수준을 정해 `run_command`로 실행한다 (2026-11-14)"의 "검증자는 받지 않는다".
+- 열어 둔 것: 검증자의 `run_command` 쓰기 호출도 카드 에이전트처럼 권한 모드에 따라 승인을 묻는다. `ask` 모드에서는 검증마다 승인 창이 늘 수 있다. 검사 산출물이 추적 파일을 바꾸는 프로젝트(스냅샷을 다시 쓰는 테스트)는 `ChangedWork`로 실패할 수 있으므로, 그런 사례가 보이면 비교에서 뺄 규칙을 따로 정한다.
+- 확인: `tests/kanban-skills.test.ts`(검증자 도구가 카드 에이전트의 도구를 모두 포함하고 `find_skill`·`run_command`·`record_card_verdict`가 있음, 실제 검증자 경로에서 추적 파일을 고친 판정은 `ChangedWork`로 통과하지 않고 고치지 않으면 기록한 대로 통과). `src/kanban/kanban-flow.test.ts`는 검증자를 스크립트 서비스로 바꿔 `runVerifier`를 거치지 않으므로 만들지 않았다.
