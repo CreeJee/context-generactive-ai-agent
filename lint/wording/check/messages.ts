@@ -1,5 +1,6 @@
 import { extractMessages } from "@lingui/native-tools";
 import { Array as Arr, Effect, Result, Schema } from "effect";
+import { Function as EffectFunction } from "effect";
 
 import { linguiCoreMacroModules, linguiJsxMacroModules } from "../policy.ts";
 
@@ -15,13 +16,13 @@ export interface Message {
 }
 
 /** The file could not be read for messages, so nothing in it was checked. */
-export class MessagesUnreadable extends Schema.TaggedError<MessagesUnreadable>()(
-  "MessagesUnreadable",
-  {
-    file: Schema.String,
-    message: Schema.String,
-  },
-) {}
+export class MessagesUnreadable extends Schema.TaggedError<
+  MessagesUnreadable,
+  { readonly brand: unique symbol }
+>()("MessagesUnreadable", {
+  file: Schema.String,
+  message: Schema.String,
+}) {}
 
 const hangul = /\p{Script=Hangul}/u;
 
@@ -69,7 +70,10 @@ const fieldLines = (lines: ReadonlyArray<string>, at: number): ReadonlyArray<str
  * where it is written. A finding points at the `msgstr` line in the catalog. The header and obsolete
  * (`#~`) entries are skipped.
  */
-export function catalogMessages(file: string, source: string): ReadonlyArray<Message> {
+export const catalogMessages: {
+  (source: string): (file: string) => ReturnType<typeof catalogMessagesBody>;
+} & typeof catalogMessagesBody = EffectFunction.dual(2, catalogMessagesBody);
+function catalogMessagesBody(file: string, source: string): ReadonlyArray<Message> {
   const lines = source.split("\n");
   // An entry starts at a non-blank line after a blank one (or the first line).
   const starts = Arr.filterMap(lines, (line, index) =>
@@ -108,7 +112,7 @@ export const sourceMessages = Effect.fnUntraced(function* (
           jsxPackage: [...linguiJsxMacroModules],
         },
       }),
-    catch: (cause) => new MessagesUnreadable({ file, message: String(cause) }),
+    catch: (cause) => MessagesUnreadable.make({ file, message: String(cause) }),
   });
   return Arr.filterMap(extracted.messages, ({ message, origin }) => {
     // The extractor counts columns from 1; lint locations count them from 0.

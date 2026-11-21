@@ -1,5 +1,6 @@
 import { Effect } from "effect";
-import { describe, expect, it } from "vite-plus/test";
+import { it } from "@effect/vitest";
+import { describe, expect } from "vite-plus/test";
 
 import { catalogMessages, sourceMessages } from "./messages.ts";
 
@@ -44,18 +45,20 @@ describe("catalogMessages", () => {
 });
 
 describe("sourceMessages", () => {
-  it("reads the messages of every Lingui macro, runtime macro included", async () => {
-    const source = [
-      'import { t } from "@lingui/core/macro";',
-      'import { msg } from "@lingui/core/runtime-macro";',
-      "export const a = (name: string) => t`${name}을 열었습니다.`;",
-      "export const b = msg`폴더를 찾을 수 없습니다: ${{ cwd: process.cwd() }}`;",
-      'export const c = "그대로 둔 문자열";',
-    ].join("\n");
-    const messages = await Effect.runPromise(sourceMessages("server/a.ts", source));
-    expect(messages).toEqual([
-      { text: "X을 열었습니다.", where: "server/a.ts:3:37", line: 3, column: 36 },
-      { text: "폴더를 찾을 수 없습니다: X", where: "server/a.ts:4:18", line: 4, column: 17 },
-    ]);
-  });
+  it.effect("reads the messages of every Lingui macro, runtime macro included", () =>
+    Effect.gen(function* () {
+      const source = [
+        'import { t } from "@lingui/core/macro";',
+        'import { msg } from "@lingui/core/runtime-macro";',
+        "export const a = (name: string) => t`${name}을 열었습니다.`;",
+        "export const b = msg`폴더를 찾을 수 없습니다: ${{ cwd: process.cwd() }}`;",
+        'export const c = "그대로 둔 문자열";',
+      ].join("\n");
+      const messages = yield* sourceMessages("server/a.ts", source);
+      expect(messages).toEqual([
+        { text: "X을 열었습니다.", where: "server/a.ts:3:37", line: 3, column: 36 },
+        { text: "폴더를 찾을 수 없습니다: X", where: "server/a.ts:4:18", line: 4, column: 17 },
+      ]);
+    }),
+  );
 });

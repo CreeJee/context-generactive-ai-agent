@@ -1,4 +1,3 @@
-import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer";
 import { Cause, Console, Effect, Exit, Match, Option, Predicate, Stream } from "effect";
 import { DevToolsSchema, DevToolsServer } from "effect/devtools";
 import {
@@ -42,7 +41,8 @@ const toRecord = (request: DevToolsSchema.Request.WithoutPing): ReadonlyArray<Sp
     MetricsSnapshot: (): ReadonlyArray<SpanRecord> => [],
   });
 
-/** Effect devtools socket server for development: hands every ended span to the span writer. */
+/** Effect devtools server for development, on the socket server the caller provides: hands every
+ * ended span to the span writer. */
 export const devtoolsCollector = (port: number) =>
   Effect.gen(function* () {
     const { file, write } = yield* SpanWriter;
@@ -50,4 +50,4 @@ export const devtoolsCollector = (port: number) =>
     return yield* DevToolsServer.run((client) =>
       Stream.fromQueue(client.queue).pipe(Stream.runForEach((request) => write(toRecord(request)))),
     );
-  }).pipe(Effect.provide(NodeSocketServer.layerWebSocket({ port })));
+  });

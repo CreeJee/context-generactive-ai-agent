@@ -11,6 +11,7 @@ import {
   Schema,
   Stream,
 } from "effect";
+import { Function as EffectFunction } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 /**
@@ -58,7 +59,7 @@ export const parseProcesses = (text: string): ReadonlyArray<SampledProcess> =>
   });
 
 /** `rootPid` and every process under it, however deep; empty when the root is gone. */
-export const processTree = (
+const processTreeBody = (
   processes: ReadonlyArray<SampledProcess>,
   rootPid: number,
 ): ReadonlyArray<SampledProcess> => {
@@ -86,6 +87,12 @@ export const processTree = (
     HashSet.empty(),
   );
 };
+
+export const processTree: {
+  (
+    rootPid: number,
+  ): (processes: ReadonlyArray<SampledProcess>) => ReturnType<typeof processTreeBody>;
+} & typeof processTreeBody = EffectFunction.dual(2, processTreeBody);
 
 /** Every process of the machine, read with one `ps`. */
 const listProcesses = Effect.gen(function* () {

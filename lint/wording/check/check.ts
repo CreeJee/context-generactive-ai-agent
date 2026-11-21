@@ -1,4 +1,5 @@
 import { Array as Arr, Effect, Record as Rec, RegExp as Re, Result } from "effect";
+import { Function as EffectFunction } from "effect";
 
 import type { Message } from "./messages.ts";
 import { Morphemes } from "./morphemes.ts";
@@ -40,9 +41,14 @@ function mentions(text: string, term: string): boolean {
 }
 
 /** Spellings in `text` that the glossary replaces with its chosen term. */
-export function glossaryViolations(
+export const glossaryViolations: {
+  (
+    entries: Readonly<Record<string, GlossaryEntry>>,
+  ): (text: string) => ReturnType<typeof glossaryViolationsBody>;
+} & typeof glossaryViolationsBody = EffectFunction.dual(2, glossaryViolationsBody);
+function glossaryViolationsBody(
   text: string,
-  entries: Readonly<Record<string, GlossaryEntry>> = glossary,
+  entries: Readonly<Record<string, GlossaryEntry>>,
 ): ReadonlyArray<Violation> {
   return Arr.flatMap(Rec.values(entries), ({ use, avoid }) =>
     Arr.filterMap(avoid, (term) =>
@@ -87,7 +93,10 @@ function sentenceEndings(morphemes: ReadonlyArray<Morpheme>): ReadonlyArray<Sent
  * Sentences whose ending is outside the register of their mood, and labels (wording with no
  * sentence ending) that end with a full stop.
  */
-export function endingViolations(
+export const endingViolations: {
+  (morphemes: ReadonlyArray<Morpheme>): (text: string) => ReturnType<typeof endingViolationsBody>;
+} & typeof endingViolationsBody = EffectFunction.dual(2, endingViolationsBody);
+function endingViolationsBody(
   text: string,
   morphemes: ReadonlyArray<Morpheme>,
 ): ReadonlyArray<Violation> {
@@ -116,7 +125,7 @@ export const checkMessages = Effect.fnUntraced(function* <Place extends Message>
     Arr.map(
       [
         ...phraseViolations(message.text),
-        ...glossaryViolations(message.text),
+        ...glossaryViolations(message.text, glossary),
         ...endingViolations(message.text, morphemes.tokenize(message.text)),
       ],
       (violation) => ({ ...violation, ...message }),

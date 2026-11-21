@@ -2,11 +2,12 @@
 // endings), which Lingui does not. It reads the catalogs `lingui extract` writes, and for the Claude
 // Code hook the messages of an edited source file. Which files it reads comes from `../policy.ts`.
 // Runs from the commit hook, the Claude Code PostToolUse hook, and by hand.
-import { matchesGlob } from "node:path";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Array as Arr, Console, Effect, FileSystem, Path, Schema, Stdio, Stream } from "effect";
 import { Argument, Command } from "effect/cli";
+// Effect Path has no glob matcher; minimatch is what Node's `path.matchesGlob` runs.
+import { minimatch } from "minimatch";
 
 import { wordingCatalogs, wordingExempt, wordingScope } from "../policy.ts";
 import { checkMessages } from "./check.ts";
@@ -16,7 +17,10 @@ import type { Message } from "./messages.ts";
 import { morphemesLive } from "./morphemes.ts";
 
 /** Some wording breaks the rules; the findings are already printed. */
-class WordingViolations extends Schema.TaggedError<WordingViolations>()("WordingViolations", {
+class WordingViolations extends Schema.TaggedError<
+  WordingViolations,
+  { readonly brand: unique symbol }
+>()("WordingViolations", {
   count: Schema.Int,
 }) {
   override get message() {
@@ -25,7 +29,7 @@ class WordingViolations extends Schema.TaggedError<WordingViolations>()("Wording
 }
 
 const matchesAny = (file: string, globs: ReadonlyArray<string>) =>
-  globs.some((glob) => matchesGlob(file, glob));
+  globs.some((glob) => minimatch(file, glob));
 
 /** Which messages `file` (a path from the repository root) holds for the check, if any. */
 const messagesOf = Effect.fnUntraced(function* (file: string) {
@@ -51,7 +55,11 @@ const findingsOf = Effect.fnUntraced(function* (files: ReadonlyArray<string>) {
     ),
   );
   if (Arr.isReadonlyArrayEmpty(messages)) return Arr.empty<Finding>();
-  return yield* checkMessages(messages).pipe(Effect.provide(morphemesLive));
+  return yield* checkMessages(messages).pipe(
+    // Kiwi's layer is built here, the one place that knows some file holds wording.
+    // @effect-diagnostics-next-line strictEffectProvide:off
+    Effect.provide(morphemesLive),
+  );
 });
 
 const formatFinding = ({ where, text, rule, message }: Finding) =>
@@ -73,7 +81,7 @@ const check = Command.make(
       discard: true,
     });
     if (Arr.isReadonlyArrayNonEmpty(findings)) {
-      return yield* new WordingViolations({ count: findings.length });
+      return yield* WordingViolations.make({ count: findings.length });
     }
   }),
 ).pipe(Command.withDescription("Lingui 카탈로그와 소스 파일의 메시지 문구를 검사"));
@@ -82,6 +90,11 @@ const check = Command.make(
 const HookInput = Schema.Struct({
   tool_input: Schema.Struct({ file_path: Schema.optionalKey(Schema.String) }),
 });
+
+/** The PostToolUse answer this hook prints. */
+const HookOutput = Schema.fromJsonString(
+  Schema.Struct({ decision: Schema.Literal("block"), reason: Schema.String }),
+);
 
 const hook = Command.make(
   "hook",
@@ -95,15 +108,14 @@ const hook = Command.make(
     const findings = yield* findingsOf([file]);
     if (Arr.isReadonlyArrayEmpty(findings)) return;
     // PostToolUse: a "block" decision hands the reason back to the agent, which fixes the wording.
-    yield* Console.log(
-      JSON.stringify({
-        decision: "block",
-        reason: [
-          "문구 규칙 위반입니다. 아래를 고치십시오 (규칙: lint/wording/policy.ts).",
-          ...Arr.map(findings, formatFinding),
-        ].join("\n"),
-      }),
-    );
+    const output = yield* Schema.encodeEffect(HookOutput)({
+      decision: "block",
+      reason: [
+        "문구 규칙 위반입니다. 아래를 고치십시오 (규칙: lint/wording/policy.ts).",
+        ...Arr.map(findings, formatFinding),
+      ].join("\n"),
+    });
+    yield* Console.log(output);
   }),
 ).pipe(Command.withDescription("Claude Code PostToolUse hook: 고친 파일의 문구만 검사"));
 

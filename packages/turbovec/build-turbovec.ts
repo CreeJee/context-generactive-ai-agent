@@ -3,7 +3,10 @@ import { Config, Console, Effect, FileSystem, Path, Schema } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 /** Why the local addon was not built. */
-class TurbovecBuildFailed extends Schema.TaggedError<TurbovecBuildFailed>()("TurbovecBuildFailed", {
+class TurbovecBuildFailed extends Schema.TaggedError<
+  TurbovecBuildFailed,
+  { readonly brand: unique symbol }
+>()("TurbovecBuildFailed", {
   reason: Schema.Literals(["cargo-failed", "unsupported-host"]),
   exitCode: Schema.optional(Schema.Int),
 }) {}

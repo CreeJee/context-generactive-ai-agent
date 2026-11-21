@@ -1,4 +1,5 @@
 import { Array as Arr, Effect, FileSystem, Order, Schema } from "effect";
+import { Function as EffectFunction } from "effect";
 import { MemoryLine, type MemorySample, type SampledProcess } from "./memory-sample.ts";
 
 const decodeLine = Schema.decodeEffect(MemoryLine);
@@ -86,7 +87,7 @@ const totals = ({ atUnixMs, rootPid, processes }: MemorySample): SampleTotals =>
  * that held the most. Resident memory counts pages shared between processes in each of them, so
  * a sum over processes is an upper bound.
  */
-export const summarizeMemory = (samples: ReadonlyArray<MemorySample>, top: number): string =>
+const summarizeMemoryBody = (samples: ReadonlyArray<MemorySample>, top: number): string =>
   Arr.match(samples.map(totals), {
     onEmpty: () => "(no samples)",
     onNonEmpty: (perSample) => {
@@ -127,3 +128,7 @@ export const summarizeMemory = (samples: ReadonlyArray<MemorySample>, top: numbe
       ].join("\n");
     },
   });
+
+export const summarizeMemory: {
+  (top: number): (samples: ReadonlyArray<MemorySample>) => ReturnType<typeof summarizeMemoryBody>;
+} & typeof summarizeMemoryBody = EffectFunction.dual(2, summarizeMemoryBody);

@@ -19,16 +19,16 @@ const kiwiModel = {
 } as const;
 
 /** The morpheme model could not be fetched, verified or loaded, so no sentence ending was checked. */
-export class MorphemeModelUnavailable extends Schema.TaggedError<MorphemeModelUnavailable>()(
-  "MorphemeModelUnavailable",
-  { message: Schema.String },
-) {}
+export class MorphemeModelUnavailable extends Schema.TaggedError<
+  MorphemeModelUnavailable,
+  { readonly brand: unique symbol }
+>()("MorphemeModelUnavailable", { message: Schema.String }) {}
 
 /** Korean morpheme analysis (Kiwi), loaded once per process. */
 export class Morphemes extends Context.Service<
   Morphemes,
   { readonly tokenize: (text: string) => ReadonlyArray<TokenInfo> }
->()("wording/Morphemes") {
+>()("context-generactive-agent/lint/wording/check/morphemes") {
   static readonly layer = Layer.effect(
     Morphemes,
     Effect.gen(function* () {
@@ -54,12 +54,12 @@ export class Morphemes extends Context.Service<
             builder.build({ modelFiles, modelType: "cong" }),
           ),
         catch: (cause) =>
-          new MorphemeModelUnavailable({ message: `Kiwi를 불러오지 못했어요: ${String(cause)}` }),
+          MorphemeModelUnavailable.make({ message: `Kiwi를 불러오지 못했어요: ${String(cause)}` }),
       });
       return Morphemes.of({ tokenize: (text) => kiwi.tokenize(text) });
     }).pipe(
       Effect.catchTag("PlatformError", (error) =>
-        Effect.fail(new MorphemeModelUnavailable({ message: error.message })),
+        Effect.fail(MorphemeModelUnavailable.make({ message: error.message })),
       ),
     ),
   );
@@ -84,7 +84,7 @@ const ensureModel = Effect.gen(function* () {
   const home = yield* Effect.sync(() => homedir());
   const cacheHome = yield* Config.String("XDG_CACHE_HOME").pipe(
     Config.withDefault(path.join(home, ".cache")),
-    Effect.mapError((error) => new MorphemeModelUnavailable({ message: error.message })),
+    Effect.mapError((error) => MorphemeModelUnavailable.make({ message: error.message })),
   );
   const cacheRoot = path.join(cacheHome, "context-generactive-agent", "wording");
   const root = path.join(cacheRoot, `kiwi-${kiwiModel.version}`);
@@ -96,15 +96,14 @@ const ensureModel = Effect.gen(function* () {
     Effect.flatMap(HttpClientResponse.filterStatusOk),
     Effect.flatMap((response) => response.arrayBuffer),
     Effect.map((buffer) => new Uint8Array(buffer)),
-    Effect.mapError(
-      (error) =>
-        new MorphemeModelUnavailable({ message: `모델을 받지 못했어요: ${error.message}` }),
+    Effect.mapError((error) =>
+      MorphemeModelUnavailable.make({ message: `모델을 받지 못했어요: ${error.message}` }),
     ),
   );
   const digest = yield* Digest.Digest;
   const actual = yield* digest.digestHex(Digest.sha256, archive);
   if (actual !== kiwiModel.sha256) {
-    return yield* new MorphemeModelUnavailable({ message: "모델 압축 파일의 sha256이 달라요" });
+    return yield* MorphemeModelUnavailable.make({ message: "모델 압축 파일의 sha256이 달라요" });
   }
 
   yield* fs.makeDirectory(cacheRoot, { recursive: true });
@@ -115,7 +114,7 @@ const ensureModel = Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const entries = yield* spawner.lines(ChildProcess.make("tar", ["-tzf", file]));
     if (Arr.some(entries, (entry) => entry.startsWith("/") || entry.split("/").includes(".."))) {
-      return yield* new MorphemeModelUnavailable({
+      return yield* MorphemeModelUnavailable.make({
         message: "모델 압축 파일에 안전하지 않은 경로가 있어요",
       });
     }
@@ -123,7 +122,7 @@ const ensureModel = Effect.gen(function* () {
       ChildProcess.make("tar", ["-xzf", file, "-C", staging]),
     );
     if (exitCode !== 0) {
-      return yield* new MorphemeModelUnavailable({
+      return yield* MorphemeModelUnavailable.make({
         message: `모델 압축을 풀지 못했어요 (tar ${exitCode})`,
       });
     }

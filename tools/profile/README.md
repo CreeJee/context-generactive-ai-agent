@@ -18,7 +18,7 @@
 - `readMemorySamples(file)` / `summarizeMemory(samples, top)` — root 프로세스·그 아래 프로세스·전체의 min/p50/p95/max(MiB), 전체가 가장 컸던 시점, root 아래 프로그램 이름별 최대 합계·최대 한 개·최대 개수
 - `SpanRecord` — span 한 줄 Schema (traceId, spanId, parentSpanId|null, name, startUnixMs, durationMs, outcome `ok|error|interrupted`, 숫자·불리언만 있는 attributes, SQL 문장 span이면 선택 필드 `query`)
 - `SpanLine` — `Schema.fromJsonString(SpanRecord)`, NDJSON 한 줄 인코딩·디코딩
-- `SpanWriter` — `Context.Service`(키 `tools/profile/span-record/SpanWriter`), `{ file, write(records) }`, `SpanWriter.layer(file)`로 제공
+- `SpanWriter` — `Context.Service`(키 `context-generactive-agent/tools/profile/span-record/SpanWriter`), `{ file, write(records) }`, `SpanWriter.layer(file)`로 제공
 - `scalarAttributes` — 속성 항목 중 유한 숫자와 불리언만 남기는 함수
 - `queryTextAttribute` — 수집기가 남기는 유일한 문자열 속성 키 `db.query.text` (Effect가 SQL 문장 span마다 다는 문장)
 - `queryField(query)` — `Option<string>`을 레코드의 `{ query }` 필드로 바꾸고, 없으면 빈 객체를 돌려주는 함수
@@ -56,7 +56,7 @@
 - 파일 시스템 쓰기: `SpanWriter`가 `--out` NDJSON 파일에 append 모드(`flag: "a"`)로 줄을 덧붙인다.
 - 파일 시스템 읽기: `readSpans`, `readCpuProfile`이 입력 파일을 문자열로 읽는다.
 - 네트워크: `otlpCollector`가 `127.0.0.1:<port>`(기본 4318)에 HTTP 서버를 띄운다.
-- 네트워크: `devtoolsCollector`가 `<port>`(기본 34437)에 WebSocket 서버(`NodeSocketServer.layerWebSocket`)를 띄운다.
+- 네트워크: `collect-devtools`가 `<port>`(기본 34437)에 WebSocket 서버(`NodeSocketServer.layerWebSocket`)를 띄우고 `devtoolsCollector`에 넘긴다.
 - 프로세스: `collect-memory`가 표본마다 `ps -axo pid=,ppid=,rss=,comm=`를 한 번 실행한다(macOS, Linux).
 - 파일 시스템 쓰기: `collect-memory`가 `--out` 파일에 append 모드로 표본을 한 줄씩 덧붙인다.
 - stdin: `--until-stdin-closes`일 때 stdin을 끝까지 drain하고, 닫히면 `Effect.raceFirst`로 수집기를 끝낸다.

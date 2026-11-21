@@ -35,6 +35,8 @@ const { signal, port } = workerData as CheckerChannel;
 // Kiwi loads on the first file that holds a Korean message, once per lint run; a file without one
 // never waits for it.
 const morphemes = Effect.runSync(
+  // The worker's entry point: its Morphemes layer is built here.
+  // @effect-diagnostics-next-line strictEffectProvide:off
   Effect.cached(Effect.provide(Effect.service(Morphemes), morphemesLive)),
 );
 

@@ -51,7 +51,7 @@ export class SpanWriter extends Context.Service<
       records: ReadonlyArray<SpanRecord>,
     ) => Effect.Effect<void, PlatformError | Schema.SchemaError>;
   }
->()("tools/profile/span-record/SpanWriter") {
+>()("context-generactive-agent/tools/profile/span-record/SpanWriter") {
   static readonly layer = (file: string) =>
     Layer.effect(
       SpanWriter,

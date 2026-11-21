@@ -8,6 +8,7 @@ import {
   Path,
   Schema,
 } from "effect";
+import { Function as EffectFunction } from "effect";
 
 const CpuProfile = Schema.Struct({
   nodes: Schema.Array(
@@ -65,7 +66,7 @@ const ms = (micros: number) => (micros / 1_000).toFixed(1).padStart(10);
 const share = (micros: number, whole: number) =>
   `${((micros / whole) * 100).toFixed(1).padStart(5)}%`;
 
-export const summarizeCpuProfile = (profile: CpuProfile, root: string, top: number) => {
+const summarizeCpuProfileBody = (profile: CpuProfile, root: string, top: number) => {
   const nodes = MutableHashMap.fromIterable(
     Iterable.map(profile.nodes, (node) => [node.id, node] as const),
   );
@@ -109,7 +110,6 @@ export const summarizeCpuProfile = (profile: CpuProfile, root: string, top: numb
       ),
     ).forEach((key) => add(total, key, duration));
   });
-
   const category = (name: string) =>
     Option.getOrElse(MutableHashMap.get(categories, name), () => 0);
   return [
@@ -137,6 +137,10 @@ export const summarizeCpuProfile = (profile: CpuProfile, root: string, top: numb
     ),
   ].join("\n");
 };
+
+export const summarizeCpuProfile: {
+  (root: string, top: number): (profile: CpuProfile) => ReturnType<typeof summarizeCpuProfileBody>;
+} & typeof summarizeCpuProfileBody = EffectFunction.dual(3, summarizeCpuProfileBody);
 
 export const readCpuProfile = Effect.fnUntraced(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;

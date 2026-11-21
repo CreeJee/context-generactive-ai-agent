@@ -5633,4 +5633,9 @@
 - tsgo 0.73.2에서 `preferSchemaOverJson`은 `globalJsonInEffect`(Effect 안)와 `globalJson`(Effect 밖)으로 나뉘었다. 같은 범위인 `globalJsonInEffect`만 error로 둔다. 실행 진입점의 `Effect.provide`는 더 이상 `strictEffectProvide`에 걸리지 않으므로 끄던 주석을 지운다.
 - Effect 규칙 검사를 `tsc`에서 Oxlint로 옮긴다. 루트 `vite.config.ts`가 `apps/agent/**`·`packages/memory-agent/**`(지금까지 `tsc`가 검사하던 범위)에 `effecttsgo` plugin을 켜고, `@effect/tsgo`의 `strict` preset(기본 규칙 전부 error)에 두 tsconfig가 켜 두었던 기본 꺼짐 규칙을 더한다. tsconfig의 플러그인은 공식 안내대로 `diagnostics: false`로 두어 진단이 두 번 나오지 않게 한다. 그래서 pre-commit의 `vp check`도 Effect 규칙을 검사한다.
 - 2026-09-24 결정대로 Effect 오류·경고는 모두 실패여야 한다. Oxlint의 `warn`은 실패하지 않으므로 tsconfig에서 warning이던 규칙도 error로 둔다. `unstableApiUsage` off(공식 RPC·Workflow·SQL 유지)는 그대로 둔다. 0.73.2의 새 규칙 14개도 error로 켜고, 걸린 11곳(`Effect.onError`·`zipWith`·`provideServiceEffect`·`as`·`fromResult`·`flatten`·`isFailure`)을 고쳤다.
-- 범위 밖: `tools/`·`lint/`·`packages/turbovec`는 지금까지 Effect 검사를 받지 않았고, 같은 규칙을 켜면 60건이 나온다. 범위를 넓힐지는 따로 정한다.
+- 결정(사용자): 범위도 lint로 넓혀 error로 켠 뒤 위반을 고친다. tsconfig와 lint 중에서는 공식 권장(lint)을 따른다. 그래서 Effect 규칙을 lint하는 모든 파일에 켠다. 지금까지 검사 밖이던 `tools/`·`lint/`·`packages/turbovec`에서 43건이 나왔고 이렇게 고쳤다.
+  - 인자가 둘 이상인 export 함수(`missingPipeableSignature`)는 저장소의 `Function.dual` 형태로 바꿨다. `glossaryViolations`는 기본 인자를 없애고 호출하는 곳이 `glossary`를 넘긴다.
+  - Schema 오류 클래스에 brand를 달고 `new` 대신 `.make`로 만든다. 서비스 키는 규칙이 정한 `context-generactive-agent/...` 형태로 바꿨다.
+  - `tools/profile`의 수집기는 `Command.provide`로 layer를 받는다. 문구 검사의 Kiwi layer(문구가 있을 때만 만든다)와 worker 진입점은 기존 관례대로 이유 주석과 `strictEffectProvide:off`를 단다.
+  - 문구 검사의 glob은 memory-agent처럼 `node:path`의 `matchesGlob` 대신 `minimatch`로 맞추고, hook 출력은 `Schema.fromJsonString`으로 인코딩한다.
+- `tools/navigation-verification.mjs`(13건)는 README가 정한 저장소의 유일한 JavaScript 스크립트이고 Promise API로 브라우저를 다룬다. 걸린 규칙 6개만 override로 끄고, Effect로 옮길지는 따로 정한다. Oxlint는 override가 plugin을 함께 적지 않으면 그 plugin 규칙의 설정을 무시하므로, 끄는 override에도 `plugins: ["effecttsgo"]`를 적는다.

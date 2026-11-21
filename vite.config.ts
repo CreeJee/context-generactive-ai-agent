@@ -175,10 +175,25 @@ export default defineConfig({
       },
       {
         // The Effect Language Service rules, through the Oxlint integration `effect-tsgo patch
-        // --oxlint` installs. Scoped to the projects whose type check ran them before.
-        files: ["apps/agent/**", "packages/memory-agent/**"],
+        // --oxlint` installs, for every linted file.
+        files: ["**"],
         plugins: ["effecttsgo"],
         rules: { ...effectStrict.rules, ...effectAdoptedRules },
+      },
+      {
+        // The hand-run Playwright check is the repository's one plain JavaScript script (README):
+        // it drives the browser through Promise APIs and holds no Effect code.
+        files: ["tools/navigation-verification.mjs"],
+        // Oxlint ignores an override's plugin rules unless the override names the plugin too.
+        plugins: ["effecttsgo"],
+        rules: {
+          "effecttsgo/async-function": "off",
+          "effecttsgo/global-console": "off",
+          "effecttsgo/global-fetch": "off",
+          "effecttsgo/new-promise": "off",
+          "effecttsgo/process-env": "off",
+          "effecttsgo/strict-boolean-expressions": "off",
+        },
       },
       {
         // Packages keep collections in Effect's types (docs/map-set-audit-2026-10-06.md).

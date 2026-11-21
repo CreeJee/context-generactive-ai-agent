@@ -3,7 +3,8 @@
 // Submodules only: the package entry also loads NodeRedis and its client.
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Console, Duration, Effect, Schema, Stdio, Stream } from "effect";
+import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer";
+import { Console, Duration, Effect, Layer, Schema, Stdio, Stream } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import { devtoolsCollector } from "./devtools-collector.ts";
 import { memoryCollector } from "./memory-sample.ts";
@@ -32,17 +33,23 @@ const collectOtlp = Command.make(
       Flag.withDefault(false),
     ),
   },
-  ({ port, out, untilStdinCloses }) => {
-    const collect = otlpCollector(port).pipe(Effect.provide(SpanWriter.layer(out)));
-    return untilStdinCloses ? Effect.raceFirst(collect, stdinClosed) : collect;
-  },
-).pipe(Command.withDescription("OTLP/JSON trace를 받아 span NDJSON으로 저장"));
+  ({ port, untilStdinCloses }) =>
+    untilStdinCloses ? Effect.raceFirst(otlpCollector(port), stdinClosed) : otlpCollector(port),
+).pipe(
+  Command.provide(({ out }) => SpanWriter.layer(out)),
+  Command.withDescription("OTLP/JSON trace를 받아 span NDJSON으로 저장"),
+);
 
 const collectDevtools = Command.make(
   "collect-devtools",
   { port: Flag.Int("port").pipe(Flag.withSchema(Port), Flag.withDefault(34437)), out },
-  ({ port, out }) => devtoolsCollector(port).pipe(Effect.provide(SpanWriter.layer(out))),
-).pipe(Command.withDescription("Effect devtools 프로토콜로 span을 받아 NDJSON으로 저장 (개발용)"));
+  ({ port }) => devtoolsCollector(port),
+).pipe(
+  Command.provide(({ port, out }) =>
+    Layer.merge(SpanWriter.layer(out), NodeSocketServer.layerWebSocket({ port })),
+  ),
+  Command.withDescription("Effect devtools 프로토콜로 span을 받아 NDJSON으로 저장 (개발용)"),
+);
 
 const collectMemory = Command.make(
   "collect-memory",

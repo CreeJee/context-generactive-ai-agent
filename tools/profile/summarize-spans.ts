@@ -8,6 +8,7 @@ import {
   Option,
   Schema,
 } from "effect";
+import { Function as EffectFunction } from "effect";
 import { SpanLine, type SpanRecord } from "./span-record.ts";
 
 const decodeLine = Schema.decodeEffect(SpanLine);
@@ -152,7 +153,7 @@ const slowestPaths = (spans: ReadonlyArray<SpanRecord>, top: number) => {
     );
 };
 
-export const summarizeSpans = (spans: ReadonlyArray<SpanRecord>, top: number) => {
+const summarizeSpansBody = (spans: ReadonlyArray<SpanRecord>, top: number) => {
   const stats = statsByName(spans);
   const traces = MutableHashSet.size(
     MutableHashSet.fromIterable(Iterable.map(spans, (span) => span.traceId)),
@@ -176,3 +177,7 @@ export const summarizeSpans = (spans: ReadonlyArray<SpanRecord>, top: number) =>
     ...slowestPaths(spans, top),
   ].join("\n");
 };
+
+export const summarizeSpans: {
+  (top: number): (spans: ReadonlyArray<SpanRecord>) => ReturnType<typeof summarizeSpansBody>;
+} & typeof summarizeSpansBody = EffectFunction.dual(2, summarizeSpansBody);

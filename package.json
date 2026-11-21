@@ -28,6 +28,7 @@
     "effect": "catalog:",
     "eslint-plugin-lingui": "catalog:",
     "kiwi-nlp": "catalog:",
+    "minimatch": "catalog:",
     "playwright": "catalog:",
     "ttsc": "catalog:",
     "typescript": "catalog:",
