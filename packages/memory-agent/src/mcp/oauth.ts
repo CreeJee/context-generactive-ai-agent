@@ -220,6 +220,8 @@ interface ClientSetup {
   readonly addClientAuthentication: AddClientAuthentication | undefined;
   readonly scope: string | undefined;
   readonly callbackPort: number | undefined;
+  /** The host the redirect URI names; the loopback address when the configuration does not name one. */
+  readonly callbackHost: string | undefined;
 }
 
 const expand = (value: string) => Effect.fromResult(expandVariablesResult(value, process.env));
@@ -278,6 +280,7 @@ const setupOf = McpOAuthConfig.match({
           addClientAuthentication: undefined,
           scope: login.scope,
           callbackPort: login.callbackPort,
+          callbackHost: login.callbackHost,
         }),
       registered: (client) =>
         Effect.map(
@@ -288,6 +291,7 @@ const setupOf = McpOAuthConfig.match({
             metadataUrl: undefined,
             scope: login.scope,
             callbackPort: login.callbackPort,
+            callbackHost: login.callbackHost,
           }),
         ),
     }),
@@ -300,6 +304,7 @@ const setupOf = McpOAuthConfig.match({
         metadataUrl: undefined,
         scope: machine.scope,
         callbackPort: undefined,
+        callbackHost: undefined,
       }),
     ),
 });
@@ -576,7 +581,8 @@ export const openMcpCredentials = Effect.fnUntraced(function* (options: {
     // A connection never redirects, but `auth()` takes the flow as interactive only with a URL.
     const redirectUrl = setup.interactive
       ? Flow.$match(flow, {
-          connection: () => `http://${loopbackHost}${callbackPath}`,
+          connection: () =>
+            `http://${setup.callbackHost ?? loopbackHost}${setup.callbackPort === undefined ? "" : `:${setup.callbackPort}`}${callbackPath}`,
           login: (login) => login.redirectUrl,
         })
       : undefined;
@@ -710,7 +716,7 @@ export const openMcpCredentials = Effect.fnUntraced(function* (options: {
       const serverServices = yield* Layer.buildWithScope(
         NodeHttpServer.layer(NodeHttpServer.createServer, {
           port: setup.callbackPort ?? 0,
-          host: loopbackHost,
+          host: setup.callbackHost ?? loopbackHost,
         }),
         listenerScope,
       ).pipe(
@@ -725,7 +731,7 @@ export const openMcpCredentials = Effect.fnUntraced(function* (options: {
       const port = yield* NetAddress.isInetAddress(server.address)
         ? Effect.succeed(server.address.port)
         : failWith({ code: "callback_port_unavailable", detail: null });
-      const authority = `${loopbackHost}:${port}`;
+      const authority = `${setup.callbackHost ?? loopbackHost}:${port}`;
       const redirectUrl = `http://${authority}${callbackPath}`;
       const state = yield* crypto.uuidV4();
       const authorizationUrl = yield* Deferred.make<URL>();

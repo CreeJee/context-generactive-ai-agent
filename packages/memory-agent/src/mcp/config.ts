@@ -57,6 +57,8 @@ export const McpOAuthConfig = Schema.TaggedUnion({
     client: McpOAuthClient,
     /** The loopback port the login listens on; a client registered beforehand needs its own. */
     callbackPort: Schema.optionalKey(Port),
+    /** The host the redirect URI names; `127.0.0.1` when unset, because some servers register only one spelling. */
+    callbackHost: Schema.optionalKey(Schema.NonEmptyString),
     scope: Schema.optionalKey(Schema.NonEmptyString),
   },
   /** The app authenticates as itself, without a person (client credentials). */
@@ -105,6 +107,7 @@ const OAuthEntry = Schema.Struct({
   clientMetadataUrl: Schema.optionalKey(MetadataUrl),
   issuer: Schema.optionalKey(Schema.NonEmptyString),
   callbackPort: Schema.optionalKey(Port),
+  callbackHost: Schema.optionalKey(Schema.NonEmptyString),
   scope: Schema.optionalKey(Schema.NonEmptyString),
 });
 type OAuthEntry = typeof OAuthEntry.Type;
@@ -132,8 +135,10 @@ const clientCredentialsOf = (
 ): DecodedOAuth<McpOAuthConfig> =>
   entry.clientId === undefined || entry.issuer === undefined || Option.isNone(authentication)
     ? invalidOAuth("client_credentials needs clientId, issuer, and clientSecret or privateKey")
-    : entry.callbackPort !== undefined || entry.clientMetadataUrl !== undefined
-      ? invalidOAuth("client_credentials takes no callbackPort or clientMetadataUrl")
+    : entry.callbackPort !== undefined ||
+        entry.callbackHost !== undefined ||
+        entry.clientMetadataUrl !== undefined
+      ? invalidOAuth("client_credentials takes no callbackPort, callbackHost, or clientMetadataUrl")
       : Effect.succeed(
           ClientCredentials.make({
             clientId: entry.clientId,
@@ -156,6 +161,7 @@ const authorizationCodeOf = (
               optionalProperty("metadataUrl", entry.clientMetadataUrl),
             ),
             ...optionalProperty("callbackPort", entry.callbackPort),
+            ...optionalProperty("callbackHost", entry.callbackHost),
             ...optionalProperty("scope", entry.scope),
           }),
         )
@@ -171,6 +177,7 @@ const authorizationCodeOf = (
                 ...optionalProperty("authentication", Option.getOrUndefined(authentication)),
               }),
               ...optionalProperty("callbackPort", entry.callbackPort),
+              ...optionalProperty("callbackHost", entry.callbackHost),
               ...optionalProperty("scope", entry.scope),
             }),
           );
@@ -198,6 +205,7 @@ const oauthEntryOf = McpOAuthConfig.match({
       }),
     }),
     ...optionalProperty("callbackPort", config.callbackPort),
+    ...optionalProperty("callbackHost", config.callbackHost),
     ...optionalProperty("scope", config.scope),
   }),
   clientCredentials: (config): OAuthEntry => ({
