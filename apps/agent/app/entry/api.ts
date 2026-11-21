@@ -1080,7 +1080,7 @@ const ContextEvent = Schema.Struct({
   ).pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed(null))),
   windowTokens: Schema.Finite,
   windowKnown: Schema.Boolean.pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed(false))),
-  compactAtTokens: Schema.Finite,
+  leaveOutAtTokens: Schema.Finite,
 });
 
 const CompactRejection = Schema.Literals([

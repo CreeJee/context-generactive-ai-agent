@@ -63,7 +63,7 @@ const runState: SessionRunState = {
     compactionStage: null,
     windowTokens: 258400,
     windowKnown: false,
-    compactAtTokens: 64600,
+    leaveOutAtTokens: 128_000,
   },
   workflow: { phase: "chat", mode: "plan", goal: null, plan: null, ledger: [] },
   actions: allowedWorkflowActions,

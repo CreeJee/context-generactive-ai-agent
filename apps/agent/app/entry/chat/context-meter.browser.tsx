@@ -33,7 +33,7 @@ it.live("context meter lays out the latest request's numbers on hover", () =>
               compactionStage: "summarize",
               windowTokens: 200_000,
               windowKnown: true,
-              compactAtTokens: 0,
+              leaveOutAtTokens: 110_000,
             }}
           />
         </div>,
@@ -65,7 +65,7 @@ it.live("context meter says no request was made yet", () =>
               compactionStage: null,
               windowTokens: 128_000,
               windowKnown: false,
-              compactAtTokens: 0,
+              leaveOutAtTokens: 70_400,
             }}
           />
         </div>,

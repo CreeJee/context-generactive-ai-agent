@@ -22,7 +22,7 @@ const record = (
     compactionStage: null,
     windowTokens: 258_400,
     windowKnown: false,
-    compactAtTokens: 64_600,
+    leaveOutAtTokens: 128_000,
   },
   workflow: { phase: "chat", mode: "plan", goal: null, plan: null, ledger: [] },
 });
