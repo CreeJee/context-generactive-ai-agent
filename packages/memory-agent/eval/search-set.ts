@@ -277,7 +277,6 @@ const searchSet = Command.make("search-set").pipe(
 
 Command.run(searchSet, { version: "1.0.0" }).pipe(
   // The script's entry point: the one place its platform services are provided.
-  // @effect-diagnostics-next-line strictEffectProvide:off
   Effect.provide(NodeServices.layer),
   NodeRuntime.runMain,
 );

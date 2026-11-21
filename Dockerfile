@@ -16,7 +16,7 @@
 FROM rust:1.99.0-slim-bookworm AS rust
 
 # --- build stage: the official Vite+ toolchain image (glibc; vp provisions Node from .node-version) ---
-FROM ghcr.io/voidzero-dev/vite-plus:1.3.0 AS build
+FROM ghcr.io/voidzero-dev/vite-plus:1.6.0 AS build
 # Owned by the image's non-root `vp` user: cargo writes its git and registry caches here.
 COPY --from=rust --chown=vp:vp /usr/local/cargo /usr/local/cargo
 COPY --from=rust --chown=vp:vp /usr/local/rustup /usr/local/rustup

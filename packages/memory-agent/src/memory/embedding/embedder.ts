@@ -317,7 +317,7 @@ export const modelWorker = Effect.fnUntraced(function* (
       onSome: Effect.succeed,
       onNone: () =>
         // `set` acquires uninterruptibly; a model load must still stop when the Scope closes.
-        ScopedRef.set(session, Effect.interruptible(open(data)).pipe(Effect.map(Option.some))).pipe(
+        ScopedRef.set(session, Effect.interruptible(open(data)).pipe(Effect.asSome)).pipe(
           Effect.andThen(ScopedRef.get(session)),
           // `set` just stored the session it acquired.
           Effect.map(Option.getOrThrow),

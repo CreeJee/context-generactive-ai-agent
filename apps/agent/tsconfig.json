@@ -96,7 +96,7 @@
           "obsoleteSchemaImport": "error",
           "optionMatchToFromOption": "error",
           "outdatedApi": "error",
-          "preferSchemaOverJson": "error",
+          "globalJsonInEffect": "error",
           "preferSchemaTypeProperty": "error",
           "preferSucceedSomeOrNone": "error",
           "preferTypedSchemaDecoder": "error",

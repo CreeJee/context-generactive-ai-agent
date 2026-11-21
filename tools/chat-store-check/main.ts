@@ -547,7 +547,6 @@ const main = Command.make(
 main.pipe(
   Command.run({ version: "0.0.0" }),
   // Script entry point: the whole program gets its layer here.
-  // @effect-diagnostics-next-line strictEffectProvide:off
   Effect.provide(NodeServices.layer),
   NodeRuntime.runMain,
 );

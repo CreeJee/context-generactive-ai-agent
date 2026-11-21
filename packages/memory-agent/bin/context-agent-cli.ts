@@ -10,7 +10,6 @@ Stdio.Stdio.pipe(
   Effect.flatMap((stdio) => stdio.args),
   Effect.flatMap((args) => runMemoryCli({ name: "context-agent-cli", args })),
   // The CLI's entry point: the one place its platform services are provided.
-  // @effect-diagnostics-next-line strictEffectProvide:off
   Effect.provide(NodeServices.layer),
   NodeRuntime.runMain,
 );

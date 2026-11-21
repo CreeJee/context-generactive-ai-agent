@@ -197,10 +197,9 @@ const embedderLayer = (storage: string, mode: EmbeddingMode, modelFound: boolean
  */
 const readOnlyVectorIndex = (sqlite: DatabaseSync, storage: string, mode: EmbeddingMode) =>
   Effect.gen(function* () {
-    const addon = yield* Effect.try({
-      try: () => requireRuntime("turbovec").pipe(Effect.runSync),
-      catch: (cause) => StorageOpenFailed.make({ storage, cause }),
-    });
+    const addon = yield* requireRuntime("turbovec").pipe(
+      Effect.mapError((cause) => StorageOpenFailed.make({ storage, cause })),
+    );
     const opened = yield* Effect.try({
       try: () => {
         const binding = addon.loadTurbovec();
