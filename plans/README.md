@@ -414,3 +414,5 @@ ProtectedBranchMerge 1), 카드 161장 가운데 위험 2장·경계 0·필요�
 - 028: 한 대화의 run은 lease 없이도 한 번에 하나다(`liveRuns.claim`, `run_in_progress`). 화면은 거절된
   메시지를 대기열에 넣는다(`chat-panel.tsx`의 `onNotTaken`). `dev-agent-chat-boundary.test.ts`의 423 단언은
   보안 경계가 아니라 탭 사이의 양보를 본 것이고, 다른 origin을 막는 403 단언은 그대로 남는다.
+- 028: route 핸들러 폴더 `apps/agent/app/.server`는 이름이 점으로 시작해 `rg`가 기본으로 건너뛴다. 같은 lease
+  검사(`checkHolder`)가 거기에 하나 더 있었다. 이 저장소에서 쓰임을 찾을 때는 `rg --hidden`을 쓴다.

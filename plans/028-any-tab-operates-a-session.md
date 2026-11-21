@@ -84,6 +84,20 @@ function evaluateWorkflowActionBody(
   if (context.lease?.state === "other") return { allowed: false, reason: "session_in_use" };
 ```
 
+route 핸들러에도 같은 검사가 하나 더 있다. `apps/agent/app/.server/api/sessions.ts:49-54`:
+
+```ts
+/** Refuses a change while another page holds the session. */
+const checkHolder = (sessionId: string, holder: string | undefined) =>
+  Effect.when(
+    Effect.fail({ error: "session_in_use" } as const),
+    Effect.map(leases.permits(sessionId, holder ?? null), (permitted) => !permitted),
+  );
+```
+
+`answerDecision`(126행), `editBoard`(148행), `kanbanAction`(200행), `setModel`(314행)이 부른다. 이 폴더는
+이름이 점으로 시작해서 `rg`가 기본으로 건너뛴다. **이 저장소에서 찾을 때는 `rg --hidden`을 쓴다.**
+
 ### 화면이 lease를 잡는 곳
 
 - `apps/agent/app/entry/session/session-lease.ts`(199줄):
@@ -182,10 +196,11 @@ function evaluateWorkflowActionBody(
 
 - `packages/memory-agent/src/agent/chat.ts`
 - `packages/memory-agent/src/workflow/actions.ts`
+- `apps/agent/app/.server/api/sessions.ts` (`checkHolder`와 그 호출 넷만)
 - `packages/memory-agent/tests/chat/leases.test.ts` (이름을 `two-pages.test.ts`로 바꿔 다시 쓴다)
 - `packages/memory-agent/tests/chat/session.test.ts`
 - 서버 테스트 중 `session_in_use`를 단언하는 다른 파일(Step 1의 `rg`로 찾은 것만)
-- `apps/agent/server/tests/dev-agent-chat-boundary.test.ts` (Step 1의 7번에 적은 줄만)
+- `apps/agent/server/tests/dev-agent-chat-boundary.test.ts` (Step 1의 8번에 적은 줄만)
 - `apps/agent/app/entry/chat/chat-panel.tsx`, `chat-approvals.tsx`, `subagent-panel.tsx`, `uncertain-runs.tsx`
 - `apps/agent/app/entry/chat/read-only-bar.tsx` (삭제)
 - `apps/agent/app/entry/session/session-lease.ts`
@@ -228,7 +243,14 @@ function evaluateWorkflowActionBody(
 4. `leases.view`, `leases.claim`, `leases.release`, `leases.onExpired`를 쓰는 곳은 그대로 둔다.
 5. `packages/memory-agent/src/workflow/actions.ts:49`의 `context.lease?.state === "other"` 줄을 지운다.
    `WorkflowActionContext`의 `lease` 필드는 그대로 둔다.
-6. 테스트를 고친다.
+6. `apps/agent/app/.server/api/sessions.ts`에서 `checkHolder` 정의(49-54행)와 호출 넷을 지운다.
+   - `checkHolder(session, headers["x-session-holder"]).pipe(Effect.andThen(X), …)` 꼴(126, 200행)은
+     `X.pipe(…)`로 바꾼다. 뒤따르는 `Effect.tap`, `Effect.catchTags`는 그대로 둔다.
+   - `yield* checkHolder(…);` 줄(148, 314행)은 그 줄만 지운다.
+   - 같은 파일의 `leases`(41행)는 `lease` 핸들러(351행 근처)가 `chat.lease`를 부르므로 이 파일에서 더는
+     쓰이지 않을 수 있다. 쓰이지 않으면 `const leases = yield* SessionLeases;`와 import를 지운다.
+   - 핸들러 인자에서 쓰지 않게 된 `headers`는 destructuring에서 뺀다.
+7. 테스트를 고친다.
    - `tests/chat/leases.test.ts`를 `tests/chat/two-pages.test.ts`로 옮기고(`git mv`), 테스트 하나로 다시
      쓴다. 이름: "two pages both operate one session; the first answer to an approval wins". 내용:
      - 탭 A가 `"please use the shell"`을 보내 승인이 하나 기다린다(지금 테스트의 앞부분 그대로).
@@ -249,7 +271,7 @@ function evaluateWorkflowActionBody(
      단언을 찾아 같은 방식으로 고친다. `workflow` 테스트에서 `lease: { state: "other" }`가 거절된다는
      단언은 지운다.
 
-7. `apps/agent/server/tests/dev-agent-chat-boundary.test.ts`를 고친다. 403 단언(다른 origin)과 그 뒤의
+8. `apps/agent/server/tests/dev-agent-chat-boundary.test.ts`를 고친다. 403 단언(다른 origin)과 그 뒤의
    "효과가 남지 않았다" 단언은 한 글자도 바꾸지 않는다.
    - 첫 테스트: `nonHolder`와 `missingHolder` 요청과 두 `toBe(423)` 단언(86-93행)을 지운다. 그 바로 뒤의
      `invocations`가 0이고 세 표가 비어 있다는 단언은 `foreign` 요청 바로 뒤에 남는다. 114-121행의 주석과
@@ -264,11 +286,11 @@ function evaluateWorkflowActionBody(
 
 **Verify**:
 
-- `rg -n 'refuseOtherHolder|leases\.permits' packages/memory-agent/src` → 결과 없음
+- `rg -n --hidden 'refuseOtherHolder|checkHolder|leases\.permits' packages/memory-agent/src apps/agent/app` → 결과 없음
   (`src/sessions/leases.ts`의 `permits` 정의는 남는다. `leases\.permits` 호출만 없어야 한다.)
 - `rg -n '"session_in_use"' packages/memory-agent/src/agent/chat.ts packages/memory-agent/src/workflow/actions.ts`
   → 결과 없음
-- `vp run memory-agent#typecheck` → exit 0
+- `vp run memory-agent#typecheck`와 `vp run agent#typecheck` → exit 0
 - `cd packages/memory-agent && vp test run --maxWorkers=4 tests/chat tests/workflow src/workflow` → 모두 통과
 - `rg -c 'toBe\(403\)' apps/agent/server/tests/dev-agent-chat-boundary.test.ts` → 고치기 전과 같은 수
   (고치기 전에 먼저 세어 둔다)
@@ -314,7 +336,7 @@ commit: `feat(chat): 서버가 다른 탭의 조작을 거절하지 않는다`
 
 **Verify**:
 
-- `rg -n 'useSessionLease|PageLease|ReadOnlyBar|orderedLeaseActions|useObservedRunStateQuery' apps/agent/app`
+- `rg -n --hidden 'useSessionLease|PageLease|ReadOnlyBar|orderedLeaseActions|useObservedRunStateQuery' apps/agent/app`
   → 결과 없음
 - `rg -n 'readOnly' apps/agent/app/entry/chat/chat-panel.tsx apps/agent/app/entry/chat/chat-approvals.tsx apps/agent/app/entry/chat/subagent-panel.tsx apps/agent/app/entry/chat/uncertain-runs.tsx`
   → `chat-panel.tsx`의 `readOnly={mutationBlocked}`(입력창에 넘기는 값) 한 줄만 남는다
