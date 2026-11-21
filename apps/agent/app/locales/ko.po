@@ -1238,6 +1238,10 @@ msgstr "검증이 판정을 남기지 않았습니다"
 msgid "검증자 모델"
 msgstr "검증자 모델"
 
+#: app/entry/chat/board/hold-reason.ts
+msgid "검증자가 작업 파일을 고쳐 판정을 인정하지 않았습니다: {files}"
+msgstr "검증자가 작업 파일을 고쳐 판정을 인정하지 않았습니다: {files}"
+
 #: app/entry/chat/outcome-checklist.tsx
 msgid "검증할 모델이 선택되지 않아 결과를 확인하지 못했습니다. 설정의 칸반 실행에서 검증자 모델을 고른 뒤 다시 확인해 주십시오."
 msgstr "검증할 모델이 선택되지 않아 결과를 확인하지 못했습니다. 설정의 칸반 실행에서 검증자 모델을 고른 뒤 다시 확인해 주십시오."

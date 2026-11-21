@@ -22,6 +22,8 @@ export const verdictText = (verdict: VerdictFailure) =>
     NotFinished: () => t`검증이 끝나지 않았습니다`,
     ModelSelectionRequired: () => t`검증할 모델이 선택되지 않았습니다`,
     Unavailable: () => t`검증을 실행할 수 없었습니다`,
+    ChangedWork: ({ files }) =>
+      t`검증자가 작업 파일을 고쳐 판정을 인정하지 않았습니다: ${ph({ files: files.join(", ") })}`,
   });
 
 const agentFailureTexts = {
@@ -89,6 +91,7 @@ const verdictNote = (verdict: VerdictFailure) =>
     NotFinished: () => null,
     ModelSelectionRequired: () => null,
     Unavailable: () => null,
+    ChangedWork: () => null,
   });
 
 const failureNote = (failure: CardFailure) =>

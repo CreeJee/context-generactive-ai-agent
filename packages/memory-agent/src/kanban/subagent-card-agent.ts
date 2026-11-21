@@ -1,8 +1,10 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
+  Array as Arr,
   Context,
   Effect,
   FileSystem,
+  HashMap,
   HashSet,
   Iterable,
   Layer,
@@ -13,7 +15,8 @@ import {
   Schema,
 } from "effect";
 import { McpServers, mcpInstructionsForMode } from "../mcp/servers.ts";
-import { SecureRandom } from "effect/crypto";
+import { Digest, SecureRandom } from "effect/crypto";
+import { Hex } from "effect/encoding";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import type { AgentRole } from "../providers/contracts.ts";
 import { ProjectCommands } from "../projects/commands.ts";
@@ -45,7 +48,7 @@ import {
   type GoalVerification,
   type OutcomeVerification,
 } from "./card-agent.ts";
-import { cardToolProject, type CardWorktree } from "./worktree.ts";
+import { cardToolProject, CardWorktrees, type CardWorktree } from "./worktree.ts";
 import { CardFailure, VerdictFailure, type AgentFailureCode } from "./failures.ts";
 import { fallbackLogged, logFailure } from "../runtime/logged-failures.ts";
 import { PlanNodes } from "../workflow/plan-nodes.ts";
@@ -198,6 +201,8 @@ const make = Effect.gen(function* () {
   const mcpServers = yield* McpServers;
   const skillTools = yield* SkillTools;
   const crypto = yield* SecureRandom.SecureRandom;
+  const digest = yield* Digest.Digest;
+  const worktrees = yield* CardWorktrees;
   const workflows = yield* Workflows;
   const planNodes = yield* PlanNodes;
   const ruleContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
@@ -387,7 +392,41 @@ const make = Effect.gen(function* () {
     ),
   });
 
-  /** One read-only verifier run that must record a verdict. */
+  /**
+   * The tracked files of the checkout at `root` that differ from its HEAD, each with a digest of
+   * its change; none when git could not tell, which the logs say.
+   */
+  const trackedStateAt = (root: string) =>
+    worktrees.trackedChanges(root).pipe(
+      Effect.flatMap(
+        Effect.forEach(({ file, diff }) =>
+          Effect.map(
+            digest.digest(Digest.sha256, new TextEncoder().encode(diff)),
+            (hash) => [file, Hex.encode(hash)] as const,
+          ),
+        ),
+      ),
+      Effect.asSome,
+      Effect.catch((error) =>
+        Effect.as(logFailure("Verifier's tracked changes unread")(error), Option.none()),
+      ),
+    );
+
+  /** The files whose change differs between two readings, in either one. */
+  const changedBetween = (
+    before: readonly (readonly [string, string])[],
+    after: readonly (readonly [string, string])[],
+  ) => {
+    const was = HashMap.fromIterable(before);
+    const now = HashMap.fromIterable(after);
+    return Arr.dedupe([...before, ...after].map(([file]) => file)).filter(
+      (file) =>
+        Option.getOrUndefined(HashMap.get(was, file)) !==
+        Option.getOrUndefined(HashMap.get(now, file)),
+    );
+  };
+
+  /** One verifier run that must record a verdict, and does not pass work it changed. */
   const runVerifier = Effect.fnUntraced(
     function* (input: {
       readonly sessionId: string;
@@ -420,6 +459,7 @@ const make = Effect.gen(function* () {
             recorder.runTool,
           ];
           const origin = yield* planOrigin(input.sessionId);
+          const before = yield* trackedStateAt(project.root);
           const outcome = yield* subagents.runAttempt(
             {
               project,
@@ -441,13 +481,22 @@ const make = Effect.gen(function* () {
             },
             () => Effect.void,
           );
-          return Option.getOrElse(yield* recorder.verdict, () =>
-            rejected(
-              outcome?.status === "completed"
-                ? VerdictFailure.cases.NoVerdict.make({})
-                : VerdictFailure.cases.NotFinished.make({}),
-            ),
-          );
+          const after = yield* trackedStateAt(project.root);
+          // The card's work was committed before this run, so what the verifier changed would not
+          // be integrated: a verdict that passes it would pass something else than what merges.
+          const changed = Option.match(Option.all([before, after]), {
+            onNone: () => [],
+            onSome: ([was, now]) => changedBetween(was, now),
+          });
+          return Arr.isReadonlyArrayNonEmpty(changed)
+            ? rejected(VerdictFailure.cases.ChangedWork.make({ files: changed }))
+            : Option.getOrElse(yield* recorder.verdict, () =>
+                rejected(
+                  outcome?.status === "completed"
+                    ? VerdictFailure.cases.NoVerdict.make({})
+                    : VerdictFailure.cases.NotFinished.make({}),
+                ),
+              );
         });
       return yield* Option.match(selection, {
         onNone: () =>

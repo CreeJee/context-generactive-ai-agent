@@ -21,6 +21,8 @@ export const VerdictFailure = Schema.TaggedUnion({
   ModelSelectionRequired: {},
   /** The verifier could not run: its session, project or run failed. */
   Unavailable: {},
+  /** The verifier changed tracked files of the work it judged; what it changed would not be integrated. */
+  ChangedWork: { files: Schema.Array(Schema.String) },
 });
 export type VerdictFailure = typeof VerdictFailure.Type;
 
@@ -31,6 +33,7 @@ const verdictFailureName = VerdictFailure.match({
   NotFinished: () => "NotFinished" as const,
   ModelSelectionRequired: () => "ModelSelectionRequired" as const,
   Unavailable: () => "Unavailable" as const,
+  ChangedWork: () => "ChangedWork" as const,
 });
 
 /** How a card's agent run ended without finishing the card. */
