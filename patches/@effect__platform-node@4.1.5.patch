@@ -1,10 +1,10 @@
 diff --git a/dist/NodeHttpServer.d.ts b/dist/NodeHttpServer.d.ts
-index e6d0825f87d88ac7af4eb5efea7313a8277de7f0..a3e0e72b8d7b5bf1e302c20e31b27672a42aa023 100644
+index 1670ca847c0f9b68c8946612e91013dbcd0c4430..31137aaf68e968ba2c3a3e03ac3f0bc5ec299fc5 100644
 --- a/dist/NodeHttpServer.d.ts
 +++ b/dist/NodeHttpServer.d.ts
-@@ -41,6 +41,15 @@ export interface Options extends Net.ListenOptions {
-      */
-     readonly websocket?: Omit<NodeWS.ServerOptions, "noServer" | "server" | "host" | "port" | "path"> | undefined;
+@@ -69,6 +69,15 @@ export interface Options extends Net.ListenOptions {
+         readonly highWaterMark?: number | undefined;
+     }) | undefined;
  }
 +/**
 + * Node's `http.createServer`, to pass as the server factory of {@link make},
@@ -19,7 +19,7 @@ index e6d0825f87d88ac7af4eb5efea7313a8277de7f0..a3e0e72b8d7b5bf1e302c20e31b27672
   * Creates a scoped `HttpServer` from a Node `http.Server` or `node:http2`
   * server, starts listening with the supplied options, registers request and
 diff --git a/dist/NodeHttpServer.js b/dist/NodeHttpServer.js
-index 1d5aa0b8d5ac7e264d1b60ed980f02c0029bb53d..a93863323ade470d82927b1bfff90c90a49111c9 100644
+index e79d8fa8923922ce6ca53cc63d8a0cfe849a3d81..1cf15710cefdbc28ebceb1d1f8eb77c7e273a2fe 100644
 --- a/dist/NodeHttpServer.js
 +++ b/dist/NodeHttpServer.js
 @@ -73,6 +73,15 @@ import * as NodeMultipart from "./NodeMultipart.js";
@@ -39,7 +39,7 @@ index 1d5aa0b8d5ac7e264d1b60ed980f02c0029bb53d..a93863323ade470d82927b1bfff90c90
   * Creates a scoped `HttpServer` from a Node `http.Server` or `node:http2`
   * server, starts listening with the supplied options, registers request and
 diff --git a/src/NodeHttpServer.ts b/src/NodeHttpServer.ts
-index 35c2369957793e59ca6116975c05acff322b8e8c..f3085fb550f75e07ed6bde0994b381e7fcafe537 100644
+index c805c6cf020b0d3d6e305b3abc4303106fd37682..7324c4fadf68b5156b4fec38efe6d6105e1c0db0 100644
 --- a/src/NodeHttpServer.ts
 +++ b/src/NodeHttpServer.ts
 @@ -97,6 +97,16 @@ import * as NodeServices from "./NodeServices.ts"

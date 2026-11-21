@@ -17,11 +17,11 @@ catalog:
   "@types/react-dom": ^19.3.0
   class-variance-authority: ^0.7.1
   cn: ^0.5.0
-  effect: 4.1.2
-  "@effect/vitest": 4.1.2
-  "@effect/platform-node-shared": 4.1.2
-  "@effect/ai-openai-compat": 4.1.2
-  "@effect/atom-react": 4.1.2
+  effect: 4.1.5
+  "@effect/vitest": 4.1.5
+  "@effect/platform-node-shared": 4.1.5
+  "@effect/ai-openai-compat": 4.1.5
+  "@effect/atom-react": 4.1.5
   lucide-react: ^1.58.0
   react: ^19.3.0
   react-dom: ^19.3.0
@@ -58,7 +58,7 @@ catalog:
   "@vitest/browser-playwright": 5.0.5
   playwright: ^1.64.1
   vitest-browser-react: ^2.3.0
-  "@effect/platform-node": 4.1.2
+  "@effect/platform-node": 4.1.5
   oxc-transform-react: ^0.154.0
   # Research preview with a changing config format: pinned, upgraded deliberately.
   "@anthropic-ai/sandbox-runtime": 0.0.79
@@ -138,8 +138,14 @@ minimumReleaseAgeExclude:
   - "@effect/tsgo-win32-arm64@0.53.3"
   - "@effect/tsgo-win32-x64@0.53.3"
   - "@effect/tsgo@0.53.3"
+  - "@effect/ai-openai-compat@4.1.5"
+  - "@effect/atom-react@4.1.5"
+  - "@effect/platform-node-shared@4.1.5"
+  - "@effect/platform-node@4.1.5"
+  - "@effect/vitest@4.1.5"
+  - effect@4.1.5
 patchedDependencies:
-  "@effect/platform-node-shared@4.1.2": patches/@effect__platform-node-shared@4.1.2.patch
-  "@effect/platform-node@4.1.2": patches/@effect__platform-node@4.1.2.patch
-  effect@4.1.2: patches/effect@4.1.2.patch
+  "@effect/platform-node-shared@4.1.5": patches/@effect__platform-node-shared@4.1.5.patch
+  "@effect/platform-node@4.1.5": patches/@effect__platform-node@4.1.5.patch
+  effect@4.1.5: patches/effect@4.1.5.patch
   react-simplikit@0.3.3: patches/react-simplikit@0.3.3.patch

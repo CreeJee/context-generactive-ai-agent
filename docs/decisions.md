@@ -5623,3 +5623,10 @@
   - API는 GET·POST `/api/settings/improvement-model` `{model}`이고, skill router와 같은 검증(`ActiveProvider.chooseFor`)과 거부(`role_model_unavailable`)를 쓴다. 바꾸면 `improvementModel` 이벤트로 다른 창에 알린다.
   - 선택기는 개선 찾기 화면의 별도 "해석 모델" 섹션에 둔다. 스캔이 `model_unavailable`로 실패하면 문구가 그 섹션을 가리킨다.
 - 버린 안: 칸반 설정의 Goal 역할 모델 옆에 두기. 개선 찾기는 칸반이 아니라 개선 화면에서 시작하므로 그곳에서 고르는 게 맞다.
+
+## Effect를 4.1.5로 올리고 tsgo·Vite+를 함께 올린다 (2026-11-21)
+
+- 결정(사용자): Effect catalog 6개를 4.1.2에서 4.1.5로 올린다. 같은 작업에서 `@effect/tsgo`를 0.73.2로, Vite+를 1.6.0으로 올리고 Effect 규칙을 Oxlint에서도 켠다.
+- 4.1.5에는 우리 patch의 API(`FileSystem.openDirectory`·`statDescriptor`·`mtimeNs`/`ctimeNs`, ChildProcess `windowsVerbatimArguments`·`exitStatus`, `NodeHttpServer.createServer`)가 들어오지 않았다. 그래서 pnpm patch 3개를 4.1.5로 옮긴다. `effect`와 `platform-node-shared` patch는 그대로 적용되고, `platform-node`는 `Options` 타입이 바뀌어 `.d.ts` 한 곳의 위치만 다시 맞췄다.
+- 4.1.3~4.1.5의 breaking 항목 중 이 저장소에 닿는 것은 없었다. `Tool.dynamic`은 `success: JsonValue`를 선언하고, `Toolkit.WithHandler.handle`·`encodedResult`는 직접 쓰지 않는다. `ConfigProvider.fromEnv()`가 처음 조회할 때 환경을 읽게 된 것과 OTLP 성공 span이 `Unset`이 된 것은 동작에 영향이 없다(`tools/profile`은 code 2만 오류로 본다).
+- tsgo 0.73.2는 Oxlint 1.91~1.94와 tsgolint 7.0.2005~2007만 지원한다. Vite+ 1.3.0은 Oxlint 1.88을 쓰므로 Vite+를 함께 올린다. 1.7.0은 type-aware lint를 tsgolint 대신 tsrs로 돌려 바뀌는 범위가 커서, tsgolint를 쓰는 마지막 버전인 1.6.0(Oxlint 1.93, tsgolint 7.0.2006)을 고른다.
