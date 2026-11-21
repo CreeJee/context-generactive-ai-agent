@@ -5639,3 +5639,10 @@
   - `tools/profile`의 수집기는 `Command.provide`로 layer를 받는다. 문구 검사의 Kiwi layer(문구가 있을 때만 만든다)와 worker 진입점은 기존 관례대로 이유 주석과 `strictEffectProvide:off`를 단다.
   - 문구 검사의 glob은 memory-agent처럼 `node:path`의 `matchesGlob` 대신 `minimatch`로 맞추고, hook 출력은 `Schema.fromJsonString`으로 인코딩한다.
 - `tools/navigation-verification.mjs`(13건)는 README가 정한 저장소의 유일한 JavaScript 스크립트이고 Promise API로 브라우저를 다룬다. 걸린 규칙 6개만 override로 끄고, Effect로 옮길지는 따로 정한다. Oxlint는 override가 plugin을 함께 적지 않으면 그 plugin 규칙의 설정을 무시하므로, 끄는 override에도 `plugins: ["effecttsgo"]`를 적는다.
+
+## 세션 요약도 그 대화가 쓰는 모델로 만든다 (2026-11-21)
+
+- 계기: 대화 모델이 생긴 뒤에도 요약만 전역 기본 모델로 돌아, 로컬 모델 대화의 요약이 다른 공급자로 나가고, 요약 시작 비율을 다른 모델의 창으로 쟀다. `/compact` 한 호출 안에서 예산과 요약의 모델이 달랐다.
+- 결정: 요약은 run과 `/compact`가 쓰는 모델(칸반 보드면 계획자 모델 → 대화의 모델 → 앱의 기본 선택)로 만든다. `TurnSummaries`는 전역 선택을 읽지 않고 부르는 쪽이 넘긴다.
+- 대체하는 결정: "모델은 대화마다 둔다 (2026-11-14)"의 "그대로인 것" 중 "요약".
+- 확인: `tests/compaction/agent-chat.test.ts`의 "summarizes with the model it is given, not the app's selection".

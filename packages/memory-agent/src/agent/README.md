@@ -29,7 +29,7 @@
 - `defaultSummaryStartPercent` / `recentRawUserTurns` / `summaryCharacters` / `summaryInputCharacters` / `userMessageCharacters` / `retrievalLeadLimit` / `retrievalTokenLimit` / `recentRawSteps` / `summaryFailureLimit` — compaction 정책 상수(25, 2, 6,000, 60,000, 3,000, 5, 600, 10, 3)이다(`compaction-policy.ts`).
 - `sessionSummarizer` / `summaryInstructions` / `summaryPrompt` / `cheapSummary` / `SummaryServices` / `SummaryFailed` (`session-summary.ts`) — 세션 요약을 run 모델의 가장 싼 강도로 이어 쓰는 함수와 그 지침·입력, 단일 호출(usage 기록, 시간 제한), 실패 오류이다. 실패하면 로그를 남기고 none을 돌려준다.
 - `contextView` / `contextUsageHook` / `lastContextUsageEffect` / `ContextUsageFailed` / `ContextUsageReason` / `StoredContextUsage` / `contextUsageNamespace` / `measuredOverhead` — 요청별 컨텍스트 사용량 저장과 라이브 전송, 마지막 요청에서 provider가 추정보다 더 센 양이다.
-- `TurnSummaries` — run이 끝난 뒤 세션 요약을 이어 쓰는 `Context.Service`이다. `TurnSummaries.layer(automatic = true)`와 `layerNoDeps(automatic = true)`를 제공하고, 관련 `TurnSummaryFailed`가 있다.
+- `TurnSummaries` — run이 끝난 뒤 세션 요약을 이어 쓰는 `Context.Service`이다. `TurnSummaries.layer(automatic = true)`와 `layerNoDeps(automatic = true)`를 제공하고, 관련 `TurnSummaryFailed`가 있다. 요약은 `catchUp`·`hookFor`에 넘긴 모델(그 대화가 쓰는 모델)로 만든다.
 - `HandoffState` / `SavedHandoff` / `modelHandoffNamespace` / `fingerprint` / `legacyFingerprint` — 모델 handoff 저장 상태(`baseline`|`handoff` TaggedUnion)와 메시지 fingerprint(v2 정규화 sha256, legacy)이다.
 - `modelHandoffHistoryEffect` / `handoffHistory` / `ModelHandoffOptions` / `ModelHandoffFailed` / `ModelHandoffReason` / `handoffNotice` — 모델이 바뀔 때 이전 턴을 텍스트로 넘기는 히스토리 생성과 오류이다.
 - `sessionMessages` — 세션 노드에서 저장된 thread를 다시 만든다(사용자 턴별 텍스트+이미지, 실행 답변을 도구 결과 단위로 분할).

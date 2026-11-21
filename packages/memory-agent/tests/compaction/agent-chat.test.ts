@@ -7,6 +7,7 @@ import { TurnSummaries } from "../../src/agent/turn-summaries.ts";
 import { AgUiEvent } from "../../src/loop/chunks.ts";
 import { RunStore } from "../../src/loop/store.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
+import { ActiveProvider } from "../../src/providers/active-provider.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { runTurn } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
@@ -164,15 +165,35 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
       const at = yield* freshSession;
       yield* savedConversation(at, ["네", "네", "네", "네", "네"]);
       const summaries = yield* TurnSummaries;
+      const selection = yield* (yield* ActiveProvider).selected;
       const summary = (yield* RunStore).chatMetadata.summary(at.sessionId);
 
       expect(yield* summaries.startPercent).toBe(25);
-      expect(yield* summaries.catchUp(at.sessionId, false)).toBe("done");
+      expect(yield* summaries.catchUp(at.sessionId, false, selection)).toBe("done");
       expect(yield* summary).toEqual(Option.none());
 
       yield* summaries.setStartPercent(0);
       yield* Effect.addFinalizer(() => Effect.orDie(summaries.setStartPercent(25)));
-      expect(yield* summaries.catchUp(at.sessionId, false)).toBe("done");
+      expect(yield* summaries.catchUp(at.sessionId, false, selection)).toBe("done");
+      expect(Option.isSome(yield* summary)).toBe(true);
+    }),
+  );
+
+  it.effect("summarizes with the model it is given, not the app's selection", () =>
+    Effect.gen(function* () {
+      const at = yield* freshSession;
+      yield* savedConversation(at, ["네", "네", "네", "네", "네"]);
+      const summaries = yield* TurnSummaries;
+      const selection = yield* (yield* ActiveProvider).selected;
+      const summary = (yield* RunStore).chatMetadata.summary(at.sessionId);
+      yield* summaries.setStartPercent(0);
+      yield* Effect.addFinalizer(() => Effect.orDie(summaries.setStartPercent(25)));
+
+      // The app has a model selected, but this call passes none: nothing is summarized.
+      expect(yield* summaries.catchUp(at.sessionId, false, null)).toBe("unavailable");
+      expect(yield* summary).toEqual(Option.none());
+
+      expect(yield* summaries.catchUp(at.sessionId, false, selection)).toBe("done");
       expect(Option.isSome(yield* summary)).toBe(true);
     }),
   );
@@ -187,11 +208,12 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
         Array.from({ length: 9 }, () => "네"),
       );
       const summaries = yield* TurnSummaries;
+      const selection = yield* (yield* ActiveProvider).selected;
       yield* summaries.setStartPercent(0);
       yield* Effect.addFinalizer(() => Effect.orDie(summaries.setStartPercent(25)));
       const { chatMetadata, saveThread } = yield* RunStore;
 
-      expect(yield* summaries.catchUp(at.sessionId, false)).toBe("done");
+      expect(yield* summaries.catchUp(at.sessionId, false, selection)).toBe("done");
       expect(yield* chatMetadata.summary(at.sessionId)).toEqual(
         Option.some({
           text: "- 사용자 메시지 8개",
@@ -212,7 +234,7 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
         { role: "assistant", content: "네" },
         { role: "user", content: "질문 12" },
       ]);
-      expect(yield* summaries.catchUp(at.sessionId, false)).toBe("done");
+      expect(yield* summaries.catchUp(at.sessionId, false, selection)).toBe("done");
       expect(yield* chatMetadata.summary(at.sessionId)).toEqual(
         Option.some({
           text: "- 사용자 메시지 8개\n- 사용자 메시지 2개",
