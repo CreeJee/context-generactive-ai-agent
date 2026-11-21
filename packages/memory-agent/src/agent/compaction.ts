@@ -140,10 +140,8 @@ export const workingWindow = (contextWindow: number) =>
  */
 const answerRoom = (contextWindow: number) => Math.min(16_384, Math.floor(contextWindow / 5));
 
-/** Estimated leave-out ceiling; compactAt is retained as a zero-valued compatibility field. */
+/** Estimated leave-out ceiling. */
 export interface Budget {
-  /** @deprecated Validated summaries and answered tools compact without a minimum threshold. */
-  readonly compactAt: number;
   readonly leaveOutAt: number;
   /**
    * The most a request may hold in all, as the provider counts it: the window less room for the
@@ -153,7 +151,6 @@ export interface Budget {
 }
 
 export const budgetFor = (contextWindow: number): Budget => ({
-  compactAt: 0,
   leaveOutAt: Math.min(Math.floor(contextWindow * leaveOutAtShare), leaveOutAtMost),
   inputCeiling: contextWindow - answerRoom(contextWindow),
 });

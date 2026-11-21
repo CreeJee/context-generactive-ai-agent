@@ -64,7 +64,7 @@ const run = Effect.fnUntraced(function* (
   const asked = yield* Ref.make<ReadonlyArray<SummaryRequest>>([]);
   const compacting = yield* compactionHook({
     sources: sources(rereadable),
-    budget: { compactAt: 0, leaveOutAt, inputCeiling: noLimit },
+    budget: { leaveOutAt, inputCeiling: noLimit },
     restore: () => Effect.succeed(null),
     promptCacheFor: Duration.hours(1),
     summarize: (request) => Ref.modify(asked, (all) => [summarize(all.length), [...all, request]]),

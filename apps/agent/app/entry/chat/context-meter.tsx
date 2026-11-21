@@ -10,8 +10,11 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "~/components/ui/h
 import { cn } from "~/lib/utils";
 const tokens = new Intl.NumberFormat("ko-KR", { notation: "compact", maximumFractionDigits: 1 });
 
-/** Past this share the line turns to a warning: the model is close to what it can read. */
-const crowdedShare = 0.6;
+/**
+ * The line turns to a warning from this share of the size at which the oldest messages start to be
+ * left out (`leaveOutAtTokens`), so the warning comes before earlier conversation drops out.
+ */
+const crowdedShareOfLeaveOut = 0.8;
 
 /**
  * What each compaction stage did to the latest request, weakest first. `level` fills that many of
@@ -108,13 +111,21 @@ function StageLevel({ level }: { level: number }) {
  */
 export function ContextMeter({ context }: { context: ContextView }) {
   const { t } = useLingui();
-  const { usedTokens, cachedTokens, cacheRatio, compactionStage, windowTokens, windowKnown } =
-    context;
+  const {
+    usedTokens,
+    cachedTokens,
+    cacheRatio,
+    compactionStage,
+    windowTokens,
+    windowKnown,
+    leaveOutAtTokens,
+  } = context;
   // Historical requests can exceed a catalog limit (including when older middleware sent the
   // un-compacted transcript). In that case a percentage is not a meaningful context gauge.
   const comparable = windowKnown && (usedTokens === null || usedTokens <= windowTokens);
   const share = usedTokens === null || !comparable ? 0 : usedTokens / windowTokens;
-  const crowded = comparable && share >= crowdedShare;
+  const crowded =
+    windowKnown && usedTokens !== null && usedTokens >= leaveOutAtTokens * crowdedShareOfLeaveOut;
   const stage = compactionStage === null ? null : stages[compactionStage];
   const unknown = t({ message: "알 수 없음", comment: "Context card value that is not known" });
   const label = t({
@@ -123,6 +134,11 @@ export function ContextMeter({ context }: { context: ContextView }) {
   });
   const windowLimit = t({ message: "모델 한도", comment: "Context card row: the model's window" });
   const limit = windowKnown ? t(tokenCount(tokens.format(windowTokens))) : unknown;
+  const leaveOutStart = t({
+    message: "오래된 메시지 생략 시작",
+    comment: "Context card row: the request size past which the oldest messages are left out",
+  });
+  const leaveOutSize = windowKnown ? t(tokenCount(tokens.format(leaveOutAtTokens))) : unknown;
   const summary =
     usedTokens === null ? (
       "-"
@@ -164,6 +180,7 @@ export function ContextMeter({ context }: { context: ContextView }) {
               </p>
               <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
                 <Row label={windowLimit}>{limit}</Row>
+                <Row label={leaveOutStart}>{leaveOutSize}</Row>
               </dl>
               {note !== null && <p className="text-muted-foreground">{note}</p>}
             </>
@@ -180,6 +197,7 @@ export function ContextMeter({ context }: { context: ContextView }) {
                   {t(tokenCount(tokens.format(usedTokens)))}
                 </Row>
                 <Row label={windowLimit}>{limit}</Row>
+                <Row label={leaveOutStart}>{leaveOutSize}</Row>
                 <Row
                   label={t({
                     message: "캐시",

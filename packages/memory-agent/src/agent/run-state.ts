@@ -86,8 +86,8 @@ export const ContextView = Schema.Struct({
   windowTokens: Schema.Finite,
   /** Whether windowTokens came from the selected model's catalog metadata. */
   windowKnown: Schema.Boolean,
-  /** Estimated conversation size past which earlier parts are compacted. */
-  compactAtTokens: Schema.Finite,
+  /** Estimated conversation size past which the oldest messages are left out (`budgetFor(windowTokens).leaveOutAt`). */
+  leaveOutAtTokens: Schema.Finite,
 });
 export type ContextView = typeof ContextView.Type;
 

@@ -5646,3 +5646,11 @@
 - 결정: 요약은 run과 `/compact`가 쓰는 모델(칸반 보드면 계획자 모델 → 대화의 모델 → 앱의 기본 선택)로 만든다. `TurnSummaries`는 전역 선택을 읽지 않고 부르는 쪽이 넘긴다.
 - 대체하는 결정: "모델은 대화마다 둔다 (2026-11-14)"의 "그대로인 것" 중 "요약".
 - 확인: `tests/compaction/agent-chat.test.ts`의 "summarizes with the model it is given, not the app's selection".
+
+## 컨텍스트 표시는 오래된 메시지를 빼기 시작하는 지점으로 경고한다 (2026-11-21)
+
+- 계기: 경고가 모델 창의 60%에서 켜졌는데, 실제 생략은 `min(창의 55%, 128,000 토큰)`에서 일어나 큰 창 모델에서는 경고 없이 앞 대화가 빠졌다. 창이 1M인 모델은 12.8%에서 이미 메시지를 뺀다. `compactAtTokens`·`Budget.compactAt`는 늘 0인 옛 필드였다.
+- 결정: `ContextView.leaveOutAtTokens`(`budgetFor(windowTokens).leaveOutAt`)를 싣고, 표시는 그 80%부터 경고하며 카드에 "오래된 메시지 생략 시작" 줄로 그 값을 보인다. 막대와 %는 모델 창 대비로 둔다. `compactAt` 필드를 지운다.
+- 128,000 상한(`leaveOutAtMost`)의 이유는 `compaction.ts`의 doc comment대로다. 한 run이 앞 요청에 이어 붙이므로 큰 창에서 매 step 수십만 토큰을 다시 보내지 않게 하는 상한이다. 이 상한을 결정 기록에 처음 적는다.
+- 한계: `leaveOutAtTokens`는 메시지 추정치 기준이고 `usedTokens`는 공급자가 센 전체(지침·도구 포함)라 경고가 조금 일찍 켜진다.
+- 확인: `apps/agent/app/entry/chat/context-meter.browser.tsx`(창 1,000,000, 생략 시작 128,000, 사용 110,000이면 경고 색), `packages/memory-agent/tests/compaction/agent-chat.test.ts`.

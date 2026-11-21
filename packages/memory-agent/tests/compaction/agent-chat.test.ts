@@ -274,7 +274,7 @@ testAgent({
         compactionStage: null,
         windowTokens: 200_000,
         windowKnown: false,
-        compactAtTokens: 0,
+        leaveOutAtTokens: 110_000,
       });
       expect(
         (yield* events("run-1")).some(

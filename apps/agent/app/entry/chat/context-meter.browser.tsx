@@ -33,7 +33,7 @@ it.live("context meter lays out the latest request's numbers on hover", () =>
               compactionStage: "summarize",
               windowTokens: 200_000,
               windowKnown: true,
-              compactAtTokens: 0,
+              leaveOutAtTokens: 110_000,
             }}
           />
         </div>,
@@ -47,6 +47,7 @@ it.live("context meter lays out the latest request's numbers on hover", () =>
     const card = page.getByText("마지막 요청").element().closest("dl");
     expect(card?.textContent).toContain("마지막 요청13만 토큰");
     expect(card?.textContent).toContain("모델 한도20만 토큰");
+    expect(card?.textContent).toContain("오래된 메시지 생략 시작11만 토큰");
     expect(card?.textContent).toContain("캐시9.1만 토큰 · 70%");
     expect(card?.textContent).toContain("압축요약");
   }),
@@ -65,7 +66,7 @@ it.live("context meter says no request was made yet", () =>
               compactionStage: null,
               windowTokens: 128_000,
               windowKnown: false,
-              compactAtTokens: 0,
+              leaveOutAtTokens: 70_400,
             }}
           />
         </div>,
@@ -77,7 +78,33 @@ it.live("context meter says no request was made yet", () =>
       expect.element(page.getByText("이 대화로 아직 모델에 요청하지 않았습니다.")).toBeVisible(),
     );
     const card = page.getByText("모델 한도").element().closest("dl");
-    expect(card?.textContent).toBe("모델 한도알 수 없음");
+    expect(card?.textContent).toBe("모델 한도알 수 없음오래된 메시지 생략 시작알 수 없음");
     expect(page.getByText("마지막 요청").query()).toBeNull();
+  }),
+);
+
+it.live("context meter warns by where old messages start to be left out, not by the window", () =>
+  Effect.gen(function* () {
+    const screen = yield* sdkCall(() =>
+      render(
+        <div className="flex justify-end p-80">
+          <ContextMeter
+            context={{
+              usedTokens: 110_000,
+              cachedTokens: null,
+              cacheRatio: null,
+              compactionStage: "none",
+              windowTokens: 1_000_000,
+              windowKnown: true,
+              leaveOutAtTokens: 128_000,
+            }}
+          />
+        </div>,
+        { wrapper: Translated },
+      ),
+    );
+    yield* sdkCall(() =>
+      expect.element(screen.getByRole("button", { name: /컨텍스트/ })).toHaveClass("text-warning"),
+    );
   }),
 );

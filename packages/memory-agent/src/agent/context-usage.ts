@@ -57,7 +57,7 @@ export const contextView = ({
   compactionStage,
   windowTokens,
   windowKnown,
-  compactAtTokens: budgetFor(windowTokens).compactAt,
+  leaveOutAtTokens: budgetFor(windowTokens).leaveOutAt,
 });
 
 export const ContextUsageReason = Schema.TaggedUnion({ ReadFailed: {}, WriteFailed: {} });
