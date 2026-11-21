@@ -4236,6 +4236,11 @@ msgstr "예상하지 못한 오류로 실패했습니다"
 msgid "오래된 메시지 생략"
 msgstr "오래된 메시지 생략"
 
+#. Context card row: the request size past which the oldest messages are left out
+#: app/entry/chat/context-meter.tsx
+msgid "오래된 메시지 생략 시작"
+msgstr "오래된 메시지 생략 시작"
+
 #: app/routes/report.tsx
 msgid "오류 진단과 제보 초안"
 msgstr "오류 진단과 제보 초안"
