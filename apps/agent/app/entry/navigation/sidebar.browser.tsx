@@ -936,7 +936,9 @@ describe("sidebar disclosures", () => {
         element: screen.getByRole("button", { name: headerName(name) }).element(),
       }));
       const inDocumentOrder = headers.toSorted((a, b) =>
-        a.element.compareDocumentPosition(b.element) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+        (a.element.compareDocumentPosition(b.element) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+          ? -1
+          : 1,
       );
       expect(inDocumentOrder.map((header) => header.name)).toEqual([
         "Beta",
