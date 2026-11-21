@@ -75,17 +75,21 @@ export type CardFailure = typeof CardFailure.Type;
 
 /**
  * What the card's next attempt reads about a failure it can act on: the verifier's own words, when
- * it wrote why it did not pass the work (the board shows them as the verifier's opinion), or the
- * conflict markers its last run left.
+ * it wrote why it did not pass the work (the board shows them as the verifier's opinion), the files
+ * a verifier changed and left in the card's folder, or the conflict markers its last run left.
  */
 export const failureNote = (failure: CardFailure): ReadonlyArray<string> =>
   CardFailure.guards.Verification(failure) && VerdictFailure.guards.Rejected(failure.verdict)
     ? [`The verifier did not pass your last work: ${failure.verdict.note}`]
-    : CardFailure.guards.Worktree(failure) && failure.reason === "ConflictUnresolved"
+    : CardFailure.guards.Verification(failure) && VerdictFailure.guards.ChangedWork(failure.verdict)
       ? [
-          "Your last run left conflict markers in files the Goal branch merge conflicted in, so nothing was committed. The merge is still in progress in your worktree; resolve the remaining conflicts.",
+          `A verifier changed files of your work instead of only judging it, so its verdict did not count: ${failure.verdict.files.join(", ")}. Its changes are still in your folder, uncommitted. Check each one, keep what the card needs and undo the rest.`,
         ]
-      : [];
+      : CardFailure.guards.Worktree(failure) && failure.reason === "ConflictUnresolved"
+        ? [
+            "Your last run left conflict markers in files the Goal branch merge conflicted in, so nothing was committed. The merge is still in progress in your worktree; resolve the remaining conflicts.",
+          ]
+        : [];
 
 export const worktreeFailure = (failure: CardWorktreeFailed): CardFailure =>
   CardFailure.cases.Worktree.make({ reason: cardWorktreeFailedReasonName(failure.reason) });
