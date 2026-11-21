@@ -22,6 +22,7 @@ import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
 import { inProcessChatApi } from "../src/testing/chat-api.ts";
 import { AgUiEvent } from "../src/loop/chunks.ts";
 import { Projects } from "../src/projects/projects.ts";
+import { ActiveProvider } from "../src/providers/active-provider.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
 import { SubscriptionProviderRegistry } from "../src/providers/subscriptions.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
@@ -124,6 +125,7 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
         chat: yield* inProcessChatApi,
         usage: yield* ApiUsage,
         summaries: yield* TurnSummaries,
+        selection: yield* (yield* ActiveProvider).selected,
         metadata: (yield* RunStore).chatMetadata,
         sessionId: session.id,
       };
@@ -172,7 +174,7 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
   const opening = yield* Effect.forEach(Arr.initNonEmpty(prompts), (text) => turn(text, false));
   // Wait for equal automatic summary state; do not create a manual-only comparison.
   yield* Effect.provideContext(
-    services.summaries.catchUp(services.sessionId, true),
+    services.summaries.catchUp(services.sessionId, true, services.selection),
     servicesContext,
   );
   const manual = Option.getOrNull(

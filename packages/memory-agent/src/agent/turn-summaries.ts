@@ -4,7 +4,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { Cause, Context, Effect, Layer, Option, Schema } from "effect";
 import { SecureRandom } from "effect/crypto";
 import { ActiveProvider } from "../providers/active-provider.ts";
-import { AuthConnectionState } from "../providers/contracts.ts";
+import { AuthConnectionState, type ModelSelection } from "../providers/contracts.ts";
 import { Nodes } from "../memory/nodes.ts";
 import { GlobalConfig } from "../config/global-config.ts";
 import { defaultSummaryStartPercent } from "./compaction-policy.ts";
@@ -54,11 +54,15 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
    * as they are, or for `/compact` (`whole`) whatever the size. Otherwise only once what the
    * conversation sends fills the configured share of the model's context window: once it has a
    * summary it keeps it, so the request prefix stays stable. A saved conversation that does not
-   * match what memory recorded (an imported one, say) is left alone.
+   * match what memory recorded (an imported one, say) is left alone. The summary is made with the
+   * model the caller passes, that is, the model the conversation itself runs on.
    */
-  const catchUp = (sessionId: string, whole: boolean): Effect.Effect<SummaryOutcome> =>
+  const catchUp = (
+    sessionId: string,
+    whole: boolean,
+    selection: ModelSelection | null,
+  ): Effect.Effect<SummaryOutcome> =>
     Effect.gen(function* () {
-      const selection = yield* active.selected;
       if (!isTruthy(selection)) return "unavailable" as const;
       const auth = yield* active.auth(selection);
       if (!AuthConnectionState.$is("signed-in")(auth)) return "unavailable" as const;
@@ -104,8 +108,8 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
     );
 
   // Retried after the next run; a failure here never reaches the conversation.
-  const inBackground = (sessionId: string) =>
-    Effect.catchDefect(catchUp(sessionId, false), (defect) =>
+  const inBackground = (sessionId: string, selection: ModelSelection | null) =>
+    Effect.catchDefect(catchUp(sessionId, false, selection), (defect) =>
       logDefect("Turn summaries stopped")(Cause.die(defect)),
     ).pipe(Effect.forkIn(scope), Effect.when(Effect.succeed(automatic)), Effect.asVoid);
 
@@ -121,9 +125,11 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
      * Summarizes in the background once a run has finished, so the next run starts from the
      * summary. A run that failed or was cancelled starts none.
      */
-    hookFor: (sessionId: string): RunHook => ({
+    hookFor: (sessionId: string, selection: ModelSelection | null): RunHook => ({
       ended: (_scope, end) =>
-        Effect.when(inBackground(sessionId), Effect.succeed(finishedRun(end))).pipe(Effect.asVoid),
+        Effect.when(inBackground(sessionId, selection), Effect.succeed(finishedRun(end))).pipe(
+          Effect.asVoid,
+        ),
     }),
   };
 });

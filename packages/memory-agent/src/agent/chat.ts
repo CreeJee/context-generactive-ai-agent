@@ -2246,7 +2246,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           workflowLifecycle.hook,
           indexInBackground,
           skillReviews.hookFor(project, sessionId),
-          summaries.hookFor(sessionId),
+          summaries.hookFor(sessionId, selection),
           // Last to choose the history sent to the model; only retained local images are inlined.
           compacting.hook,
           // After compaction: the memo is shown at the end of every request, never left out.
@@ -2493,14 +2493,15 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         yield* refuseOtherHolder(sessionId, holder);
         yield* sessions.get(sessionId);
         if (isTruthy(yield* liveRuns.get(sessionId))) return yield* runInProgress();
-        const budget = budgetFor((yield* windowFor(yield* sessionModel(sessionId))).tokens);
+        const selected = yield* sessionModel(sessionId);
+        const budget = budgetFor((yield* windowFor(selected)).tokens);
         const result: CompactResult = yield* compactByHand(
           runStore.chatMetadata,
           sessionId,
           yield* runStore.thread(sessionId),
           compactionSources(sessionId),
           budget,
-          () => summaries.catchUp(sessionId, true),
+          () => summaries.catchUp(sessionId, true, selected),
         );
         return result;
       }).pipe(

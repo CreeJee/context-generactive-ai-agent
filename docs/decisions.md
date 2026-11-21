@@ -5623,3 +5623,10 @@
   - API는 GET·POST `/api/settings/improvement-model` `{model}`이고, skill router와 같은 검증(`ActiveProvider.chooseFor`)과 거부(`role_model_unavailable`)를 쓴다. 바꾸면 `improvementModel` 이벤트로 다른 창에 알린다.
   - 선택기는 개선 찾기 화면의 별도 "해석 모델" 섹션에 둔다. 스캔이 `model_unavailable`로 실패하면 문구가 그 섹션을 가리킨다.
 - 버린 안: 칸반 설정의 Goal 역할 모델 옆에 두기. 개선 찾기는 칸반이 아니라 개선 화면에서 시작하므로 그곳에서 고르는 게 맞다.
+
+## 세션 요약도 그 대화가 쓰는 모델로 만든다 (2026-11-21)
+
+- 계기: 대화 모델이 생긴 뒤에도 요약만 전역 기본 모델로 돌아, 로컬 모델 대화의 요약이 다른 공급자로 나가고, 요약 시작 비율을 다른 모델의 창으로 쟀다. `/compact` 한 호출 안에서 예산과 요약의 모델이 달랐다.
+- 결정: 요약은 run과 `/compact`가 쓰는 모델(칸반 보드면 계획자 모델 → 대화의 모델 → 앱의 기본 선택)로 만든다. `TurnSummaries`는 전역 선택을 읽지 않고 부르는 쪽이 넘긴다.
+- 대체하는 결정: "모델은 대화마다 둔다 (2026-11-14)"의 "그대로인 것" 중 "요약".
+- 확인: `tests/compaction/agent-chat.test.ts`의 "summarizes with the model it is given, not the app's selection".
