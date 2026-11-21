@@ -30,7 +30,7 @@ import { SkillTools, type SkillToolset } from "../tools/skills.ts";
 import type { GoalArtifact, PlanStep } from "../workflow/workflow.ts";
 import { referencedRules, type RulePhase, type WorkflowRule } from "../workflow/rules.ts";
 import { projectWorkflowRules } from "../workflow/sources.ts";
-import { cardAgentToolNames, verifierToolNames } from "../workflow/card-capabilities.ts";
+import { cardToolNames } from "../workflow/card-capabilities.ts";
 import {
   CardAgent,
   CardAgentOutcome,
@@ -277,7 +277,7 @@ const make = Effect.gen(function* () {
     const project = yield* projects.get(projectId);
     const selection = yield* active.selectedFor(role);
     const carded = cardToolProject(project, worktree);
-    // Skills as the chat offers them: a catalog of the card's own folder, or none.
+    // Skills as the chat offers them: find_skill and read_skill over the catalog of the card's folder.
     const skills: SkillToolset = yield* skillTools.toolsFor(carded, sessionId);
     return {
       project: carded,
@@ -305,7 +305,7 @@ const make = Effect.gen(function* () {
           }),
         ),
     });
-  /** The tools a working subagent gets in `project`: the card agent's, which the planner was told. */
+  /** The tools a card agent and a verifier get in `project`: the ones the planner was told. */
   const workTools = (
     project: Project,
     projectId: string,
@@ -313,7 +313,7 @@ const make = Effect.gen(function* () {
     mcp: { readonly tools: readonly RunTool[] },
     skills: SkillToolset,
   ) => [
-    ...allowed(cardAgentToolNames)([
+    ...allowed(cardToolNames)([
       ...fileTools.toolsFor(project),
       ...outsideTools.toolsFor(project),
       ...approvedTools.toolsFor(project, sessionId, "gate"),
@@ -413,13 +413,7 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const recorder = yield* verdictRecorder;
           const tools: RunTool[] = [
-            ...allowed(verifierToolNames)([
-              ...fileTools.toolsFor(project),
-              ...approvedTools.toolsFor(project, input.sessionId, "gate"),
-              ...evidenceTools(input.projectId, input.sessionId),
-              ...skills.tools,
-            ]),
-            ...mcp.tools,
+            ...workTools(project, input.projectId, input.sessionId, mcp, skills),
             recorder.runTool,
           ];
           const origin = yield* planOrigin(input.sessionId);

@@ -1,12 +1,12 @@
 import { HashSet } from "effect";
 
 /**
- * What a kanban card's agent and its verifiers can do. The card agent and verifier tool sets are
- * filtered by these names, and the planner reads the same abilities as text, so a Plan only holds
- * cards their agents can carry out and checks their verifiers can run. Both also get the
- * read-only tools of the project's MCP servers, and verifiers get record_card_verdict.
+ * What a kanban card's agent and its verifiers can do. The card agent and the verifiers get the
+ * same tools, filtered by these names, and the planner reads the same abilities as text, so a Plan
+ * only holds cards their agents can carry out and checks their verifiers can run. Both also get the
+ * read-only tools of the project's MCP servers, and a verifier gets record_card_verdict on top.
  */
-export const cardAgentToolNames = HashSet.fromIterable([
+export const cardToolNames = HashSet.fromIterable([
   "list_files",
   "search_files",
   "read_file",
@@ -22,17 +22,7 @@ export const cardAgentToolNames = HashSet.fromIterable([
   "run_skill",
   "run_command",
   "save_project_commands",
-  "read_skill",
-  "read_evidence",
-  "read_tool_result",
-]);
-
-/** A verifier reads the work and runs the project's saved code skills; it changes nothing. */
-export const verifierToolNames = HashSet.fromIterable([
-  "list_files",
-  "search_files",
-  "read_file",
-  "run_skill",
+  "find_skill",
   "read_skill",
   "read_evidence",
   "read_tool_result",
