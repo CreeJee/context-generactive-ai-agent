@@ -17,7 +17,7 @@ import {
 } from "./compaction.ts";
 
 const noLimit = 1_000_000;
-const unlimited: Budget = { compactAt: noLimit, leaveOutAt: noLimit, inputCeiling: noLimit };
+const unlimited: Budget = { leaveOutAt: noLimit, inputCeiling: noLimit };
 const noSources = lookupSources({ toolResultId: () => null, nodeText: () => null });
 const fresh = { manual: { clearedThrough: 0, summarizedTurns: 0 }, summary: Option.none() };
 
@@ -148,7 +148,7 @@ describe("compact", () => {
         messages,
         state: fresh,
         sources: noSources,
-        budget: { compactAt: 0, leaveOutAt: 1_000, inputCeiling: noLimit },
+        budget: { leaveOutAt: 1_000, inputCeiling: noLimit },
       });
       expect(result.stage).toBe("clear-answered");
       expect(result.messages.slice(0, 2)).toEqual(messages.slice(0, 2));
@@ -371,7 +371,6 @@ describe("request history", () => {
       ]).flat();
       messages.push({ role: "user", content: "마지막 질문" });
       const sent = yield* firstSent(messages, noSources, {
-        compactAt: 3_000,
         leaveOutAt: 3_000,
         inputCeiling: noLimit,
       });
@@ -416,7 +415,7 @@ describe("request history", () => {
         const sent = yield* firstSent(
           [...earlier, instruction, ...steps.slice(0, 6), notice, ...steps.slice(6)],
           lookupSources({ toolResultId: (id) => `node-${id}`, nodeText: () => null }),
-          { compactAt: 0, leaveOutAt: 6_000, inputCeiling: noLimit },
+          { leaveOutAt: 6_000, inputCeiling: noLimit },
         );
         expect(sent[0]?.content).toContain("left out to save context");
         // The latest user turns are sent wherever the conversation is cut.
@@ -453,7 +452,6 @@ describe("request history", () => {
         [{ role: "user", content: "이어서 해줘" }, ...steps],
         noSources,
         {
-          compactAt: 0,
           leaveOutAt: 3_000,
           inputCeiling: noLimit,
         },
@@ -487,7 +485,7 @@ describe("request history", () => {
       const sent = yield* firstSent(
         messages,
         lookupSources({ toolResultId: (id) => `node-${id}`, nodeText: () => null }),
-        { compactAt: 0, leaveOutAt: 1_000, inputCeiling: noLimit },
+        { leaveOutAt: 1_000, inputCeiling: noLimit },
       );
       expect(sent).toEqual([
         ...messages.slice(0, 2),
@@ -502,7 +500,6 @@ describe("budget", () => {
   it("leaves out past the same share of a small window and at most 128k of a large one", () => {
     expect(budgetFor(200_000).leaveOutAt).toBe(110_000);
     expect(budgetFor(1_048_576)).toEqual({
-      compactAt: 0,
       leaveOutAt: 128_000,
       inputCeiling: 1_048_576 - 16_384,
     });

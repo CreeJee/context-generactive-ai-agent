@@ -203,7 +203,7 @@ testAgent()("compaction over recorded history", (it) => {
         ];
         // The log (about 4,500 tokens) is over budget; the page read_evidence returns in this run
         // (about 3,000) is not.
-        const budget: Budget = { compactAt: 4_000, leaveOutAt: noLimit, inputCeiling: noLimit };
+        const budget: Budget = { leaveOutAt: noLimit, inputCeiling: noLimit };
         const compacting = yield* compactionHook({
           sources: sourcesOf(nodes, at.sessionId),
           budget,
@@ -275,7 +275,7 @@ testAgent()("compaction over recorded history", (it) => {
         const secondRequest = Effect.fnUntraced(function* (name: string, first: ScriptedTurn) {
           const compacting = yield* compactionHook({
             sources: sourcesOf(yield* Nodes, at.sessionId),
-            budget: { compactAt: 0, leaveOutAt: noLimit, inputCeiling: 14_000 },
+            budget: { leaveOutAt: noLimit, inputCeiling: 14_000 },
             restore: () => Effect.succeed(null),
             promptCacheFor: Duration.hours(1),
           });
@@ -322,7 +322,7 @@ testAgent()("compaction over recorded history", (it) => {
       ) {
         const compacting = yield* compactionHook({
           sources: sourcesOf(yield* Nodes, at.sessionId),
-          budget: { compactAt: 0, leaveOutAt: noLimit, inputCeiling: 14_000 },
+          budget: { leaveOutAt: noLimit, inputCeiling: 14_000 },
           restore: () => Effect.succeed(null),
           promptCacheFor: Duration.hours(1),
           overhead,
@@ -433,7 +433,7 @@ testAgent()("compaction over recorded history", (it) => {
                 ...sourcesOf(nodes, at.sessionId),
                 userMessages: nodes.userMessages(at.sessionId),
               },
-              budget: { compactAt: 0, leaveOutAt, inputCeiling: noLimit },
+              budget: { leaveOutAt, inputCeiling: noLimit },
             }),
             (compacted) => compacted.messages,
           );

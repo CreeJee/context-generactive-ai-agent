@@ -60,7 +60,7 @@ const run = Effect.fnUntraced(function* (options: {
 }) {
   const compacting = yield* compactionHook({
     sources,
-    budget: { compactAt: 0, leaveOutAt: options.leaveOutAt, inputCeiling: noLimit },
+    budget: { leaveOutAt: options.leaveOutAt, inputCeiling: noLimit },
     restore: () => Effect.succeed(null),
     lastRequests: options.lastRequests,
     promptCacheFor: options.promptCacheFor,
@@ -199,7 +199,7 @@ testAgent()("requests append to the one before", (it) => {
         messages: [asked, ...step, joined],
         restored: null,
         sources: withLeads,
-        budget: { compactAt: 0, leaveOutAt: noLimit, inputCeiling: noLimit },
+        budget: { leaveOutAt: noLimit, inputCeiling: noLimit },
         previous: Option.some(previous),
         prefix,
       });
@@ -242,7 +242,7 @@ testAgent()("requests append to the one before", (it) => {
         messages: [asked, ...steps.flat()],
         restored: null,
         sources,
-        budget: { compactAt: 0, leaveOutAt, inputCeiling: noLimit },
+        budget: { leaveOutAt, inputCeiling: noLimit },
         previous: Option.some({
           from: sentBefore,
           messages: sentBefore,
@@ -283,7 +283,7 @@ testAgent()("requests append to the one before", (it) => {
             ],
             restored: null,
             sources,
-            budget: { compactAt: 0, leaveOutAt: noLimit, inputCeiling: noLimit },
+            budget: { leaveOutAt: noLimit, inputCeiling: noLimit },
             previous: Option.some(previous),
             prefix: now,
           }),

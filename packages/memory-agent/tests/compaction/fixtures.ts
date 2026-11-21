@@ -29,7 +29,7 @@ export const sourcesOf: {
 export const nextRequest = Effect.fnUntraced(function* (
   messages: ReadonlyArray<ConversationMessage>,
   sessionId: string,
-  budget: Budget = { compactAt: noLimit, leaveOutAt: noLimit, inputCeiling: noLimit },
+  budget: Budget = { leaveOutAt: noLimit, inputCeiling: noLimit },
 ) {
   const sent = yield* requestHistory({
     metadata: (yield* RunStore).chatMetadata,
