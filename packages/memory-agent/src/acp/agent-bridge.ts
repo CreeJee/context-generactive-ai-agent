@@ -65,8 +65,6 @@ import { Schedule } from "effect";
 import { LoopStep, superviseLoopStep } from "../runtime/loop-health.ts";
 import { logFailure } from "../runtime/logged-failures.ts";
 
-/** How often a bridged session renews its lease; the app drops a lease after 90 seconds. */
-const leaseRenewMs = 20_000;
 /** How often a prompt checks for subagent and external agent calls waiting for approval. */
 const relayPollMs = 1_500;
 /** Longest tool output passed to the editor. */
@@ -87,10 +85,7 @@ interface PromptTurn {
 
 interface BridgeSession {
   readonly id: string;
-  /** This editor connection's lease holder, like a browser tab's. */
-  readonly holder: string;
   readonly project: ProjectSummary;
-  readonly renew: Fiber.Fiber<void>;
   readonly turn: Ref.Ref<Option.Option<PromptTurn>>;
 }
 
@@ -105,14 +100,12 @@ const ExplainedFailure = Schema.Literals([
   "unreachable",
   "login_required",
   "model_selection_required",
-  "session_in_use",
   "session_not_found",
 ]);
 const failureMessages: Readonly<Record<typeof ExplainedFailure.Type, MessageDescriptor>> = {
   unreachable: msg`앱에 연결하지 못했습니다. context-generactive-agent 앱을 먼저 실행해 주십시오.`,
   login_required: msg`앱에서 지금 쓰는 모델 제공자에 로그인해 주십시오.`,
   model_selection_required: msg`앱에서 모델을 선택해 주십시오.`,
-  session_in_use: msg`다른 창에서 쓰고 있는 대화입니다.`,
   session_not_found: msg`그런 대화가 없습니다.`,
 };
 
@@ -405,7 +398,7 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
     function* (session: BridgeSession, turn: PromptTurn, input: Omit<RunInput, "runId">) {
       const events = yield* chat.run({
         params: { session: session.id },
-        headers: { "x-session-holder": session.holder },
+        headers: {},
         payload: { runId: yield* crypto.uuidV7(), ...input },
       });
       return yield* events.pipe(
@@ -454,32 +447,9 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
     );
 
   const open = Effect.fn("AcpAgent.open")(function* (sessionId: string, project: ProjectSummary) {
-    const holder = `acp-${yield* crypto.uuidV4()}`;
-    const lease = yield* api.lease(sessionId, holder, "claim");
-    if (lease.state !== "mine")
-      return yield* AppRequestFailed.make({
-        status: 423,
-        code: "session_in_use",
-        message: "session_in_use (423)",
-        reason: AppRequestReason.cases.RequestRejected.make({}),
-      });
-    // A failed renewal is retried with backoff. When the retries run out, or on a defect, renewal
-    // stops: the app drops the lease and shows the session read-only (decided 2026-10-18).
-    const renew = yield* api.lease(sessionId, holder, "claim").pipe(
-      superviseLoopStep({ message: "acp_lease_renewal_stopped", setHealth: () => Effect.void }),
-      Effect.repeat({
-        schedule: Schedule.spaced(leaseRenewMs),
-        while: LoopStep.$is("Continued"),
-      }),
-      Effect.delay(leaseRenewMs),
-      Effect.asVoid,
-      Effect.forkDetach,
-    );
     const session: BridgeSession = {
       id: sessionId,
-      holder,
       project,
-      renew,
       turn: yield* Ref.make(Option.none<PromptTurn>()),
     };
     yield* Ref.update(sessions, HashMap.set(sessionId, session));
@@ -562,9 +532,7 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
             argumentsJson: approval.argumentsJson,
             requester: requesterLabel(approval.requester),
           }).pipe(
-            Effect.flatMap((approved) =>
-              api.answerApproval(session.id, session.holder, approval.id, approved),
-            ),
+            Effect.flatMap((approved) => api.answerApproval(session.id, approval.id, approved)),
             // An unanswered approval stays pending in the app, where the page can answer it.
             Effect.catchTag(["UnknownError", "AppRequestFailed"], () => Effect.void),
             Effect.when(
@@ -724,7 +692,7 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
           if (!isTruthy(turn)) return;
           yield* Ref.set(turn.cancelled, true);
           // The app's cancel stops the run for good; closing the stream alone would not (R10).
-          yield* api.cancel(session.id, session.holder).pipe(
+          yield* api.cancel(session.id).pipe(
             // The turn is already marked cancelled; a failed app cancel is only logged.
             Effect.catchTag("AppRequestFailed", logFailure("ACP cancel request failed")),
           );
@@ -733,24 +701,7 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
     );
 
   const connection = app.connect(options.stream);
-  void connection.closed.finally(() =>
-    runNativeEffect(
-      Effect.flatMap(Ref.getAndSet(sessions, HashMap.empty()), (closed) =>
-        Effect.forEach(
-          HashMap.values(closed),
-          (session) =>
-            Effect.all(
-              [
-                Fiber.interrupt(session.renew),
-                Effect.ignore(api.lease(session.id, session.holder, "release")),
-              ],
-              { concurrency: "unbounded", discard: true },
-            ),
-          { concurrency: "unbounded", discard: true },
-        ),
-      ),
-    ),
-  );
+  void connection.closed.finally(() => runNativeEffect(Ref.set(sessions, HashMap.empty())));
   return connection;
 });
 
