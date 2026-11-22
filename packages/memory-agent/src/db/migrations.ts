@@ -3183,6 +3183,11 @@ export const migrations: readonly string[] = [
     UNIQUE (project_id, term)
   );
   `,
+  `
+  -- The project's permission mode alone decides who approves a Plan (decisions.md "처음 Plan의
+  -- 승인자는 프로젝트 권한 모드가 정한다 (2026-11-22)"), so a revision no longer records a mode.
+  ALTER TABLE workflow_state_revisions DROP COLUMN mode;
+  `,
 ];
 
 /** One of the two startup migrations that may rebuild a referenced table with FK checks suspended;
