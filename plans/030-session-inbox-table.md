@@ -17,7 +17,8 @@
 - **Priority**: P1
 - **Effort**: M
 - **Risk**: MED (DB 표를 옮긴다)
-- **Depends on**: 없음(028·029와 다른 파일이다. 어느 쪽이 먼저여도 된다)
+- **Depends on**: 없음(028·029와 어느 쪽이 먼저여도 된다. 029도 `src/layers.ts`와 `src/index.ts`를 고치고
+  029·032도 `migrations` 배열 끝에 단계를 더하므로, 뒤에 병합하는 쪽이 글자 충돌을 풀 수 있다)
 - **Category**: tech-debt
 - **Planned at**: commit `6ae481ce`, 2026-11-22
 
@@ -148,7 +149,7 @@ export const dispatchesMessage = (dispatches: ReadonlyArray<SessionDispatch>) =>
 
 ### 지금 동작을 단언하는 테스트
 
-- `tests/sessions/dispatches.test.ts`(13개): `notify`의 거절 이유들, 저장이 재시작을 견딤, `deliver`,
+- `tests/sessions/dispatches.test.ts`(12개): `notify`의 거절 이유들, 저장이 재시작을 견딤, `deliver`,
   `consume`의 claim, `release`, 알림 멈춤.
 - `tests/agent/dispatch-delivery.test.ts`(5개): run이 기다리는 dispatch를 듣고 끝날 때 delivered로 바꿈, 같은
   run이 두 번 듣지 않음, 실패한 run이 돌려줌, 알림을 멈춘 대화는 듣지 않음.
@@ -172,8 +173,9 @@ export const dispatchesMessage = (dispatches: ReadonlyArray<SessionDispatch>) =>
 
 ### 표
 
-`migrations` 배열 끝에 이름 붙인 단계 하나(`sessionInboxMigration`)를 더한다. 한 단계에서 표를 만들고, 옛
-행을 옮기고, 옛 표 둘을 지운다.
+`migrations` 배열 끝에 이름 붙인 단계 하나(`sessionInboxMigration`)를 더한다. `export const`로 둔다
+(migration 테스트가 이 단계의 자리를 `migrations.indexOf(sessionInboxMigration)`으로 찾는다. 본보기:
+`btwTablesDropMigration`). 한 단계에서 표를 만들고, 옛 행을 옮기고, 옛 표 둘을 지운다.
 
 ```sql
   -- A message that enters a conversation without the user typing it now (decisions.md "대화에
@@ -233,12 +235,17 @@ claim은 별도 표가 아니라 행의 두 열이다. claim한 run이 그 행�
   `ConversationMessage = Schema.Struct({ projectId, fromSessionId, fromRunId, body })`(모두 `Schema.String`).
   다른 보낸 쪽의 모양은 그것을 옮기는 계획이 더한다. 그래서 이 계획의 `put`은 `conversation`만 받는다.
   보낸 쪽에서 payload schema로 가는 표는 객체 리터럴 하나에 두어, 뒤의 계획이 키를 더하게 한다.
+  행을 읽는 schema의 `sender`는 그 객체 리터럴에 있는 키만 받는다(이 계획에서는 `conversation`). DB 표의
+  `CHECK`는 네 종류를 받지만 이 계획에서는 `conversation` 행만 생긴다.
 - 행을 읽은 값 `InboxEntry`: `{ id, sessionId, sender, delivery, payload, state, deliveredRunId, createdAt,
   deliveredAt }`. `payload`는 schema로 decode한 값이다. `sender`가 가르는 tagged union이 되게 한다.
 - 메서드(이름과 뜻은 `dispatches.ts`의 것을 그대로 잇는다):
-  - `put(entry)`: 행을 넣는다. id는 `uuidV7`, `state`는 `waiting`.
-  - `pending(sessionId)`: 기다리는 행, 오래된 것부터.
-  - `claim(sessionId, runId)`: 기다리고 아직 claim되지 않은 행을 run이 잡는다. **`parent_notification_holds`에
+  - `put(entry)`: 행을 넣고 넣은 `InboxEntry`를 돌려준다(`INSERT … RETURNING`). id는 `uuidV7`, `state`는
+    `waiting`. 지금 `notify`가 저장한 행을 돌려주고 그것이 도구 결과가 된다.
+  - `pending(sessionId)`: 기다리는 행, 오래된 것부터(`ORDER BY created_at, id`. `created_at`은 ms 단위라
+    같은 값이 나온다. 지금의 `dispatches.ts`가 `ORDER BY d.created_at, d.id`다).
+  - `claim(sessionId, runId)`: 기다리고 아직 claim되지 않은 행을 run이 잡는다. 돌려주는 순서도
+    `ORDER BY created_at, id`다. **`parent_notification_holds`에
     그 대화가 있으면 아무것도 주지 않는다.** 한 transaction 안에서 한다. 같은 run이 다시 불러도 이미 잡은
     행은 다시 주지 않는다.
   - `release(sessionId, runId)`: 그 run의 claim을 지운다(`claimed_run_id`, `claimed_at`을 NULL로).
@@ -286,8 +293,8 @@ claim은 별도 표가 아니라 행의 두 열이다. claim한 run이 그 행�
 - `packages/memory-agent/src/layers.ts`, `src/index.ts` (layer와 내보내기)
 - `packages/memory-agent/src/tools/code.ts` (86행 주석의 표 이름 `session_dispatches`만)
 - `packages/memory-agent/tests/session-dispatch-migration.test.ts` (→ `session-inbox-migration.test.ts`)
-- `packages/memory-agent/tests/sessions/dispatches.test.ts`, `tests/agent/dispatch-delivery.test.ts` (표
-  이름을 직접 읽는 SQL이 있으면 그 줄만)
+- `packages/memory-agent/tests/sessions/dispatches.test.ts`, `tests/agent/dispatch-delivery.test.ts`,
+  `tests/agent/notify-session-record.test.ts` (옛 표를 직접 읽는 SQL 줄만. Step 2.4)
 - `packages/memory-agent/src/sessions/README.md`, `src/db/README.md`(표를 적고 있으면)
 - `docs/decisions.md` (끝에 한 절)
 
@@ -340,21 +347,45 @@ commit: `feat(sessions): 세션 inbox 표와 서비스를 만든다`
 1. `sessionInboxMigration`에 옮기는 `INSERT … SELECT`와 두 `DROP TABLE`을 더한다("만들 것 > 표"). Step 1의
    commit은 아직 어디에도 배포되지 않았으므로 같은 단계를 고쳐도 된다. 단계를 하나 더 만들지 않는다.
 2. `dispatches.ts`를 "만들 것 > dispatch는 inbox를 쓴다"대로 고친다. `SessionDispatches.layer`가
-   `SessionInbox`를 요구하게 되므로 `layers.ts`에서 순서와 `Layer.provide`를 맞춘다.
+   `SessionInbox`를 요구하게 된다. `layers.ts`의 목록(`Layer.mergeAll`이라 순서는 뜻이 없다)에
+   `SessionInbox.layer`를 두고, 321행의 `SessionDispatches.layer`를
+   `SessionDispatches.layer.pipe(Layer.provide(SessionInbox.layer))`로 바꾼다. 본보기는 같은 목록의
+   `Boards.layer.pipe(Layer.provide([GoalOrder.layer, OutcomeLedger.layer]))`다.
 3. `src/tools/code.ts:86`의 주석에서 `session_dispatches`를 `session_inbox`로 고친다. 그 파일의 코드는
    건드리지 않는다.
-4. `tests/sessions/dispatches.test.ts`와 `tests/agent/dispatch-delivery.test.ts`에서 `session_dispatches`나
-   `session_dispatch_claims`를 SQL로 직접 읽거나 쓰는 줄이 있으면 `session_inbox`로 바꾼다. 단언의 뜻은
-   바꾸지 않는다.
+4. 옛 표를 SQL로 직접 읽는 테스트 줄을 새 표에 맞게 고친다. 표 이름만 바꿔서는 돌지 않는다(새 표에는
+   `to_session_id`, `body`, `project_id`, `from_session_id`, `from_run_id` 열과 claim 표가 없다). 단언의
+   뜻과 기대값은 바꾸지 않는다. 대응:
+   - `session_dispatches` → `session_inbox`, `to_session_id` → `session_id`.
+   - `body` → `json_extract(payload, '$.body') AS body`. 같은 식으로 `'$.projectId' AS project_id`,
+     `'$.fromSessionId' AS from_session_id`, `'$.fromRunId' AS from_run_id`. 기대 객체가 `to_session_id`
+     키를 가지면 `session_id AS to_session_id`로 읽는다.
+   - `state`, `delivered_run_id`, `delivered_at`, `id`는 이름이 같다.
+   - claim 수를 세는 줄(`SELECT count(*) AS n FROM session_dispatch_claims WHERE dispatch_id = ?`) →
+     `SELECT count(*) AS n FROM session_inbox WHERE id = ? AND claimed_run_id IS NOT NULL`. 별칭(`n`,
+     `count`)은 원래 줄의 것을 지킨다.
+   - claim 표와 join하는 줄(`dispatches.test.ts` 262-264행) →
+     `SELECT json_extract(payload, '$.body') AS body, claimed_run_id AS run_id FROM session_inbox WHERE id IN (?, ?) AND claimed_run_id IS NOT NULL ORDER BY body`
+     (옛 줄은 claim 표에서 시작했으므로 claim이 있는 행만 나왔다. `claimed_run_id IS NOT NULL`이 그 뜻을
+     지킨다).
+
+   고칠 줄:
+   - `tests/sessions/dispatches.test.ts`: 17, 41, 180, 217, 262-264, 299, 305, 338, 344행.
+   - `tests/agent/dispatch-delivery.test.ts`: 18행(주석의 표 이름), 21, 34, 259행.
+   - `tests/agent/notify-session-record.test.ts`: 85, 132행.
+
+5. `tests/session-dispatch-migration.test.ts`는 이 commit에서 실패한다(지워진 표에 행을 넣는다). Step 3이
+   다시 쓴다. 이 단계의 Verify에서는 돌리지 않는다.
 
 **Verify**:
 
 - `rg --hidden -n 'session_dispatches|session_dispatch_claims' packages/memory-agent/src -g '!*.md'` →
   `migrations.ts`의 줄만 남는다(옛 단계와 새 단계)
 - `vp run memory-agent#typecheck`와 `vp run agent#typecheck` → exit 0
-- `cd packages/memory-agent && vp test run --maxWorkers=4 tests/sessions tests/agent` → 모두 통과.
-  `dispatches.test.ts` 13개, `dispatch-delivery.test.ts` 5개, `notify-session-record.test.ts` 2개가 그대로
-  통과해야 한다.
+- `cd packages/memory-agent && vp test run --maxWorkers=4 tests/sessions/ tests/agent/` → 모두 통과
+  (끝의 `/`를 지킨다. 없으면 `tests/agents/`와 `tests/agent-chat-owner-process-recovery.test.ts`도 돈다).
+  `dispatches.test.ts` 12개, `dispatch-delivery.test.ts` 5개, `notify-session-record.test.ts` 2개가
+  통과해야 한다(합 19개).
 - `git diff --stat HEAD -- packages/memory-agent/src/agent` → 변경 없음
 
 commit: `refactor(sessions): 다른 대화가 남긴 메시지를 세션 inbox에 둔다`
@@ -365,8 +396,10 @@ commit: `refactor(sessions): 다른 대화가 남긴 메시지를 세션 inbox�
    다시 쓴다. 경우:
    - 새 파일에 배열 전체를 적용하면 `session_inbox`가 있고 `session_dispatches`와
      `session_dispatch_claims`가 없다(`sqlite_master`를 읽는다).
-   - 옛 데이터가 옮겨진다: 배열의 마지막 단계를 뺀 나머지를 적용하고, 옛 표에 행 셋을 넣는다(기다리는 것,
-     기다리는데 claim이 있는 것, delivered인 것). 그다음 마지막 단계를 적용한다. `session_inbox`에 세 행이
+   - 옛 데이터가 옮겨진다: `const index = migrations.indexOf(sessionInboxMigration)`으로 자리를 찾아
+     `migrations.slice(0, index)`를 적용하고(본보기: `tests/btw-tables-drop-migration.test.ts` 15-16행),
+     옛 표에 행 셋을 넣는다(기다리는 것, 기다리는데 claim이 있는 것, delivered인 것). 그다음
+     `sessionInboxMigration`을 적용한다. "배열의 마지막 단계"로 찾지 않는다(다른 계획이 뒤에 단계를 더한다). `session_inbox`에 세 행이
      있고, 각각 `sender = 'conversation'`, `delivery = 'next_run'`, payload의 네 값, `state`,
      `claimed_run_id`, `delivered_run_id`가 맞다.
    - `CHECK` 제약: `state = 'delivered'`인데 `delivered_run_id`가 없는 행은 넣을 수 없다.
@@ -397,8 +430,9 @@ commit: `test(db): 세션 inbox migration을 시험한다`
    - 첫 단계: `session_inbox` 표와 `SessionInbox` 서비스. 다른 대화가 남긴 메시지가 먼저 옮겨 왔다. 동작은
      같다(다음 run에 전달, 깨우지 않음).
    - 대체하는 결정: "세션 dispatch는 표에 영속으로 저장한다"의 표 이름과 claim 표.
-   - 달라진 것 하나: 옛 표는 보낸 대화가 지워지면 그 대화가 보낸 행도 지웠다(`ON DELETE CASCADE`). 이제
-     보낸 대화는 payload 안의 값이라, 보낸 대화가 지워져도 이미 남긴 메시지는 전달된다.
+   - 달라진 것 둘: 옛 표는 보낸 대화가 지워지면 그 대화가 보낸 행도 지웠다(`ON DELETE CASCADE`). 이제
+     보낸 대화는 payload 안의 값이라, 보낸 대화가 지워져도 이미 남긴 메시지는 전달된다. 옛 표의
+     `CHECK (from_session_id <> to_session_id)`도 없어졌다. 자기에게 보내는 것은 `notify`의 검사만 막는다.
    - 남은 단계: 끝난 작업, 보드, 사용자의 대기 메시지를 옮기고, 화면에 inbox를 보인다.
 
 commit: `docs(decisions): 세션 inbox 결정을 적는다`
@@ -406,13 +440,13 @@ commit: `docs(decisions): 세션 inbox 결정을 적는다`
 ## Test plan
 
 - 새 테스트: inbox 서비스 7개(Step 1), migration 3개(Step 3).
-- 그대로 통과해야 하는 것: dispatch 테스트 20개(Step 2). 이것이 "동작이 바뀌지 않았다"의 증거다.
+- 그대로 통과해야 하는 것: dispatch 테스트 19개(Step 2). 표를 직접 읽는 SQL만 고친다. 이것이 "동작이 바뀌지 않았다"의 증거다.
 
 ## Done criteria
 
 - [ ] `vp run memory-agent#typecheck`와 `vp run agent#typecheck`가 exit 0, 루트 `vp lint`가 exit 0
 - [ ] `session_dispatches`와 `session_dispatch_claims`가 `src`에서 `migrations.ts` 밖에 나오지 않는다
-- [ ] `tests/sessions`, `tests/agent`, 새 migration 테스트가 모두 통과한다
+- [ ] `tests/sessions/`, `tests/agent/`, 새 migration 테스트가 모두 통과한다
 - [ ] `packages/memory-agent/src/agent` 아래 파일이 바뀌지 않았다
 - [ ] `docs/decisions.md` 끝에 새 절이 있다
 - [ ] `plans/README.md`의 030 행을 고쳤다
@@ -423,9 +457,13 @@ commit: `docs(decisions): 세션 inbox 결정을 적는다`
 
 - "Current state"의 발췌가 실제 코드와 다르다(공백과 몇 줄의 번호 차이는 빼고).
 - `chat.ts`, `dispatch-notifications.ts`, `orchestrator-message.ts`를 고쳐야 통과한다.
-- dispatch 테스트 20개 중 단언의 뜻을 바꿔야 통과하는 것이 있다.
+- dispatch 테스트 19개 중 단언의 뜻을 바꿔야 통과하는 것이 있다.
 - 옛 표를 읽는 코드가 `dispatches.ts` 밖에 있다(예: 제보 묶음, 보관·삭제 정리, 가져오기).
-  `rg --hidden -n 'session_dispatch' packages apps -g '!node_modules' -g '!*.md'`로 Step 2 앞에 확인한다.
+  `rg --hidden -n 'session_dispatch' packages apps -g '!node_modules' -g '!*.md' -l`로 Step 2 앞에 확인한다.
+  나와도 되는 파일은 일곱이다: `src/db/migrations.ts`, `src/sessions/dispatches.ts`, `src/tools/code.ts`,
+  `tests/session-dispatch-migration.test.ts`, `tests/sessions/dispatches.test.ts`,
+  `tests/agent/dispatch-delivery.test.ts`, `tests/agent/notify-session-record.test.ts`. 그 밖의 파일이
+  나오면 STOP이다.
 - migration 테스트에서 "앞 단계를 고쳤다"는 종류의 실패가 난다. 앞 단계는 고치지 않는다.
 - 같은 Verify가 고친 뒤에도 두 번 실패한다.
 
