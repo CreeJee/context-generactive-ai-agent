@@ -18,9 +18,9 @@ export type SlashCommand = Data.TaggedEnum<{
   cancel: {};
   /** Stops sending the model tool output it has already answered from. */
   compact: {};
-  /** Selects Goal/Plan input or runs a ready Plan on its board. */
+  /** Starts shaping a Goal or runs a ready Plan on its board. */
   workflow: {
-    readonly move: "goal" | "plan" | "run";
+    readonly move: "goal" | "run";
     readonly request: string;
   };
   workflow_status: {};
@@ -76,8 +76,7 @@ export const commandSpecs: readonly CommandSpec[] = [
       }),
     }),
   },
-  { name: "goal", description: msg`결과를 맡기고 자율적으로 진행하기`, argument: Argument.none() },
-  { name: "plan", description: msg`변경 없이 조사한 뒤 Plan 만들기`, argument: Argument.none() },
+  { name: "goal", description: msg`달성할 결과 맡기기`, argument: Argument.none() },
   { name: "execute", description: msg`준비된 Plan 승인하고 실행하기`, argument: Argument.none() },
   { name: "status", description: msg`현재 Goal과 Plan 상태 보기`, argument: Argument.none() },
   {
@@ -278,7 +277,6 @@ function parseSlashBody(draft: string, context: SlashContext): SlashParse {
     case "compact":
       return SlashParse.command({ command: SlashCommand.compact() });
     case "goal":
-    case "plan":
       return SlashParse.command({
         command: SlashCommand.workflow({ move: spec.name, request: rest }),
       });

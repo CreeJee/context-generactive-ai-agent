@@ -32,12 +32,11 @@ import { composerModeOf, modeLabels } from "./workflow-panel";
 import type { ImageFeatureStatus, QueuedMessage, WorkflowMove } from "../api";
 import type { useRunState } from "../session/use-run-state";
 
-const workflowModes = ["chat", "goal", "plan"] as const satisfies readonly WorkflowMove[];
+const workflowModes = ["chat", "goal"] as const satisfies readonly WorkflowMove[];
 
 /** What each mode button does, shown on hover. */
 const modeTitles = {
-  goal: msg`결과를 맡기면 보드에서 Plan의 카드를 바로 실행합니다`,
-  plan: msg`프로젝트를 변경하지 않은 채 Plan을 만듭니다. 승인하면 보드에서 실행합니다`,
+  goal: msg`결과를 맡기면 이해한 내용을 먼저 확인한 뒤 Plan의 카드를 보드에서 실행합니다`,
   chat: msg({ message: "일반 대화", comment: "Hover text of the Chat mode button: plain chat" }),
 } satisfies Record<(typeof workflowModes)[number], MessageDescriptor>;
 
@@ -272,11 +271,9 @@ export function ChatComposer({
                   ? t`Enter를 누르면 고친 내용을 저장합니다`
                   : generating
                     ? t`답변 중에도 이어서 보낼 수 있습니다`
-                    : run.workflow?.phase === "shaping" && run.workflow.mode === "goal"
+                    : run.workflow?.phase === "shaping"
                       ? t`달성할 결과를 입력해 주십시오`
-                      : run.workflow?.phase === "shaping"
-                        ? t`변경 없이 조사해 세울 Plan의 내용을 입력해 주십시오`
-                        : t`메시지를 입력해 주십시오. /로 명령을 부르고 이미지는 붙여넣거나 끌어다 놓습니다`
+                      : t`메시지를 입력해 주십시오. /로 명령을 부르고 이미지는 붙여넣거나 끌어다 놓습니다`
             }
             rows={1}
           />
@@ -341,7 +338,7 @@ export function ChatComposer({
             <ToggleGroup
               aria-label={t({
                 message: "입력 방식",
-                comment: "Accessible name of the Chat/Goal/Plan mode buttons in the composer",
+                comment: "Accessible name of the Chat/Goal buttons in the composer",
               })}
               variant="outline"
               size="sm"

@@ -51,8 +51,6 @@ import {
   QueueItemState,
   type QueuedMessage,
   ResumeTaskResult,
-  type WorkflowMode,
-  type WorkflowMove,
   type WorkflowState,
 } from "../api";
 import { ChatApprovals } from "./chat-approvals";
@@ -384,7 +382,7 @@ function ChatPanel({
   const [imagePrompt, setImagePrompt] = useState<string | null>(null);
   /** A move away from a running board the user is asked to confirm; `revise` focuses the composer after. */
   const [leaving, setLeaving] = useState<{
-    readonly move: "chat" | WorkflowMode;
+    readonly move: keyof typeof modeLabels;
     readonly revise: boolean;
   } | null>(null);
   // What the run in progress reports; the server's record covers the time before and after it.
@@ -488,7 +486,7 @@ function ChatPanel({
     answered: endsWithText,
   });
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const moveWorkflow = (move: WorkflowMove) =>
+  const moveWorkflow = (move: keyof typeof modeLabels | "run") =>
     runUiEffect(
       Effect.gen(function* () {
         const state = yield* uiPromise(() => run.moveWorkflow(move));
@@ -526,7 +524,7 @@ function ChatPanel({
   // Revising a running Plan stops the board until it is approved again, so the user confirms it.
   const revisePlan = () =>
     run.workflow?.phase === "running"
-      ? setLeaving({ move: run.workflow.mode, revise: true })
+      ? setLeaving({ move: "goal", revise: true })
       : askForRevision();
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -721,7 +719,7 @@ function ChatPanel({
   const ready = draftImages.images.filter(DraftImage.$is("ready"));
   const uploading = draftImages.images.some(DraftImage.$is("uploading"));
   const failed = draftImages.images.some(DraftImage.$is("failed"));
-  const leavingMode = modeLabels[leaving?.move ?? "plan"];
+  const leavingMode = modeLabels[leaving?.move ?? "goal"];
   // Images stay in the draft when the model changes to one that cannot read them.
   const unreadable = !imagesSupported && draftImages.images.length > 0;
   const shownNotice =
@@ -912,8 +910,7 @@ function ChatPanel({
               const state = yield* uiPromise(() => moveWorkflow(command.move));
               if (!isTruthy(state)) return Option.none<string>();
               // An approved Plan runs on its board, so running it sends the chat nothing.
-              const request =
-                command.request || (command.move === "plan" ? chatPrompts.planDefault : "");
+              const request = command.request;
               if (!(request.length > 0)) {
                 setDraft("");
                 return Option.none<string>();
@@ -1261,11 +1258,12 @@ function ChatPanel({
                     실행됩니다.
                   </Trans>{" "}
                   {leaving?.move === "goal" ? (
-                    <Trans>Plan 작성자가 Plan을 다시 준비하면 바로 이어서 실행합니다.</Trans>
-                  ) : leaving?.move === "plan" ? (
-                    <Trans>고친 Plan을 다시 승인하면 이어서 실행합니다.</Trans>
+                    <Trans>
+                      Plan 작성자가 Plan을 다시 준비하면 프로젝트 권한 모드에 따라 승인을 기다리거나
+                      바로 이어서 실행합니다.
+                    </Trans>
                   ) : (
-                    <Trans>Plan이나 Goal 모드에서 다시 승인하면 이어서 실행합니다.</Trans>
+                    <Trans>Goal로 돌아와 Plan을 다시 승인하면 이어서 실행합니다.</Trans>
                   )}
                 </AlertDialogDescription>
               </AlertDialogHeader>

@@ -68,7 +68,7 @@ describe("Plan streaming composer", () => {
     )?.[1];
     expect(phaseGroup).toBeDefined();
     const phaseButtons = phaseGroup?.match(/<button[^>]*>/g);
-    expect(phaseButtons).toHaveLength(3);
+    expect(phaseButtons).toHaveLength(2);
     expect(phaseButtons?.every((button) => button.includes('disabled=""'))).toBe(true);
   });
 });

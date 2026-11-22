@@ -30,14 +30,14 @@ function button(html: string, label: string) {
 }
 
 describe("server-authoritative workflow UI", () => {
-  test("labels a completed workflow as done and any other by its mode", () => {
+  test("labels a completed workflow as done and any other as a Goal", () => {
     expect(workflowModeLabel({ ...workflowFixture, phase: "completed" })).toBe("완료");
     expect(workflowModeLabel({ ...workflowFixture, phase: "running", mode: "goal" })).toBe("Goal");
-    expect(workflowModeLabel(workflowFixture)).toBe("Plan");
+    expect(workflowModeLabel(workflowFixture)).toBe("Goal");
     expect(workflowModeLabel({ ...workflowFixture, phase: "chat", mode: "goal" })).toBe("Chat");
   });
-  test("titles the panel with its mode and stage", () => {
-    expect(render(<WorkflowArtifactPanel {...props} />)).toContain("Plan · Plan 작성 중");
+  test("titles the panel with its stage", () => {
+    expect(render(<WorkflowArtifactPanel {...props} />)).toContain("Goal · Plan 작성 중");
     expect(
       render(
         <WorkflowArtifactPanel
@@ -49,7 +49,7 @@ describe("server-authoritative workflow UI", () => {
     const done = render(
       <WorkflowArtifactPanel {...props} state={{ ...workflowFixture, phase: "completed" }} />,
     );
-    expect(done).toContain("Plan · 완료");
+    expect(done).toContain("Goal · 완료");
     // A completed Goal leaves nothing to approve, revise or pause; only the fold stays a button.
     for (const label of ["승인하고 실행", "Plan 수정", "일시 중지", "계속", "중단"])
       expect(done).not.toContain(label);
@@ -65,6 +65,10 @@ describe("server-authoritative workflow UI", () => {
     const html = render(<WorkflowArtifactPanel {...props} actions={actions} kanbanRunning />);
     expect(html).not.toContain("보드에서 이어서 실행");
     expect(html).toContain("Plan 수정");
+  });
+  test("offers approval of a Plan revised while its board runs", () => {
+    const html = render(<WorkflowArtifactPanel {...props} kanbanRunning />);
+    expect(html).toContain("승인하고 실행");
   });
   test("uses server execute intent instead of inferring it from plan status", () => {
     // An executing artifact used to force the continue label. The server owns the decision.
@@ -84,11 +88,11 @@ describe("server-authoritative workflow UI", () => {
       ),
     ).not.toContain(' disabled=""');
   });
-  test("leaves a Goal mode Plan to its own approval", () => {
+  test("offers the Plan's approval whatever mode the state was saved in", () => {
     const html = render(
       <WorkflowArtifactPanel {...props} state={{ ...workflowFixture, mode: "goal" }} />,
     );
-    expect(html).not.toContain("승인하고 실행");
+    expect(html).toContain("승인하고 실행");
     expect(html).toContain("Plan 수정");
   });
   test("honors refusal even when the artifact looks executable", () => {
