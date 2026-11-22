@@ -621,13 +621,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             Option.exists((goal) => goal.active),
           ),
     );
-  /**
-   * A Goal mode Plan its planner saved ready for the current Goal, with no question that blocks
-   * it left open.
-   */
-  const goalModeReady = (state: WorkflowState) =>
+  /** A Plan saved ready for the current Goal, with no question that blocks the Goal left open. */
+  const planReady = (state: WorkflowState) =>
     state.phase === "shaping" &&
-    state.mode === "goal" &&
     state.goal !== null &&
     (state.goal.status === "active" || state.goal.status === "draft") &&
     !state.goal.openQuestions.some((question) => question.blocking) &&
@@ -723,8 +719,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     Effect.forkScoped({ startImmediately: true }),
   );
   /**
-   * The Goal each session's newest run found when a user's turn started it. Goal mode starts a
-   * board only for such a Goal: the user had a turn after reading it (decisions.md "Goal은 맞춘
+   * The Goal each session's newest run found when a user's turn started it. The owner approves a ready Plan only for such a Goal: the user had a turn after reading it (decisions.md "Goal은 맞춘
    * 뒤에 맡긴다"). A restart forgets it, and the user's next turn sets it again.
    */
   const goalsUserAnswered = yield* Ref.make<Readonly<Record<string, string>>>({});
@@ -2677,7 +2672,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const state = yield* workflows.move(sessionId, move);
         yield* execution.stop(sessionId);
         yield* cancelProviderRetries(sessionId);
-        // A board that cannot start shows why, as in Goal mode, and is offered again from the board
+        // A board that cannot start shows why, as when the owner approves it, and is offered again from the board
         // panel.
         const refused = executesPlan(state) ? yield* startBoard(sessionId) : Option.none<string>();
         if (Option.isSome(refused)) {
@@ -2989,14 +2984,19 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           )
             return;
           const reconciled = yield* workflows.reconcile(sessionId);
-          // Goal mode runs its planner's cards without a Plan approval, once the user answered the
-          // Goal: a ready Plan saved for the current Goal is approved as the user would approve it
-          // in Plan mode when the run that ended began with a user's turn and that Goal. The run
-          // that first saves a Goal never starts its board.
+          // The project's permission mode says who approves a ready Plan. In `ask` the user does, from
+          // the page. In `auto` and `full` the owner does once the user answered the Goal: the run
+          // that ended began with a user's turn and that Goal. The run that first saves a Goal never
+          // starts its board (decisions.md "처음 Plan의 승인자는 프로젝트 권한 모드가 정한다").
           const answered = (yield* Ref.get(goalsUserAnswered))[sessionId];
+          const ownerApproves = Option.exists(
+            yield* Effect.option(projects.get(session.projectId)),
+            (project) => project.permissionMode !== "ask",
+          );
           const workflow =
             !restarted &&
-            goalModeReady(reconciled) &&
+            ownerApproves &&
+            planReady(reconciled) &&
             answered !== undefined &&
             answered === (yield* workflows.goalInstanceId(sessionId))
               ? yield* workflows.move(sessionId, "run").pipe(

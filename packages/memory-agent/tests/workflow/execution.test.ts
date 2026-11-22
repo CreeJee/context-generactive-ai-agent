@@ -3,6 +3,7 @@ import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { CardAttempts } from "../../src/kanban/card-attempts.ts";
 import type { JsonValue as Json } from "../../src/json.ts";
+import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import type { ScriptedResponder, ScriptedTurn } from "../../src/testing/scripted-model.ts";
 import { BoardAuthor } from "../../src/workflow/card.ts";
@@ -104,6 +105,17 @@ const started = Effect.fnUntraced(function* (
 /** A fresh session whose Goal has a ready Plan, answered by `turns`. */
 const planned = (turns: readonly ScriptedTurn[]) => started(turns, { goal, plan });
 
+/** For the rest of the test the owner approves a ready Plan; afterwards the user does again. */
+const ownerApproves = Effect.gen(function* () {
+  const env = yield* TestEnv;
+  const permit = (mode: "ask" | "full") =>
+    env.use(
+      Effect.flatMap(Projects, (projects) => projects.setPermissionMode(env.project.id, mode)),
+    );
+  yield* permit("full");
+  yield* Effect.addFinalizer(() => Effect.orDie(permit("ask")));
+});
+
 /** Long enough for the follow-up after a run's end to have started a board, had it meant to. */
 const afterFollowup = Effect.sleep("300 millis");
 
@@ -142,31 +154,37 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
     }),
   );
 
-  it.effect("Goal mode runs the cards its planner saved once the run ends", () =>
-    Effect.gen(function* () {
-      const env = yield* TestEnv;
-      const session = yield* planned([
-        call("goal", "update_goal", goal),
-        call("plan", "update_plan", plan),
-        { text: "The board will run the cards." },
-      ]);
-      yield* env.use(Effect.flatMap(Workflows, (workflows) => workflows.move(session.id, "goal")));
-      yield* runTurn(session.id, `${session.id}-turn`, "Get this done");
-      yield* waitForBoard(session.board);
-      const state = yield* env.use(
-        Effect.flatMap(Workflows, (workflows) => workflows.get(session.id)),
-      );
-      expect([state.phase, state.plan?.status]).toEqual(["running", "executing"]);
-      // The planner keeps the project's tools; only its prompt leaves the cards to the board.
-      const tools = session.invocations()[0]?.toolNames ?? [];
-      expect(tools).toEqual(expect.arrayContaining(["update_goal", "update_plan", "write_file"]));
-      expect(tools).not.toContain("update_workflow_progress");
-    }),
+  it.effect(
+    "the owner approves a ready Plan once the run ends when the permission mode asks nobody",
+    () =>
+      Effect.gen(function* () {
+        const env = yield* TestEnv;
+        yield* ownerApproves;
+        const session = yield* planned([
+          call("goal", "update_goal", goal),
+          call("plan", "update_plan", plan),
+          { text: "The board will run the cards." },
+        ]);
+        yield* env.use(
+          Effect.flatMap(Workflows, (workflows) => workflows.move(session.id, "goal")),
+        );
+        yield* runTurn(session.id, `${session.id}-turn`, "Get this done");
+        yield* waitForBoard(session.board);
+        const state = yield* env.use(
+          Effect.flatMap(Workflows, (workflows) => workflows.get(session.id)),
+        );
+        expect([state.phase, state.plan?.status]).toEqual(["running", "executing"]);
+        // The planner keeps the project's tools; only its prompt leaves the cards to the board.
+        const tools = session.invocations()[0]?.toolNames ?? [];
+        expect(tools).toEqual(expect.arrayContaining(["update_goal", "update_plan", "write_file"]));
+        expect(tools).not.toContain("update_workflow_progress");
+      }),
   );
 
-  it.effect("Goal mode starts no board in the run that first saves the Goal", () =>
+  it.effect("the owner starts no board in the run that first saves the Goal", () =>
     Effect.gen(function* () {
       const env = yield* TestEnv;
+      yield* ownerApproves;
       const session = yield* started(
         [
           call("goal", "update_goal", goal),
@@ -191,9 +209,40 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
     }),
   );
 
-  it.effect("Goal mode starts no board while a question that blocks the Goal is open", () =>
+  it.effect("in ask a ready Plan waits for the user's approval", () =>
     Effect.gen(function* () {
       const env = yield* TestEnv;
+      const session = yield* planned([{ text: "The Plan is ready." }]);
+      yield* env.use(Effect.flatMap(Workflows, (workflows) => workflows.move(session.id, "goal")));
+      yield* runTurn(session.id, `${session.id}-turn`, "Yes, go on");
+      yield* afterFollowup;
+      const state = yield* env.use(
+        Effect.flatMap(Workflows, (workflows) => workflows.get(session.id)),
+      );
+      expect([state.phase, state.plan?.status]).toEqual(["shaping", "ready"]);
+      expect(yield* session.board).toBe(false);
+      yield* env.use(
+        Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, null, "run")),
+      );
+      yield* waitForBoard(session.board);
+    }),
+  );
+
+  it.effect("a state saved in Plan mode follows the permission mode too", () =>
+    Effect.gen(function* () {
+      const env = yield* TestEnv;
+      yield* ownerApproves;
+      const session = yield* planned([{ text: "The Plan is ready." }]);
+      yield* env.use(Effect.flatMap(Workflows, (workflows) => workflows.move(session.id, "plan")));
+      yield* runTurn(session.id, `${session.id}-turn`, "Yes, go on");
+      yield* waitForBoard(session.board);
+    }),
+  );
+
+  it.effect("the owner starts no board while a question that blocks the Goal is open", () =>
+    Effect.gen(function* () {
+      const env = yield* TestEnv;
+      yield* ownerApproves;
       const session = yield* started(
         [call("plan", "update_plan", plan), { text: "One thing I need to know first." }],
         {
@@ -266,9 +315,10 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
     }),
   );
 
-  it.effect("a Goal mode approval runs its Plan on the board that kept running", () =>
+  it.effect("the owner's approval runs the Plan on the board that kept running", () =>
     Effect.gen(function* () {
       const env = yield* TestEnv;
+      yield* ownerApproves;
       const session = yield* planned([
         call("plan", "update_plan", plan),
         { text: "The board will run the cards." },
@@ -287,7 +337,7 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
         Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, null, "run")),
       );
       yield* waitForBoard(session.board);
-      // Back in Goal mode the board stays active while the planner writes the next Plan.
+      // Back in shaping the board stays active while the planner writes the next Plan.
       yield* env.use(Effect.flatMap(Workflows, (workflows) => workflows.move(session.id, "goal")));
       yield* runTurn(session.id, `${session.id}-turn`, "Plan the rest");
       // The owner approves this Plan once the run ends, and the board that kept running runs it.
@@ -301,6 +351,41 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
           Effect.timeout("5 seconds"),
         );
       expect(state.plan?.status).toBe("executing");
+      expect(yield* session.board).toBe(true);
+    }),
+  );
+
+  it.effect("in ask a Plan revised on a running board waits for the user's approval", () =>
+    Effect.gen(function* () {
+      const env = yield* TestEnv;
+      const session = yield* planned([
+        call("plan", "update_plan", plan),
+        { text: "The Plan is ready." },
+      ]);
+      yield* env.use(
+        Effect.flatMap(Workflows, (workflows) =>
+          workflows.holdCard(
+            session.id,
+            { cardId: "p1", hold: true },
+            BoardAuthor.cases.User.make({}),
+          ),
+        ),
+      );
+      yield* env.use(
+        Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, null, "run")),
+      );
+      yield* waitForBoard(session.board);
+      yield* env.use(Effect.flatMap(Workflows, (workflows) => workflows.move(session.id, "goal")));
+      yield* runTurn(session.id, `${session.id}-turn`, "Plan the rest");
+      yield* afterFollowup;
+      const waiting = yield* env.use(
+        Effect.flatMap(Workflows, (workflows) => workflows.get(session.id)),
+      );
+      expect([waiting.phase, waiting.plan?.status]).toEqual(["shaping", "ready"]);
+      const approved = yield* env.use(
+        Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, null, "run")),
+      );
+      expect([approved.phase, approved.plan?.status]).toEqual(["running", "executing"]);
       expect(yield* session.board).toBe(true);
     }),
   );

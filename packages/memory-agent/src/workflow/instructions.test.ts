@@ -36,6 +36,12 @@ describe("workflowInstructions", () => {
     }
     expect(planner("completed", "plan")).not.toContain(cardCapabilities);
   });
+  test("shapes a Goal the same way whatever mode the state was saved in", () => {
+    const goalMode = workflowInstructions(state("shaping", "goal"), resolved("shaping"));
+    expect(workflowInstructions(state("shaping", "plan"), resolved("shaping"))).toBe(goalMode);
+    expect(goalMode).toContain("save no Plan");
+    expect(goalMode).toContain("the project's permission mode decides who approves the Plan");
+  });
   test("provides the owner-read Goal instance ID instead of inferring it from Goal version", () => {
     const prompt = workflowInstructions(state("completed"), resolved("completed"), "owner-id-123");
     expect(prompt).toContain("Current Goal instance ID: owner-id-123");
