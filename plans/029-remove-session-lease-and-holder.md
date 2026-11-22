@@ -14,6 +14,13 @@
 > **Drift check**: 이 계획은 028 뒤의 코드를 고친다. 발췌의 줄 번호는 028 이전(`2dcc89aa`) 기준이라 몇
 > 줄에서 수십 줄 어긋난다. 줄 번호가 아니라 이름과 발췌의 글자로 찾는다. 발췌한 정의가 저장소에 없으면
 > STOP이다.
+>
+> **028이 실제로 남긴 것(2026-11-22, `66db16b7` 기준)**: `chat.ts`의 `cancel`, `discardInterrupts`,
+> `compact`, `imageOrigin`은 인자 이름이 `_holder`다. 028이 더한 테스트(`tests/chat/session.test.ts`의 세
+> 테스트, `tests/chat/two-pages.test.ts`)는 `holder`를 넘긴다. 화면의 `chat-approvals.tsx`,
+> `subagent-panel.tsx`, `uncertain-runs.tsx`, `message.tsx`는 `readOnly` prop이 없고 `holder` prop만 남았다.
+> `chat-session.ts`의 `answer`는 거절 `approval_not_pending`·`run_in_progress`를 버리고 대화를 다시 읽는다.
+> 이 동작과 그 테스트는 인자만 맞추고 그대로 둔다.
 
 ## Status
 
@@ -316,7 +323,7 @@ commit: `refactor(app): 화면이 요청에 페이지 이름을 붙이지 않는
 
 - `rg --hidden -n 'SessionLeases|LeaseView|LeaseRequest|sessionHolderHeader|x-session-holder|session_in_use|leaseTtlMs|ClaimResult' packages/memory-agent apps/agent -g '!node_modules' -g '!*.md' -g '!build'`
   → 결과 없음
-- `rg --hidden -n -w 'holder' packages/memory-agent/src/agent packages/memory-agent/src/api apps/agent/app -g '!*.md'`
+- `rg --hidden -n -w 'holder|_holder' packages/memory-agent/src/agent packages/memory-agent/src/api apps/agent/app packages/memory-agent/tests/chat -g '!*.md'`
   → 결과 없음
 - `rg -n -i -w 'lease' tools/navigation-verification.mjs apps/agent/app/entry/chat/chat-panel.browser.tsx`
   → 결과 없음
@@ -350,8 +357,10 @@ commit: `docs: 세션 lease를 지운 것을 문서에 반영한다`
 - 새 테스트는 쓰지 않는다. 지우는 계획이다.
 - 지우는 테스트: `src/sessions/leases.test.ts`, `tests/session-leases-effect.test.ts`. ACP 브리지 테스트에는
   지울 단언이 없다.
-- 028의 `tests/chat/two-pages.test.ts`가 그대로 통과해야 한다(인자만 맞춘다). 이 테스트가 "두 탭이 함께
-  조작한다"를 지킨다.
+- 028의 `tests/chat/two-pages.test.ts`와 `tests/chat/session.test.ts`의 "an approval another page answered
+  closes here, and a late answer to it is dropped"가 그대로 통과해야 한다(인자만 맞춘다). 이 둘이 "두 탭이
+  함께 조작한다"와 "답한 승인은 다른 탭에서도 닫힌다"를 지킨다. 단언을 지우거나 약하게 해야 통과하면
+  STOP이다.
 
 ## Done criteria
 
