@@ -4750,6 +4750,10 @@ msgstr "이미 다른 답이 기록됐습니다. 보드를 다시 확인해 주�
 msgid "이미 답한 도구 출력 비우기"
 msgstr "이미 답한 도구 출력 비우기"
 
+#: app/entry/chat/refusals.ts
+msgid "이미 답한 승인 요청입니다."
+msgstr "이미 답한 승인 요청입니다."
+
 #: app/entry/chat/subagent-panel.tsx
 msgid "이미 답했거나 더 이상 기다리지 않는 요청입니다. 남은 요청을 다시 불러왔습니다."
 msgstr "이미 답했거나 더 이상 기다리지 않는 요청입니다. 남은 요청을 다시 불러왔습니다."

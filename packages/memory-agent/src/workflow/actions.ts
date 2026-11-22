@@ -46,7 +46,6 @@ function evaluateWorkflowActionBody(
   request: WorkflowActionRequest,
   context: WorkflowActionContext = {},
 ): WorkflowActionDecision {
-  if (context.lease?.state === "other") return { allowed: false, reason: "session_in_use" };
   if (
     context.running === true &&
     (WorkflowActionRequest.$is("move")(request) || request.action === "resume")

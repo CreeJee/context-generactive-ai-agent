@@ -52,15 +52,14 @@ testAgent({ testProvider: {} })("chat session atoms", (it) => {
         Option.some(["user", "assistant"]),
       );
 
-      yield* (yield* agentChat).lease(session, "tab-b", "claim");
       yield* Atom.mount(atoms.notTaken);
-      const again = { holder: "tab-a", content: "again" };
+      const again = { holder: "tab-a", content: "" };
       yield* Atom.set(atoms.send, again);
-      expect(yield* Effect.flip(done(atoms.send))).toMatchObject({ error: "session_in_use" });
+      expect(yield* Effect.flip(done(atoms.send))).toMatchObject({ error: "empty_message" });
       expect(yield* shown).toEqual(answered);
       const notTaken = Option.getOrThrow(yield* Atom.get(atoms.notTaken));
       expect(notTaken.input).toBe(again);
-      expect(notTaken.refusal).toMatchObject({ error: "session_in_use" });
+      expect(notTaken.refusal).toMatchObject({ error: "empty_message" });
     }).pipe(Effect.provideService(AtomRegistry.AtomRegistry, AtomRegistry.make()), Effect.scoped),
   );
 

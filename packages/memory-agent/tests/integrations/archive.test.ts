@@ -62,7 +62,7 @@ testAgent({ testProvider: { delayedTurnGate: gate.waitFor } })("archived convers
     }),
   );
 
-  it.effect("respect another page's lease and safely stop a running answer before archive", () =>
+  it.effect("safely stop a running answer before archive", () =>
     Effect.gen(function* () {
       const { project } = yield* TestEnv;
       const session = (yield* (yield* Sessions).create(project.id)).id;
@@ -70,9 +70,6 @@ testAgent({ testProvider: { delayedTurnGate: gate.waitFor } })("archived convers
       const agent = yield* AgentChat;
       const archive = (holder: string | null, archived = true) =>
         agent.archive(session, holder, archived);
-
-      yield* agent.lease(session, "tab-a", "claim");
-      expect(yield* Effect.flip(archive("tab-b"))).toEqual({ error: "session_in_use" });
 
       // Tab A's page sends a turn in a fiber the test owns.
       const page = yield* openPage(session, "tab-a");

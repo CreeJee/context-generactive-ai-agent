@@ -13,21 +13,10 @@
       "status": 404
     },
     "otherSessionResume": {
-      "body": [
-        {
-          "name": "run.accepted",
-          "timestamp": "<time>",
-          "type": "CUSTOM",
-          "value": {}
-        },
-        {
-          "code": "unknown-interrupt",
-          "message": "Resume entry references non-pending interrupt approval_hand-written@<session>. Resume entries must resolve or cancel the complete interrupt batch.",
-          "timestamp": "<time>",
-          "type": "RUN_ERROR"
-        }
-      ],
-      "status": 200
+      "body": {
+        "error": "approval_not_pending"
+      },
+      "status": 409
     },
     "otherSessionRunId": {
       "body": {
@@ -53,21 +42,10 @@
       "status": 200
     },
     "unknownInterrupt": {
-      "body": [
-        {
-          "name": "run.accepted",
-          "timestamp": "<time>",
-          "type": "CUSTOM",
-          "value": {}
-        },
-        {
-          "code": "unknown-interrupt",
-          "message": "Missing resume entry for pending interrupt approval_hand-written@<session>. Resume entries must resolve or cancel the complete interrupt batch.",
-          "timestamp": "<time>",
-          "type": "RUN_ERROR"
-        }
-      ],
-      "status": 200
+      "body": {
+        "error": "approval_not_pending"
+      },
+      "status": 409
     }
   },
   "conversation": {

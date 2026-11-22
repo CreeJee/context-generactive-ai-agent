@@ -94,10 +94,6 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
           answer,
           "네",
         ]);
-        yield* agent.lease(at.sessionId, "tab-a", "claim");
-        expect(yield* Effect.flip(agent.compact(at.sessionId, "tab-b"))).toEqual({
-          error: "session_in_use",
-        });
         expect(yield* Effect.flip(agent.compact(`${at.sessionId}:missing`, "tab-a"))).toEqual({
           error: "session_not_found",
         });
