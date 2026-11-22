@@ -475,6 +475,7 @@ src/kanban/orchestrator.test.ts tests/workflow/state.test.ts
 tests/workflow/goal-transition.test.ts tests/workflow/execution.test.ts
 tests/workflow/board.test.ts tests/chat/run-and-queue.test.ts
 tests/db-migrator-metadata.test.ts tests/upgrade-0.0.17.test.ts
+tests/golden/chat.test.ts
 ```
 
 화면 테스트 묶음("화면 묶음"):
@@ -501,6 +502,9 @@ app/entry/session/run-notice.test.ts
 - `apps/agent/app/entry/api.ts`
 - 위에 적은 화면 테스트·fixture 파일 5개
 - `packages/memory-agent/src/workflow/README.md`, `docs/decisions.md`
+- `docs/goal-transitions.md` (테스트가 다시 만드는 파일. 손으로 고치지 않는다. 1-g 참고)
+- `packages/memory-agent/tests/golden/__golden__/goal-restart.json`, `goal-approval.json`, `goal-tools.json`
+  (각각 `"mode": "plan",` 한 줄만 지운다)
 - typecheck가 `mode`나 `"plan"` 때문에 실패한다고 가리키는 다른 테스트·fixture 파일(같은 식으로 고친다)
 
 **고치지 않는 것**
@@ -698,9 +702,26 @@ export const revisionStateSql = (revision: string) => `json_object(
 
   - 722행의 `{ ...state, phase: "shaping", mode: "goal" },`를 지운다.
   - 748행: `["chat", "goal", "run"] as const,`
-- `tests/workflow/goal-transition.test.ts` 581행과 644행의 `mode: "goal",`를 지운다.
+  - 116행과 769행의 `workflows.move(id, "plan")`을 `workflows.move(id, "goal")`로 바꾼다. 116행을 지우지
+    않는다(뒤따르는 단언이 `phase_changed` 사건 셋을 기대하고, `move`는 부를 때마다 사건을 하나 쓴다).
+- `docs/goal-transitions.md`: `src/workflow/goal-transitions.test.ts`의 `keyOf`에서 `mode`가 빠지면 그
+  테스트 파일이 세는 "도달한 상태 수"가 바뀐다. 그 파일의 테스트 "matches the reviewed list of
+  transitions"(252-253행)는 결과를 `docs/goal-transitions.md`와 비교한다(`toMatchFileSnapshot`).
+  `goal-transitions.test.ts`의 위 편집을 마친 뒤
+  `cd packages/memory-agent && vp test run -u src/workflow/goal-transitions.test.ts`로 그 문서를 다시
+  만든다. `git diff docs/goal-transitions.md`에서 바뀐 줄이 "## 도달한 상태 수" 아래 숫자 줄뿐이면 Step 1
+  커밋에 넣는다. 다른 줄(전이 표, 상태 이름)이 바뀌었으면 STOP이다.
+- `tests/workflow/goal-transition.test.ts` 581행과 644행의 `mode: "goal",`를 지운다. 214행
+  `{ ...admissible, name: "Plan mode with an existing Goal", to: "plan", admission: applied },`를 통째로
+  지운다(`"goal"`로 바꾸면 213행과 같은 경우가 두 번 돈다).
+- `tests/golden/__golden__/goal-restart.json` 627행, `goal-approval.json` 711행, `goal-tools.json` 487행의
+  `"mode": "plan",` 한 줄씩을 지운다. 다른 줄은 건드리지 않는다. 이 파일들은 `tests/golden/chat.test.ts`가
+  저장된 상태와 비교한다(`tests/golden/rows.ts` 268행이 `revisionStateSql`로 읽는다). `-u`로 다시 만들지
+  않는다. 한 줄을 지운 뒤 테스트가 통과하지 않으면 STOP이다.
 - `tests/workflow/execution.test.ts` 231-240행의 테스트 "a state saved in Plan mode follows the permission
   mode too"를 통째로 지운다. 그런 상태가 이제 없다. 파일 맨 위 주석이나 다른 테스트는 건드리지 않는다.
+- `tests/chat/run-and-queue.test.ts` 111행: `agent.moveWorkflow(session.id, null, "plan")`의 `"plan"`을
+  `"goal"`로 바꾼다.
 - `tests/chat/run-and-queue.test.ts` 140-158행: `moveWorkflow(…, "plan")`을 `"goal"`로, `moves.plan` 둘을
   `moves.goal`로 바꾸고, 마지막 `toMatchObject`에서 `mode: "plan",`을 지운다. `moveWorkflow`의 다른 인자는
   실제 코드에 있는 그대로 둔다.
@@ -709,6 +730,8 @@ export const revisionStateSql = (revision: string) => `json_object(
 **1-h. 화면 테스트와 fixture**
 
 - `workflow-test-fixtures.ts` 17행, `use-run-state.test.tsx` 46행의 `mode: "plan",`을 지운다.
+- `workflow-test-fixtures.ts` 8행(`allowedWorkflowActions`의 `moves` 안)의 `plan: { allowed: true },`를
+  지운다.
 - `run-notice.test.ts` 27행, `chat-panel.browser.tsx` 68행:
   `workflow: { phase: "chat", goal: null, plan: null, ledger: [] },`
 - `use-run-state.test.tsx` 134행: `run.moveWorkflow("goal")`
@@ -718,8 +741,9 @@ export const revisionStateSql = (revision: string) => `json_object(
   - 45행: `state={{ ...workflowFixture, phase: "running" }}`
   - 93행과 134행: `state={{ ...workflowFixture, mode: "goal" }}`를 `state={workflowFixture}`로 바꾼다.
 
-**1-i.** 두 typecheck를 돌려 남은 곳을 찾는다. `mode`가 없다거나 `"plan"`을 `WorkflowMove`에 줄 수 없다는
-오류가 가리키는 곳을 같은 식으로 고친다(값 지우기, `"plan"`을 `"goal"`로). 그 밖의 오류가 나오면 STOP이다.
+**1-i.** 두 typecheck를 돌려 남은 곳을 찾는다. 다음 세 가지 오류가 가리키는 곳을 같은 식으로 고친다:
+상태나 `Standing`에 `mode`가 없다(값을 지운다), `"plan"`을 `WorkflowMove`에 줄 수 없다(`"goal"`로
+바꾼다), `moves` 기록에 `plan`이 없다(그 항목을 지운다). 그 밖의 오류가 나오면 STOP이다.
 
 **Verify**:
 
@@ -730,6 +754,8 @@ export const revisionStateSql = (revision: string) => `json_object(
   → 출력 없음.
 - 서버 묶음과 화면 묶음 → 모두 통과.
 - 브라우저 테스트 → 모두 통과.
+- `git diff --stat docs/goal-transitions.md packages/memory-agent/tests/golden/__golden__` → 파일 넷, golden
+  파일은 각각 한 줄 삭제.
 
 커밋: `refactor(workflow): 저장된 Goal/Plan 모드 값과 move "plan"을 지운다`
 
@@ -769,7 +795,7 @@ export const revisionStateSql = (revision: string) => `json_object(
 - `vp run memory-agent#typecheck` → exit 0. `vp lint` → exit 0.
 - 서버 묶음 → 모두 통과. 그 가운데 `tests/upgrade-0.0.17.test.ts`(예전 DB를 지금 schema로 올린다)와
   `tests/db-migrator-metadata.test.ts`가 통과해야 한다.
-- `cd packages/memory-agent && vp test run --maxWorkers=4 src/kanban/kanban-flow.test.ts src/workflow/durable-stream.test.ts`
+- `cd packages/memory-agent && vp test run --maxWorkers=4 src/kanban/kanban-flow.test.ts src/workflow/durable-stream.test.ts tests/goal-history-migration.test.ts tests/database.test.ts`
   → 모두 통과(상태를 SQL로 읽는 다른 길).
 
 커밋: `refactor(db): workflow revision의 mode 열을 지운다`
