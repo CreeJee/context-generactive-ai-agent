@@ -9,7 +9,7 @@
 ## Interface
 
 - `Workflows` — 세션 범위의 버전 있는 Goal/Plan 산출물과 실행 ledger 서비스(`layer`, `layerWithOptions({ allowNewGoal })`)
-- `WorkflowState` / `GoalArtifact` / `PlanArtifact` / `PlanStep` / `WorkflowPhase` / `WorkflowMode` / `WorkflowMove` / `WorkflowAction` / `VerificationStatus` — 워크플로 상태 스키마(phase: chat|shaping|running|completed, mode: plan|goal). 모드가 따로 저장되기 전의 phase(goal·plan은 shaping과 그 모드, execute·verify는 running)도 읽는다
+- `WorkflowState` / `GoalArtifact` / `PlanArtifact` / `PlanStep` / `WorkflowPhase` / `WorkflowMode` / `WorkflowMove` / `WorkflowAction` / `VerificationStatus` — 워크플로 상태 스키마(phase: chat|shaping|running|completed, mode: plan|goal). 모드가 따로 저장되기 전의 phase(goal·plan은 shaping과 그 모드, execute·verify는 running)도 읽는다. `mode`는 저장만 되고 동작을 가르지 않는다(decisions.md "처음 Plan의 승인자는 프로젝트 권한 모드가 정한다").
 - `RulePhase` / `rulePhases` — 규칙 파일이 쓰는 어휘(goal|plan|execute|verify)와, phase마다 대화가 읽는 규칙(`rules.ts`)
 - `UpdateGoal` / `StartNewGoal` / `UpdatePlan` / `UpdateWorkflowProgress` — 모델 도구 입력 스키마
 - `GoalOutcome` / `OutcomeId` — Goal outcome은 `{ id, text }`다. 뜻이 같으면 id를 유지하고 뜻이 바뀌면 새 id를 쓴다. 한 Goal 안에서 id는 한 번만 쓴다. id 없이 문자열로 저장된 옛 outcome은 순서대로 `O1`, `O2`…로 읽는다
@@ -66,7 +66,7 @@
 - 완료되거나 실패한 Goal은 progress 기록으로 다시 열리지 않는다(`goal_terminal`). 새 Goal 버전(`updateGoal`)이나 새 Goal만 연다. 사용자가 멈춘 뒤 끝난 run은 상태를 바꾸지 않는다.
 - 칸반 Goal을 고치면 phase는 그대로이고 Plan만 이전 버전이 된다. `Workflows.display`가 그 동안 상태 응답에 `card_reclassifying`을 싣는다. 전이는 화면 문구를 정하지 않는다. 보드는 `Workflows.goalAt`으로 이전 Goal을 읽어 바뀐 outcome을 맡은 카드만 다시 분류한다.
 - 분류가 끝나 보류한 카드가 없으면 보드 루프가 `Workflows.cardsReclassified`(전이 `CardsReclassified`)로 Plan의 `goalVersion`을 지금 Goal 버전으로 올린다. 그래서 상태는 `GoalChanged`에서 `Running`으로 돌아가고 다시 승인하지 않아도 된다. 분류하는 동안 `reconcile`은 활성 보드의 running phase를 내리지 않는다(`reconciledPhase`의 `kanban`).
-- Goal 모드는 Plan 승인 없이 보드를 시작하지만, 사용자가 Goal에 답한 뒤에만 시작한다(`agent/chat.ts`의 `goalModeReady`와 `goalsUserAnswered`). 끝난 run이 사용자의 턴으로 시작했고 그때 이미 지금 Goal이 있었으며, Goal에 막는 질문이 없고, 지금 Goal의 ready Plan이 있어야 한다. Goal을 처음 저장한 run은 보드를 시작하지 않는다. Plan 작성자 지시문(`tools.ts`의 `goalAlignment`)은 그 run에서 draft Goal만 저장하고 이해한 내용, 가정, 저장한 용어, 질문을 사용자에게 말하게 한다. 서버를 재시작하면 답했다는 기록은 사라지고 사용자의 다음 턴이 다시 만든다
+- 처음 Plan의 승인자는 프로젝트 권한 모드가 정한다. Goal을 처음 저장한 run은 Plan을 만들지 않고 보드를 시작하지 않는다. `ask`에서는 사용자가 "승인하고 실행"을 눌러야 시작한다. `auto`·`full`에서는 서버가 시작한다(`agent/chat.ts`의 `planReady`와 `goalsUserAnswered`): 끝난 run이 사용자의 턴으로 시작했고 그때 이미 지금 Goal이 있었으며, Goal에 막는 질문이 없고, 지금 Goal의 ready Plan이 있어야 한다. 서버를 재시작하면 답했다는 기록은 사라지고 사용자의 다음 턴이 다시 만든다
 - 사용자는 chat이나 모드(plan·goal)로 옮기거나 Plan을 실행(`run`)한다. 모드로 옮기면 shaping이 되고, 실행 중인 보드는 다시 승인할 때까지 카드를 배정하지 않는다. `completed`는 서버만 정한다. `run` 외의 이동은 산출물을 승인하거나 바꾸지 않는다.
 - `run`(running 진입)은 `plan.goalVersion === goal.version`이고 plan status가 `ready` 또는 `executing`일 때만 허용된다. lease가 다른 소유자면 `session_in_use`, run이 진행 중이면 이동 요청과 resume이 `run_in_progress`로 거부된다.
 - 실행 가능 조건: phase가 running이고, goal status가 active, plan status가 executing이며, plan의 goalVersion이 goal의 version과 같아야 한다.
