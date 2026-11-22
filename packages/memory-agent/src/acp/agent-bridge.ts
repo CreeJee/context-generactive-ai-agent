@@ -398,7 +398,6 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
     function* (session: BridgeSession, turn: PromptTurn, input: Omit<RunInput, "runId">) {
       const events = yield* chat.run({
         params: { session: session.id },
-        headers: {},
         payload: { runId: yield* crypto.uuidV7(), ...input },
       });
       return yield* events.pipe(

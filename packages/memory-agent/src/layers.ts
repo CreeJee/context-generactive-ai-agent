@@ -110,7 +110,6 @@ import { DirectImageExecutor, ImageMediaWorkflow } from "./providers/image-media
 import { ImageRouteFacts, ImageRouter } from "./providers/image-router.ts";
 import { QueueDelivery } from "./queue/delivery.ts";
 import { MessageQueue } from "./queue/queue.ts";
-import { SessionLeases } from "./sessions/leases.ts";
 import { SessionDispatches } from "./sessions/dispatches.ts";
 import { SessionInbox } from "./sessions/inbox.ts";
 import { Sessions } from "./sessions/sessions.ts";
@@ -176,8 +175,6 @@ export interface MemoryAgentLayerOptions {
   readonly directImageExecutor?: Layer.Layer<DirectImageExecutor>;
   /** Separate durable media workflow override. */
   readonly imageMediaWorkflow?: Layer.Layer<ImageMediaWorkflow>;
-  /** How long a page keeps a session without renewing; tests shorten it. */
-  readonly leaseTtlMs?: number;
   /** Interpret statements in the background after each run. Default true; tests turn it off. */
   readonly interpretAutomatically?: boolean;
   /** Summarize earlier turns in the background after each run. Default true; tests turn it off. */
@@ -315,7 +312,6 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     Nodes.layer,
     PermissionReviews.layer,
     Attachments.layer,
-    SessionLeases.layer(options.leaseTtlMs),
     FreePages.layer,
     PlannerStatistics.layer,
     MessageQueue.layer,

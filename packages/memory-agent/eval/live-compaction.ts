@@ -136,7 +136,7 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
   /** The manual /compact this arm runs before the final audit; it must change something. */
   const compactManually = Effect.gen(function* () {
     const manual = yield* Effect.provideContext(
-      services.agent.compact(services.sessionId, null),
+      services.agent.compact(services.sessionId),
       servicesContext,
     );
     if (manual.cleared === 0 && manual.summarizedTurns === 0)
@@ -149,7 +149,6 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
       services.chat
         .run({
           params: { session: services.sessionId },
-          headers: {},
           payload: {
             runId: yield* crypto.uuidV4(),
             messages: [{ id: yield* crypto.uuidV4(), role: "user", content: text }],
@@ -162,7 +161,7 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
       .flatMap(({ data }) => (AgUiEvent.guards.TEXT_MESSAGE_CONTENT(data) ? [data.delta] : []))
       .join("");
     const status = yield* Effect.provideContext(
-      services.agent.status(services.sessionId, null),
+      services.agent.status(services.sessionId),
       servicesContext,
     );
     if (status.lastRun?.status !== "completed")

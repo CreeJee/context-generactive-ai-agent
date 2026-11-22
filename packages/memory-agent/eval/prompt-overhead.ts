@@ -235,7 +235,6 @@ const firstRequests = Effect.fn("eval.promptOverhead")(function* () {
       yield* Stream.runDrain(
         yield* chat.run({
           params: { session: session.id },
-          headers: {},
           payload: {
             runId: yield* crypto.uuidV4(),
             messages: [{ id: yield* crypto.uuidV4(), role: "user", content: "hi" }],

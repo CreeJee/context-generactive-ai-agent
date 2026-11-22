@@ -82,7 +82,7 @@ testAgent({ testProvider: {} })("chat session atoms", (it) => {
 
       yield* Atom.set(starting.send, { content: "hi" });
       yield* done(starting.send);
-      const started = yield* (yield* agentChat).status(session, null);
+      const started = yield* (yield* agentChat).status(session);
       yield* onReader(Atom.set(reading.latest, started.lastRun?.runId ?? null));
 
       const roles = Atom.toStream(reading.state).pipe(
@@ -143,7 +143,7 @@ testAgent({ testProvider: {} })("chat session atoms", (it) => {
         expect(Option.getOrThrow(yield* second.waiting).pending).toHaveLength(1);
         expect(Option.getOrThrow(yield* third.waiting).pending).toHaveLength(1);
         // Only the third page hears of the server's runs.
-        const before = yield* agent.status(session, null);
+        const before = yield* agent.status(session);
         yield* third.on(
           Effect.gen(function* () {
             yield* Atom.set(third.atoms.latest, (before.running ?? before.lastRun)?.runId ?? null);
@@ -164,7 +164,7 @@ testAgent({ testProvider: {} })("chat session atoms", (it) => {
           }),
         );
         yield* second.on(done(second.atoms.answer));
-        const answered = (yield* agent.status(session, null)).lastRun?.runId ?? null;
+        const answered = (yield* agent.status(session)).lastRun?.runId ?? null;
         const calls = invocations().length;
 
         // The third page hears of the run the answer started and reads the conversation again.

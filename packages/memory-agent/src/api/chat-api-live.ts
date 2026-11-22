@@ -53,22 +53,16 @@ export const ChatApiHandlers = HttpApiBuilder.group(
           orDefect,
           Effect.flatMap(Effect.fromResult),
         ),
-      run: ({ params, headers, payload }) =>
-        chat
-          .start(
-            { holder: headers["x-session-holder"] ?? null, input: payload },
-            params.session,
-            null,
-          )
-          .pipe(
-            Effect.catchTags({
-              SessionNotFound: sessionNotFound,
-              ProjectNotFound: () => refused({ error: "project_not_found" }),
-              ProviderUnavailable: providerUnavailable,
-              ModelUnavailable: providerUnavailable,
-            }),
-            answered,
-          ),
+      run: ({ params, payload }) =>
+        chat.start({ input: payload }, params.session, null).pipe(
+          Effect.catchTags({
+            SessionNotFound: sessionNotFound,
+            ProjectNotFound: () => refused({ error: "project_not_found" }),
+            ProviderUnavailable: providerUnavailable,
+            ModelUnavailable: providerUnavailable,
+          }),
+          answered,
+        ),
       join: ({ params, query }) =>
         chat
           .follow(params.session, params.run, query.after ?? "-1")

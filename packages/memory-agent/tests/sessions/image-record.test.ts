@@ -35,7 +35,7 @@ testAgent()(function (it) {
       const asset = yield* generatedAsset;
       yield* runStore.saveThread(session.id, [{ role: "user", content: "earlier" }]);
 
-      const recorded = yield* chat.recordImage(session.id, null, { prompt: "a red fox", asset });
+      const recorded = yield* chat.recordImage(session.id, { prompt: "a red fox", asset });
 
       const thread = yield* runStore.thread(session.id);
       expect(thread[0]).toMatchObject({ role: "user", content: "earlier" });
@@ -66,7 +66,7 @@ testAgent()(function (it) {
       const attachments = yield* Attachments;
       const asset = yield* generatedAsset;
 
-      yield* chat.recordImage(session.id, null, { prompt: "a red fox", asset });
+      yield* chat.recordImage(session.id, { prompt: "a red fox", asset });
 
       yield* attachments.purgeOrphans;
       expect(yield* attachments.get(asset.attachment.id)).not.toBeNull();

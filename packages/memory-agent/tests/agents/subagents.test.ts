@@ -172,7 +172,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         expect(detail.task.heartbeat).toMatchObject({ state: "idle", step: "Subagent completed" });
         expect(
           yield* Effect.flip(
-            chat.requestTraceResume(sessionId, null, trace.task_id, trace.attempt_id, false),
+            chat.requestTraceResume(sessionId, trace.task_id, trace.attempt_id, false),
           ),
         ).toEqual(ResumeRequest.blocked({ reason: "task_terminal" }));
         yield* sqlTransaction(
@@ -188,7 +188,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
           }),
         );
         expect(
-          yield* chat.requestTraceResume(sessionId, null, trace.task_id, trace.attempt_id, false),
+          yield* chat.requestTraceResume(sessionId, trace.task_id, trace.attempt_id, false),
         ).toEqual(
           ResumeRequest.queued({ taskId: trace.task_id, expectedAttemptId: trace.attempt_id }),
         );
@@ -484,7 +484,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })(
             Effect.map(relayed.pending(sessionId), (pending) => pending.length === 1),
             "the child's approval",
           );
-          yield* (yield* AgentChat).cancel(sessionId, null);
+          yield* (yield* AgentChat).cancel(sessionId);
           yield* Fiber.join(run);
           yield* until(
             Effect.map(subagents.list(sessionId), (listed) => listed[0]?.status === "cancelled"),
@@ -553,7 +553,6 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })(
           expect(yield* attempts()).toEqual({ attempts: 1, latest_status: "interrupted" });
           yield* (yield* env.use(AgentChat)).requestTraceResume(
             sessionId,
-            null,
             ids.task_id,
             ids.attempt_id,
             false,

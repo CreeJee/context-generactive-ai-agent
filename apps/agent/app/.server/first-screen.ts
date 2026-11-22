@@ -55,7 +55,7 @@ const apart = (branches: ReadonlyArray<Effect.Effect<unknown, unknown>>) =>
  * agents, skills, decisions and boards, and the conversation it opens (`?session=` among the active
  * ones, else the first) with its queue, subagents, approvals, work trace and kanban. Queries that
  * reach a provider, the keychain or a remote endpoint (auth, accounts, quota, models) and the
- * holder-dependent run state are left to the page. Whatever has not answered by the deadline, or
+ * run state are left to the page. Whatever has not answered by the deadline, or
  * failed, is left out too; the page's queries then ask on their own and show any failure.
  */
 export const firstScreen = (url: URL) =>

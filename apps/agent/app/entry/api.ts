@@ -437,7 +437,6 @@ export function makeSessionLifecycleClient(fetch: typeof globalThis.fetch) {
         Effect.flatMap(browserCrypto.uuidV4(), (idempotencyKey) =>
           client.sessions.change({
             params: { session },
-            headers: {},
             payload: SessionChange.Archive({ archived, idempotencyKey }),
           }),
         ).pipe(
@@ -458,7 +457,6 @@ export function makeSessionLifecycleClient(fetch: typeof globalThis.fetch) {
         Effect.flatMap(browserCrypto.uuidV4(), (idempotencyKey) =>
           client.sessions.change({
             params: { session },
-            headers: {},
             payload: SessionChange.Delete({ idempotencyKey }),
           }),
         ).pipe(
@@ -475,7 +473,7 @@ const changeWorkflow = (
   change: Extract<SessionChange, { readonly _tag: "Move" | "Control" }>,
 ) =>
   appCall((client) => {
-    const request = { params: { session }, headers: {} };
+    const request = { params: { session } };
     // The client takes a union payload one case at a time.
     return Match.valueTags(change, {
       Move: (payload) => client.sessions.change({ ...request, payload }),
@@ -495,7 +493,6 @@ const changeTraceTask = (session: string, task: string, intent: "archive" | "del
     Effect.flatMap(browserCrypto.uuidV4(), (idempotencyKey) =>
       client.trace.changeTask({
         params: { session, task },
-        headers: {},
         payload: { intent, idempotencyKey },
       }),
     ).pipe(
@@ -576,7 +573,7 @@ export const api = {
   /** The user's board change; one to an executing card comes back as a stored request. */
   editBoard: (session: string, edit: BoardEdit) =>
     appCall((client) => {
-      const request = { params: { session }, headers: {} };
+      const request = { params: { session } };
       // The client takes a union payload one case at a time.
       return BoardEdit.$match(edit, {
         AddCard: (payload) => client.sessions.editBoard({ ...request, payload }),
@@ -608,7 +605,6 @@ export const api = {
     appCall((client) =>
       client.sessions.answerDecision({
         params: { session: request.sessionId, decision: request.requestId },
-        headers: {},
         payload: {
           goalInstanceId: request.goalInstanceId,
           cardId: request.cardId,
@@ -627,14 +623,13 @@ export const api = {
     appCall((client) =>
       client.sessions.kanbanAction({
         params: { session },
-        headers: {},
         payload: KanbanCommand.Start(),
       }),
     ),
   /** What a person meant by dragging a card; the server decides the card's status. */
   boardIntent: (session: string, intent: BoardIntent) =>
     appCall((client) => {
-      const request = { params: { session }, headers: {} };
+      const request = { params: { session } };
       // The client takes a union payload one case at a time.
       return BoardIntent.$match(intent, {
         Reorder: (payload) => client.sessions.kanbanAction({ ...request, payload }),
@@ -652,7 +647,6 @@ export const api = {
     appCall((client) =>
       client.sessions.kanbanAction({
         params: { session },
-        headers: {},
         payload: KanbanCommand.RestartLoop(),
       }),
     ),
@@ -661,7 +655,6 @@ export const api = {
     appCall((client) =>
       client.sessions.kanbanAction({
         params: { session },
-        headers: {},
         payload: KanbanCommand.RecheckOutcomes(),
       }),
     ),
@@ -670,7 +663,6 @@ export const api = {
     appCall((client) =>
       client.sessions.kanbanAction({
         params: { session },
-        headers: {},
         payload: KanbanCommand.SetDependencies({ dependsOn }),
       }),
     ),
@@ -679,7 +671,6 @@ export const api = {
     appCall((client) =>
       client.sessions.kanbanAction({
         params: { session },
-        headers: {},
         payload: KanbanCommand.Retarget(),
       }),
     ),
@@ -689,14 +680,13 @@ export const api = {
   createSession: (projectId: string, agent?: string) =>
     appCall((client) => client.sessions.create({ payload: { projectId, agent } })),
   sessionRunState: (session: string) =>
-    appCall((client) => client.sessions.status({ params: { session }, query: {} })),
+    appCall((client) => client.sessions.status({ params: { session } })),
   cancelRun: (session: string) =>
-    appCall((client) => client.sessions.cancel({ params: { session }, headers: {} })),
+    appCall((client) => client.sessions.cancel({ params: { session } })),
   discardInterrupts: (session: string) =>
     appCall((client) =>
       client.sessions.discardInterrupts({
         params: { session },
-        headers: {},
       }),
     ),
   /** Refused with 409 while something runs, or when the listed runs changed since they were shown. */
@@ -704,19 +694,17 @@ export const api = {
     appCall((client) =>
       client.sessions.continuePastUncertain({
         params: { session },
-        headers: {},
         payload: { runIds },
       }),
     ),
   /** Refused with 409 while the session is answering. */
   compactSession: (session: string) =>
-    appCall((client) => client.sessions.compact({ params: { session }, headers: {} })),
+    appCall((client) => client.sessions.compact({ params: { session } })),
   /** null lets the conversation follow the app's selected model again. */
   setSessionModel: (session: string, model: ModelSelection | null) =>
     appCall((client) =>
       client.sessions.setModel({
         params: { session },
-        headers: {},
         payload: { model },
       }),
     ),
@@ -729,13 +717,12 @@ export const api = {
     appCall((client) =>
       client.sessions.enqueue({
         params: { session },
-        headers: {},
         payload,
       }),
     ),
   editQueued: (session: string, message: string, edit: QueueEdit) =>
     appCall((client) => {
-      const request = { params: { session, message }, headers: {} };
+      const request = { params: { session, message } };
       // The client takes a union payload one case at a time.
       return QueueEdit.$match(edit, {
         edit: (payload) => client.sessions.editQueued({ ...request, payload }),
@@ -767,7 +754,6 @@ export const api = {
     appCall((client) =>
       client.sessions.generateImage({
         params: { session },
-        headers: {},
         payload:
           crossProviderApproval === undefined
             ? { prompt, approved }
@@ -927,7 +913,6 @@ export const api = {
       client.trace
         .changeTask({
           params: { session, task },
-          headers: {},
           payload: { intent: "resume", expectedAttemptId, confirmUncertain },
         })
         .pipe(
@@ -951,7 +936,6 @@ export const api = {
     appCall((client) =>
       client.sessions.answerApproval({
         params: { session, approval },
-        headers: {},
         payload: { approved },
       }),
     ),
@@ -1018,14 +1002,9 @@ export function projectErrorMessage(error: ApiError | null) {
     : error.reason;
 }
 
-const ArchiveRejection = Schema.Literals([
-  "run_in_progress",
-  "session_in_use",
-  "session_not_found",
-]);
+const ArchiveRejection = Schema.Literals(["run_in_progress", "session_not_found"]);
 const archiveRejections = {
   run_in_progress: msg`답변 중인 대화는 보관할 수 없습니다. 끝나거나 멈춘 뒤 다시 시도해 주십시오.`,
-  session_in_use: msg`다른 탭에서 쓰고 있는 대화입니다. 그 탭을 닫은 뒤 다시 시도해 주십시오.`,
   session_not_found: msg`대화를 찾을 수 없습니다.`,
 } satisfies Record<typeof ArchiveRejection.Type, MessageDescriptor>;
 
@@ -1060,14 +1039,9 @@ const ContextEvent = Schema.Struct({
   leaveOutAtTokens: Schema.Finite,
 });
 
-const CompactRejection = Schema.Literals([
-  "run_in_progress",
-  "session_in_use",
-  "session_not_found",
-]);
+const CompactRejection = Schema.Literals(["run_in_progress", "session_not_found"]);
 const compactRejections = {
   run_in_progress: msg`답변이 끝난 뒤에 비울 수 있습니다.`,
-  session_in_use: msg`다른 탭에서 쓰고 있는 대화입니다. 그 탭에서 다시 시도해 주십시오.`,
   session_not_found: msg`대화를 찾을 수 없습니다.`,
 } satisfies Record<typeof CompactRejection.Type, MessageDescriptor>;
 

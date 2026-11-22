@@ -55,7 +55,6 @@ const queued = {
 const runState: SessionRunState = {
   running: null,
   lastRun: null,
-  lease: { state: "mine" },
   context: {
     usedTokens: null,
     cachedTokens: null,

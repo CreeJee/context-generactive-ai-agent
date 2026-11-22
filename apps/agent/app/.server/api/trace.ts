@@ -18,20 +18,17 @@ export const TraceApiHandlers = HttpApiBuilder.group(
       sessionStream: ({ params: { session }, query, headers }) =>
         refusalsOnly(chat.traceStream(session, query.after ?? headers["last-event-id"] ?? 0)),
       sessionTask: ({ params: { session, task } }) => refusalsOnly(chat.traceTask(session, task)),
-      changeTask: ({ params: { session, task }, headers, payload }) =>
+      changeTask: ({ params: { session, task }, payload }) =>
         Effect.gen(function* () {
-          const holder = headers["x-session-holder"] ?? null;
           if (payload.intent === "resume")
             return yield* chat.requestTraceResume(
               session,
-              holder,
               task,
               payload.expectedAttemptId,
               payload.confirmUncertain ?? false,
             );
           return yield* chat.lifecycleTraceTask(
             session,
-            holder,
             task,
             payload.intent,
             // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.

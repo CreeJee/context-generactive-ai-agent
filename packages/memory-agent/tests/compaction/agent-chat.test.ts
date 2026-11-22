@@ -94,16 +94,16 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
           answer,
           "네",
         ]);
-        expect(yield* Effect.flip(agent.compact(`${at.sessionId}:missing`, "tab-a"))).toEqual({
+        expect(yield* Effect.flip(agent.compact(`${at.sessionId}:missing`))).toEqual({
           error: "session_not_found",
         });
-        const first = yield* agent.compact(at.sessionId, "tab-a");
+        const first = yield* agent.compact(at.sessionId);
         // Explicit /compact is not gated by the old 25%-of-window threshold.
         expect(first.tokensBefore).toBeLessThan(258_400 * 0.25);
         // The latest two stay raw. Answered tool output is already pointerized by automatic compaction.
         expect(first).toMatchObject({ cleared: 0, summarizedTurns: 4, summaryFailed: false });
         expect(first.tokensAfter).toBeLessThan(first.tokensBefore);
-        expect(yield* agent.compact(at.sessionId, "tab-a")).toEqual({
+        expect(yield* agent.compact(at.sessionId)).toEqual({
           cleared: 0,
           summarizedTurns: 0,
           summaryFailed: false,
@@ -150,7 +150,7 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
           end: SummaryEnd.cases.Turn.make({ turn: 4, nodeId: userNodes[4]!.id }),
         });
         const before = yield* nextRequest(messages, at.sessionId, budgetFor(200_000));
-        const result = yield* (yield* AgentChat).compact(at.sessionId, null);
+        const result = yield* (yield* AgentChat).compact(at.sessionId);
         expect(result).toMatchObject({ cleared: 0, summarizedTurns: 0, summaryFailed: false });
         expect(yield* nextRequest(messages, at.sessionId, budgetFor(200_000))).toEqual(before);
       }),
@@ -259,7 +259,7 @@ testAgent({
   it.effect("reports prompt cache usage across consecutive requests and distinguishes zero", () =>
     Effect.gen(function* () {
       const { sessionId } = yield* freshSession;
-      const status = Effect.flatMap(AgentChat, (agent) => agent.status(sessionId, null)).pipe(
+      const status = Effect.flatMap(AgentChat, (agent) => agent.status(sessionId)).pipe(
         Effect.map((state) => state.context),
       );
       const events = (runId: string) => send(sessionId, runId, "hello");

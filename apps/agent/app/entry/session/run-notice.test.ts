@@ -14,7 +14,6 @@ const record = (
   background: [],
   running,
   lastRun,
-  lease: { state: "mine" },
   context: {
     usedTokens: null,
     cachedTokens: null,

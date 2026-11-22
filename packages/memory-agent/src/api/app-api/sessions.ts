@@ -17,7 +17,7 @@ import {
   QueueRequest,
   QueueSnapshot,
 } from "../../queue/queue-state.ts";
-import { LeaseView, Session } from "../../sessions/contracts.ts";
+import { Session } from "../../sessions/contracts.ts";
 import { SubagentView } from "../../subagents/subagent-state.ts";
 import {
   BoardEdit,
@@ -33,7 +33,6 @@ import {
 import { LifecycleResult } from "../../work-trace/contracts.ts";
 import { PlanDependencyIssue } from "../../workflow/plan-schedule.ts";
 import { UnknownStepOutcome } from "../../workflow/step-outcomes.ts";
-import { sessionHolderHeaders } from "../chat-api.ts";
 import { appRefusalFields, refusalWith, SameSite } from "../refusal.ts";
 import {
   ApprovalRequired,
@@ -114,13 +113,6 @@ export const SubagentTranscript = Schema.Struct({
 });
 export type SubagentTranscript = typeof SubagentTranscript.Type;
 
-/** A page claims (or renews) the right to change the session, or gives it up. */
-export const LeaseRequest = Schema.Struct({
-  holder: Schema.NonEmptyString,
-  action: Schema.Literals(["claim", "release"]),
-});
-export type LeaseRequest = typeof LeaseRequest.Type;
-
 /**
  * What the page asks of one conversation: archive or restore it, delete it, or move or pause its
  * workflow. A retried change with the same `idempotencyKey` answers the first one's operation.
@@ -144,9 +136,6 @@ const UnknownProject = appRefusal(404, ["project_not_found"]);
 
 /** The session the path names does not exist. */
 const UnknownSession = appRefusal(404, ["session_not_found"]);
-
-/** Another page holds the session. */
-const SessionInUse = appRefusal(423, ["session_in_use"]);
 
 /** The external agent is not configured, trusted and running for the project. */
 const AgentUnavailable = appRefusal(409, ["external_agent_unavailable"]);
@@ -264,8 +253,8 @@ const NoRunningRun = appRefusal(409, ["no_running_run"]);
 const UncertainRunsChanged = appRefusal(409, ["uncertain_runs_changed"]);
 
 /**
- * The workflow cannot move or pause that way now; the code is the reason. A `session_in_use` or
- * `run_in_progress` reason is answered as `SessionInUse` or `RunInProgress`.
+ * The workflow cannot move or pause that way now; the code is the reason. A `run_in_progress`
+ * reason is answered as `RunInProgress`.
  */
 const WorkflowChangeRefused = appRefusal(409, [
   "goal_missing",
@@ -301,7 +290,6 @@ const ImageRecordFailed = appRefusal(500, ["image_record_failed"]);
 export const sessionsRefusals = [
   UnknownProject,
   UnknownSession,
-  SessionInUse,
   AgentUnavailable,
   ...DecisionRefusals,
   BoardEditRefused,
@@ -331,12 +319,11 @@ const session = { session: Schema.String };
 export class SessionsGroup extends HttpApiGroup.make("sessions")
   .add(
     /**
-     * Run state the transcript does not carry: whether a run is still producing, how the last one
-     * ended, and whether the asking page (`holder`) holds the session.
+     * Run state the transcript does not carry: whether a run is still producing and how the last
+     * one ended.
      */
     HttpApiEndpoint.get("status", "/api/sessions/:session", {
       params: session,
-      query: { holder: Schema.optional(Schema.String) },
       success: SessionRunState,
       error: [UnknownSession, SelectedProviderUnavailable],
     }),
@@ -347,7 +334,6 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
      */
     HttpApiEndpoint.post("change", "/api/sessions/:session", {
       params: session,
-      headers: sessionHolderHeaders,
       payload: SessionChange,
       success: [
         Session,
@@ -356,7 +342,7 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
         LifecycleResult.cases.waiting_for_stop.pipe(HttpApiSchema.status(202)),
         LifecycleResult.cases.blocked.pipe(HttpApiSchema.status(202)),
       ],
-      error: [SessionInUse, UnknownSession, RunInProgress, WorkflowChangeRefused, LifecycleBlocked],
+      error: [UnknownSession, RunInProgress, WorkflowChangeRefused, LifecycleBlocked],
     }),
     /** The project's conversations, newest first; `archived=1` lists only the archived ones. */
     HttpApiEndpoint.get("list", "/api/sessions", {
@@ -381,10 +367,9 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
      */
     HttpApiEndpoint.post("answerDecision", "/api/sessions/:session/decisions/:decision", {
       params: { ...session, decision: Schema.String },
-      headers: sessionHolderHeaders,
       payload: DecisionAnswerInput,
       success: HumanDecisionRequest,
-      error: [SessionInUse, ...DecisionRefusals, SessionStorageFailed],
+      error: [...DecisionRefusals, SessionStorageFailed],
     }),
     /** The Plan as cards, who changed them, and the changes waiting for the orchestrator. */
     HttpApiEndpoint.get("board", "/api/sessions/:session/board", {
@@ -398,11 +383,9 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
      */
     HttpApiEndpoint.post("editBoard", "/api/sessions/:session/board", {
       params: session,
-      headers: sessionHolderHeaders,
       payload: BoardEdit,
       success: [BoardEditApplied, BoardEditRequested.pipe(HttpApiSchema.status(202))],
       error: [
-        SessionInUse,
         UnknownSession,
         BoardEditRefused,
         PlanDependenciesRejected,
@@ -430,7 +413,6 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
      */
     HttpApiEndpoint.post("kanbanAction", "/api/sessions/:session/kanban", {
       params: session,
-      headers: sessionHolderHeaders,
       payload: Schema.Union([KanbanCommand, BoardIntent]),
       success: [
         KanbanStarted,
@@ -442,7 +424,6 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
         BoardEditRequested.pipe(HttpApiSchema.status(202)),
       ],
       error: [
-        SessionInUse,
         UnknownProject,
         UnknownSession,
         BoardEditRefused,
@@ -469,18 +450,16 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
      */
     HttpApiEndpoint.post("enqueue", "/api/sessions/:session/queue", {
       params: session,
-      headers: sessionHolderHeaders,
       payload: QueueRequest,
       success: QueuedMessage.pipe(HttpApiSchema.status(201)),
-      error: [UnknownSession, SessionInUse, InvalidQueuedMessage, NotRunning],
+      error: [UnknownSession, InvalidQueuedMessage, NotRunning],
     }),
     /** Edits, saves, removes or confirms one queued message; a removed one answers null. */
     HttpApiEndpoint.post("editQueued", "/api/sessions/:session/queue/:message", {
       params: { ...session, message: Schema.String },
-      headers: sessionHolderHeaders,
       payload: QueueEditRequest,
       success: Schema.NullOr(QueuedMessage),
-      error: [SessionInUse, QueueChangeRefused],
+      error: QueueChangeRefused,
     }),
     /** The session's subagents. */
     HttpApiEndpoint.get("subagents", "/api/sessions/:session/subagents", {
@@ -506,10 +485,9 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
     /** Answers a waiting call; the calls still waiting come back. */
     HttpApiEndpoint.post("answerApproval", "/api/sessions/:session/approvals/:approval", {
       params: { ...session, approval: Schema.String },
-      headers: sessionHolderHeaders,
       payload: Schema.Struct({ approved: Schema.Boolean }),
       success: Schema.Array(RelayedApprovalView),
-      error: [SessionInUse, ApprovalNotPending],
+      error: ApprovalNotPending,
     }),
     /**
      * Stops the session's running run and its subagents. Closing or reloading the page never does;
@@ -517,9 +495,8 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
      */
     HttpApiEndpoint.post("cancel", "/api/sessions/:session/cancel", {
       params: session,
-      headers: sessionHolderHeaders,
       success: CancelResult,
-      error: [SessionInUse, NoRunningRun],
+      error: NoRunningRun,
     }),
     /**
      * `/compact`: the model is no longer sent the tool output it has already answered from; each
@@ -527,9 +504,8 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
      */
     HttpApiEndpoint.post("compact", "/api/sessions/:session/compact", {
       params: session,
-      headers: sessionHolderHeaders,
       success: CompactResult,
-      error: [SessionInUse, UnknownSession, RunInProgress, SelectedProviderUnavailable],
+      error: [UnknownSession, RunInProgress, SelectedProviderUnavailable],
     }),
     /**
      * Gives the conversation a model of its own, or with null lets it follow the app's selected
@@ -537,10 +513,9 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
      */
     HttpApiEndpoint.post("setModel", "/api/sessions/:session/model", {
       params: session,
-      headers: sessionHolderHeaders,
       payload: Schema.Struct({ model: Schema.NullOr(ModelSelection) }),
       success: Session,
-      error: [SessionInUse, UnknownSession, ModelUnavailable, ProviderUnavailable, ModelListFailed],
+      error: [UnknownSession, ModelUnavailable, ProviderUnavailable, ModelListFailed],
     }),
     /**
      * A paid image made from the user's prompt as written and kept in the conversation as the
@@ -548,11 +523,9 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
      */
     HttpApiEndpoint.post("generateImage", "/api/sessions/:session/images", {
       params: session,
-      headers: sessionHolderHeaders,
       payload: GenerateImage,
       success: GeneratedImage,
       error: [
-        SessionInUse,
         UnknownSession,
         RunInProgress,
         SelectedProviderUnavailable,
@@ -565,9 +538,8 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
     /** Abandons approvals whose continuation was lost; the gated tools never run. */
     HttpApiEndpoint.post("discardInterrupts", "/api/sessions/:session/interrupts/discard", {
       params: session,
-      headers: sessionHolderHeaders,
       success: InterruptsDiscarded,
-      error: [SessionInUse, UnknownSession, RunInProgress],
+      error: [UnknownSession, RunInProgress],
     }),
     /**
      * The user saw the Goal runs whose tools left their outcome unknown and continues without
@@ -575,20 +547,9 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
      */
     HttpApiEndpoint.post("continuePastUncertain", "/api/sessions/:session/uncertain", {
       params: session,
-      headers: sessionHolderHeaders,
       payload: UncertainContinueRequest,
       success: UncertainAcknowledged,
-      error: [UnknownSession, SessionInUse, RunInProgress, UncertainRunsChanged],
-    }),
-    /**
-     * A page claims (or renews) the session, or gives it up, also as a beacon when it closes. The
-     * answer says who holds the session from that page's point of view.
-     */
-    HttpApiEndpoint.post("lease", "/api/sessions/:session/lease", {
-      params: session,
-      payload: LeaseRequest,
-      success: LeaseView,
-      error: UnknownSession,
+      error: [UnknownSession, RunInProgress, UncertainRunsChanged],
     }),
   )
   .middleware(SameSite) {}

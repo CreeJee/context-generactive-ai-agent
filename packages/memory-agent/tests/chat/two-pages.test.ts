@@ -16,12 +16,12 @@ testAgent({ testProvider: {} })("two pages", (it) => {
         const agent = yield* AgentChat;
         const invocations = yield* invocationsOf(sessionId);
 
-        const owner = yield* openPage(sessionId, "tab-a");
+        const owner = yield* openPage(sessionId);
         yield* owner.send("please use the shell");
         expect(owner.pending()).toHaveLength(1);
 
         // The second tab sees the same conversation and the waiting approval, and answers it.
-        const reader = yield* openPage(sessionId, "tab-b");
+        const reader = yield* openPage(sessionId);
         expect(reader.pending()).toHaveLength(1);
         yield* reader.resolve(() => true);
         expect(reader.answer()).toContain("approved-output");
@@ -33,7 +33,7 @@ testAgent({ testProvider: {} })("two pages", (it) => {
         });
         expect(invocations()).toHaveLength(answered);
         // No run is going, so a cancel from either tab has nothing to stop.
-        expect(yield* Effect.flip(agent.cancel(sessionId, "tab-b"))).toEqual({
+        expect(yield* Effect.flip(agent.cancel(sessionId))).toEqual({
           error: "no_running_run",
         });
       }),

@@ -68,24 +68,20 @@ testAgent({ testProvider: { delayedTurnGate: gate.waitFor } })("archived convers
       const session = (yield* (yield* Sessions).create(project.id)).id;
       yield* selectTestModel();
       const agent = yield* AgentChat;
-      const archive = (holder: string | null, archived = true) =>
-        agent.archive(session, holder, archived);
+      const archive = (archived = true) => agent.archive(session, archived);
 
       // Tab A's page sends a turn in a fiber the test owns.
-      const page = yield* openPage(session, "tab-a");
+      const page = yield* openPage(session);
       yield* Effect.forkChild(page.send("please be slow"), { startImmediately: true });
-      const running = Effect.map(
-        agent.status(session, "tab-a"),
-        (status) => status.running !== null,
-      );
+      const running = Effect.map(agent.status(session), (status) => status.running !== null);
       yield* until(running, "the run to start");
-      const done = yield* archive("tab-a");
+      const done = yield* archive();
       yield* until(
         Effect.map(running, (value) => !value),
         "the run to stop",
       );
       expect(done).toMatchObject({ id: session, archivedAt: expect.any(String) });
-      expect(yield* archive("tab-a", false)).toMatchObject({ id: session, archivedAt: null });
+      expect(yield* archive(false)).toMatchObject({ id: session, archivedAt: null });
     }),
   );
 });

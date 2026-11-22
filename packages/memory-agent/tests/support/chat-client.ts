@@ -68,13 +68,9 @@ export type PendingApproval = PendingInterrupts["pending"][number];
  * the page's hook does (`src/api/chat-session.ts`): the newest messages, then each run it starts or
  * answers, then the newest messages again.
  */
-export const openPage = Effect.fnUntraced(function* (
-  session: string,
-  holder: string | null = null,
-) {
+export const openPage = Effect.fnUntraced(function* (session: string) {
   const api = yield* chatApi;
   const crypto = yield* SecureRandom.SecureRandom;
-  const headers = holder === null ? {} : { "x-session-holder": holder };
   const newest = api.snapshot({ params: { session }, query: { limit: maxPageSize } });
   const opened = yield* newest;
   const view = MutableRef.make(viewOf(opened));
@@ -122,7 +118,6 @@ export const openPage = Effect.fnUntraced(function* (
       const events = yield* api
         .run({
           params: { session },
-          headers,
           payload: {
             runId: yield* crypto.uuidV7(),
             messages: [{ id, role: "user", content }],
@@ -144,7 +139,6 @@ export const openPage = Effect.fnUntraced(function* (
       const waiting = yield* Effect.fromNullishOr(MutableRef.get(view).interrupts);
       const events = yield* api.run({
         params: { session },
-        headers,
         payload: {
           runId: yield* crypto.uuidV7(),
           parentRunId: waiting.runId,
@@ -177,7 +171,6 @@ export const runTurn = Effect.fnUntraced(function* (
   return yield* eventsOf(
     yield* api.run({
       params: { session },
-      headers: {},
       payload: { runId, messages: [{ id: runId, role: "user", content }] },
     }),
   );

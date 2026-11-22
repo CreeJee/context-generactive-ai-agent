@@ -29,7 +29,6 @@ const QueueChangeRefusal = Schema.Literals([
   "queue_delivered",
   "queue_reserved",
   "queue_not_held",
-  "session_in_use",
 ]);
 /** Why the server did not take a change to a queued message. */
 const queueChangeRefusals = {
@@ -37,7 +36,6 @@ const queueChangeRefusals = {
   queue_delivered: msg`그 메시지는 이미 보냈습니다.`,
   queue_reserved: msg`그 메시지는 지금 보내는 중이라 바꿀 수 없습니다.`,
   queue_not_held: msg`그 메시지는 확인을 기다리지 않고 이미 보낼 차례를 기다립니다.`,
-  session_in_use: msg`다른 창이 이 대화를 쓰고 있습니다.`,
 } satisfies Record<typeof QueueChangeRefusal.Type, MessageDescriptor>;
 const isQueueChangeRefusal = Schema.is(QueueChangeRefusal);
 

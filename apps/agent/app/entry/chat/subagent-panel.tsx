@@ -53,9 +53,7 @@ export function SubagentPanel({
       ? null
       : refusal?.code === "approval_not_pending"
         ? t`이미 답했거나 더 이상 기다리지 않는 요청입니다. 남은 요청을 다시 불러왔습니다.`
-        : refusal?.code === "session_in_use"
-          ? t`다른 창이 이 대화를 쓰고 있습니다.`
-          : t`승인 응답을 전송하지 못했습니다.`;
+        : t`승인 응답을 전송하지 못했습니다.`;
 
   return (
     <div className="flex flex-col gap-3">

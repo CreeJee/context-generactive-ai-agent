@@ -893,7 +893,7 @@ export function App() {
           </Sheet>
           <SidebarInset className="min-w-0">
             <SidebarReopen />
-            {/* The conversation stays mounted under an open board, so its lease, run and draft go on. */}
+            {/* The conversation stays mounted under an open board, so its run and draft go on. */}
             <div className={boardCoversChat ? "hidden" : "contents"}>{main}</div>
             {projectId && projectBoardShown && (
               <ProjectBoard

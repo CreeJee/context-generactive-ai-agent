@@ -172,7 +172,6 @@ import {
   type CompactResult,
   type SessionRunState,
 } from "./run-state.ts";
-import { SessionLeases } from "../sessions/leases.ts";
 import {
   NewGoalSettlement,
   Workflows,
@@ -393,10 +392,8 @@ type AutomaticRun = Data.TaggedEnum<{
 }>;
 const AutomaticRun = Data.taggedEnum<AutomaticRun>();
 
-/** A request to start a run: who sent it, and the run it asks for. */
+/** A request to start a run: the run it asks for. */
 export interface ChatRequest {
-  /** The page that sent the request, from `X-Session-Holder`. */
-  readonly holder: string | null;
   readonly input: RunInput;
 }
 
@@ -577,7 +574,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const interpreter = yield* Interpreter;
   const attachments = yield* Attachments;
   const chatState = yield* ChatState;
-  const leases = yield* SessionLeases;
   const queue = yield* MessageQueue;
   const delivery = yield* QueueDelivery;
   const sessionDispatches = yield* SessionDispatches;
@@ -739,8 +735,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     ),
     Effect.forkScoped,
   );
-  // A lease that ran out without being released: pages read the session's state again.
-  yield* leases.onExpired((sessionId) => events.publishSession(sessionId, "run-state"));
   /** The run's record, when it belongs to the session. */
   const sessionRun = (sessionId: string, runId: string) =>
     Effect.map(
@@ -1195,7 +1189,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     /** Archive/delete one task, stopping only its live child before finalizing durable lifecycle. */
     lifecycleTraceTask: (
       sessionId: string,
-      holder: string | null,
       taskId: string,
       intent: "archive" | "restore" | "delete",
       idempotencyKey: string,
@@ -1219,7 +1212,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     /** Queue a server-owned logical resume; the next valid parent binding executes it. */
     requestTraceResume: (
       sessionId: string,
-      holder: string | null,
       taskId: string,
       expectedAttemptId: string,
       confirmUncertain: boolean,
@@ -2384,7 +2376,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
      * Explicit cancel of the session's running run. The intent is recorded on the run first, then
      * the run is aborted; the answer says whether it actually stopped within a few seconds.
      */
-    cancel: (sessionId: string, _holder: string | null) =>
+    cancel: (sessionId: string) =>
       Effect.gen(function* () {
         const pendingExecution = WorkflowExecutionState.isAnyOf(["ready"])(
           yield* execution.get(sessionId),
@@ -2436,11 +2428,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
      * The user saw the runs whose tools left their outcome unknown (`uncertainRuns` in the run
      * state) and chose to continue. Nothing of them is replayed; the next turn starts fresh.
      */
-    continuePastUncertain: (
-      sessionId: string,
-      holder: string | null,
-      input: UncertainContinueRequest,
-    ) =>
+    continuePastUncertain: (sessionId: string, input: UncertainContinueRequest) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
         if (isTruthy(yield* liveRuns.get(sessionId)) || (yield* background.hasSession(sessionId)))
@@ -2457,7 +2445,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
      * Discards a persisted approval after its continuation has become unusable. The gated tool is
      * never run; the abandoned run becomes terminal so the conversation can accept a new turn.
      */
-    discardInterrupts: (sessionId: string, _holder: string | null) =>
+    discardInterrupts: (sessionId: string) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
         if (isTruthy(yield* liveRuns.get(sessionId))) return yield* runInProgress();
@@ -2470,7 +2458,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
      * `/compact`: stops sending the model the tool output it has already answered from. Refused
      * while the session is answering, since the run in progress still works with its own output.
      */
-    compact: (sessionId: string, _holder: string | null) =>
+    compact: (sessionId: string) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
         if (isTruthy(yield* liveRuns.get(sessionId))) return yield* runInProgress();
@@ -2496,7 +2484,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
      * Before a paid image generation for the conversation: refuses a session that is answering,
      * and gives the chat route the generation starts from.
      */
-    imageOrigin: (sessionId: string, _holder: string | null) =>
+    imageOrigin: (sessionId: string) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
         if (isTruthy(yield* liveRuns.get(sessionId))) return yield* runInProgress();
@@ -2522,7 +2510,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
      */
     recordImage: (
       sessionId: string,
-      holder: string | null,
       image: { readonly prompt: string; readonly asset: ImageMediaAsset },
     ) =>
       Effect.gen(function* () {
@@ -2602,10 +2589,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     runningSessions: liveRuns.sessionIds,
 
     /**
-     * What a page needs beyond the transcript: whether a run is producing, how the last one ended,
-     * and the session's lease as this page (`holder`) sees it.
+     * What a page needs beyond the transcript: whether a run is producing and how the last one
+     * ended.
      */
-    status: (sessionId: string, holder: string | null) =>
+    status: (sessionId: string) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
         const live = yield* liveRuns.get(sessionId);
@@ -2617,12 +2604,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const workflow = isTruthy(live)
           ? yield* workflows.get(sessionId)
           : yield* workflows.reconcile(sessionId);
-        const lease = yield* leases.view(sessionId, holder);
         const window = yield* windowFor(yield* sessionModel(sessionId));
         const state: SessionRunState = {
           running: isTruthy(live) ? { runId: live.runId } : null,
           lastRun: last && { runId: last.runId, status: last.status, error: last.error ?? null },
-          lease,
           context: contextView({
             usedTokens: usage?.inputTokens ?? null,
             windowTokens: window.tokens,
@@ -2637,7 +2622,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             (yield* providerRetries
               .pending(sessionId)
               .pipe(fallbackLogged("Provider retry waits unreadable", () => []))).at(-1) ?? null,
-          actions: workflowActions(workflow, { running: Boolean(live), lease }),
+          actions: workflowActions(workflow, { running: Boolean(live) }),
           uncertainRuns: isTruthy(live) ? [] : yield* uncertain.list(sessionId),
           background: yield* background.running(sessionId),
         };
@@ -2650,7 +2635,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       ),
 
     /** Moves the durable workflow to a mode; `run` also records the user's Plan approval. */
-    moveWorkflow: (sessionId: string, holder: string | null, move: WorkflowMove) =>
+    moveWorkflow: (sessionId: string, move: WorkflowMove) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
         if (isTruthy(yield* liveRuns.get(sessionId))) return yield* runInProgress();
@@ -2676,7 +2661,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       ),
 
     /** Pauses, resumes or permanently stops the active Goal and cancels its run when needed. */
-    controlWorkflow: (sessionId: string, holder: string | null, action: WorkflowAction) =>
+    controlWorkflow: (sessionId: string, action: WorkflowAction) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
         const live = yield* liveRuns.get(sessionId);
@@ -2696,28 +2681,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         }),
       ),
 
-    /**
-     * Claims or renews the session's lease for a page, or gives it up. The lease refuses no
-     * change; the answer says who holds it from that page's point of view.
-     */
-    lease: (sessionId: string, holder: string, action: "claim" | "release") =>
-      Effect.gen(function* () {
-        yield* sessions.get(sessionId);
-        yield* Match.value(action).pipe(
-          Match.when("claim", () => leases.claim(sessionId, holder)),
-          Match.when("release", () => leases.release(sessionId, holder)),
-          Match.exhaustive,
-        );
-        return yield* leases.view(sessionId, holder);
-      }).pipe(Effect.catchTag("SessionNotFound", unknownSession)),
-
     /** Archive/restore a conversation, safely stopping its parent and children first when needed. */
-    archive: (
-      sessionId: string,
-      holder: string | null,
-      archived: boolean,
-      idempotencyKey?: string,
-    ) =>
+    archive: (sessionId: string, archived: boolean, idempotencyKey?: string) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
         const requested = yield* workTrace.requestSessionLifecycle({
@@ -2734,7 +2699,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       }).pipe(Effect.catchTag("SessionNotFound", unknownSession)),
 
     /** Delete private conversation content while retaining project-owned task/memory provenance. */
-    deleteSession: (sessionId: string, holder: string | null, idempotencyKey: string) =>
+    deleteSession: (sessionId: string, idempotencyKey: string) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
         const requested = yield* workTrace.requestSessionLifecycle({
@@ -2794,7 +2759,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
      * as the next turn, so it reaches the model at once and with no page open. With no run
      * answering there is nothing to queue for: the page sends it as a normal turn.
      */
-    enqueue: (sessionId: string, holder: string | null, request: QueueRequest) =>
+    enqueue: (sessionId: string, request: QueueRequest) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
         const { text, attachmentIds, mode } = request;
@@ -2847,13 +2812,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           Effect.catchTag("SessionNotFound", unknownSession),
         ),
 
-    /** The page's answer to a relayed approval. Only the page holding the session may answer. */
-    answerApproval: (
-      sessionId: string,
-      holder: string | null,
-      approvalId: string,
-      approved: boolean,
-    ) =>
+    /** A page's answer to a relayed approval. */
+    answerApproval: (sessionId: string, approvalId: string, approved: boolean) =>
       Effect.gen(function* () {
         if (!(yield* relayed.answer(sessionId, approvalId, approved)))
           return yield* Effect.fail({ error: "approval_not_pending" } as const);
@@ -2864,7 +2824,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
      * Edits, removes or confirms one queued message; a removed one answers null. Anything but an
      * unsaved draft may free the head, which the server then sends if nothing runs.
      */
-    editQueued: (sessionId: string, holder: string | null, id: string, edit: QueueEdit) =>
+    editQueued: (sessionId: string, id: string, edit: QueueEdit) =>
       applyEdit(sessionId, id, edit).pipe(
         Effect.tap(() =>
           Effect.when(wakeNotifications(sessionId), Effect.succeed(!QueueEdit.$is("edit")(edit))),
@@ -2881,7 +2841,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     const notStarted = (code: string) => () => Effect.succeed(Result.fail(code));
     /** Starts the follow-up run as the chat API does: the run's log, or the refusal's code. */
     const send = (runId: string, kind: InternalFollowup) =>
-      api.start({ holder: null, input: { runId, messages: [] } }, sessionId, kind).pipe(
+      api.start({ input: { runId, messages: [] } }, sessionId, kind).pipe(
         Effect.flatMap(
           ChatStart.$match({
             Refused: ({ refusal }) => Effect.succeed(Result.fail(refusal.error)),

@@ -555,7 +555,6 @@ export const WorkflowDisplay = Schema.Literal("card_reclassifying");
 export type WorkflowDisplay = typeof WorkflowDisplay.Type;
 
 export const WorkflowActionReason = Schema.Literals([
-  "session_in_use",
   "run_in_progress",
   "goal_missing",
   "goal_not_active",

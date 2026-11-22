@@ -113,12 +113,12 @@ describe("server-authoritative session lifecycle client", () => {
       }),
     );
 
-    it.effect("keeps lease failures as errors", () =>
+    it.effect("keeps refusals as errors", () =>
       Effect.gen(function* () {
-        respond({ error: "session_in_use" }, 423);
+        respond({ error: "run_in_progress" }, 409);
         expect((yield* Effect.flip(call(() => invoke()))).cause).toMatchObject({
-          status: 423,
-          code: "session_in_use",
+          status: 409,
+          code: "run_in_progress",
         });
       }),
     );

@@ -184,7 +184,6 @@ export const chatSessions = <E>(
         const events = yield* chat
           .run({
             params: { session },
-            headers: {},
             payload: {
               runId,
               messages: [{ id: message.id, role: "user", content: input.content }],
@@ -226,7 +225,6 @@ export const chatSessions = <E>(
         const events = yield* chat
           .run({
             params: { session },
-            headers: {},
             payload: {
               runId,
               parentRunId: input.parentRunId,

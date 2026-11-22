@@ -231,7 +231,6 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
     services.chat
       .run({
         params: { session: services.session.id },
-        headers: {},
         payload: {
           runId: yield* crypto.uuidV4(),
           messages: [{ id: yield* crypto.uuidV4(), role: "user", content: prompt }],

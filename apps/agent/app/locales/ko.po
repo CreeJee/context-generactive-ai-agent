@@ -1822,29 +1822,6 @@ msgstr "다른 대화의 카드와는 순서를 바꿀 수 없습니다. 대화 
 msgid "다른 앱의 이름으로 등록하면 그 서버의 이용 약관에 어긋날 수 있습니다."
 msgstr "다른 앱의 이름으로 등록하면 그 서버의 이용 약관에 어긋날 수 있습니다."
 
-#: app/entry/chat/board/board-surface.tsx
-#: app/entry/chat/decision-prompt.tsx
-msgid "다른 창에서 이 대화를 쓰고 있습니다."
-msgstr "다른 창에서 이 대화를 쓰고 있습니다."
-
-#: app/entry/chat/refusals.ts
-#: app/entry/chat/subagent-panel.tsx
-#: app/entry/session/message-queue.ts
-msgid "다른 창이 이 대화를 쓰고 있습니다."
-msgstr "다른 창이 이 대화를 쓰고 있습니다."
-
-#: app/entry/api.ts
-msgid "다른 탭에서 쓰고 있는 대화입니다. 그 탭에서 다시 시도해 주십시오."
-msgstr "다른 탭에서 쓰고 있는 대화입니다. 그 탭에서 다시 시도해 주십시오."
-
-#: app/entry/api.ts
-msgid "다른 탭에서 쓰고 있는 대화입니다. 그 탭을 닫은 뒤 다시 시도해 주십시오."
-msgstr "다른 탭에서 쓰고 있는 대화입니다. 그 탭을 닫은 뒤 다시 시도해 주십시오."
-
-#: app/entry/media/use-image-generation.ts
-msgid "다른 탭이 이 대화를 쓰고 있습니다."
-msgstr "다른 탭이 이 대화를 쓰고 있습니다."
-
 #: app/entry/settings/pages/recall.tsx
 msgid "다른 프로젝트 기억도 찾기"
 msgstr "다른 프로젝트 기억도 찾기"

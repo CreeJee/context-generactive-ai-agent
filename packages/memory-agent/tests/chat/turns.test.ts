@@ -29,7 +29,6 @@ const post = Effect.fnUntraced(function* (sessionId: string, content: UserConten
   const runId = `${sessionId}-run`;
   return yield* api.run({
     params: { session: sessionId },
-    headers: {},
     payload: { runId, messages: [{ id: runId, role: "user", content }] },
   });
 });

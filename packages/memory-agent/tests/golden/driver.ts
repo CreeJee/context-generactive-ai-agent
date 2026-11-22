@@ -84,7 +84,7 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
   const idle = Effect.flatMap(TestEnv, (env) =>
     env.use(
       Effect.gen(function* () {
-        return (yield* (yield* AgentChat).status(sessionId, null)).running === null;
+        return (yield* (yield* AgentChat).status(sessionId)).running === null;
       }),
     ),
   );
@@ -137,7 +137,7 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
   /** Queue or steer a message as the page's composer does while a run is going. */
   const enqueue = (text: string, mode: "queue" | "steer") =>
     Effect.flatMap(AgentChat, (chat) =>
-      Effect.asVoid(chat.enqueue(sessionId, null, { text, attachmentIds: [], mode })),
+      Effect.asVoid(chat.enqueue(sessionId, { text, attachmentIds: [], mode })),
     );
   /** Starts a run the page never sends; the run id is fresh unless `turn` names one. */
   const handWritten = Effect.fnUntraced(function* (turn: HandWrittenTurn) {
@@ -145,7 +145,6 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
     return yield* answerOf(
       api.run({
         params: { session: sessionId },
-        headers: {},
         payload: {
           runId:
             turn.runId ??
@@ -236,13 +235,10 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
       ),
     ),
     /** Compact the conversation as the page's `/compact` does. */
-    compact: Effect.asVoid(Effect.flatMap(AgentChat, (chat) => chat.compact(sessionId, null))),
+    compact: Effect.asVoid(Effect.flatMap(AgentChat, (chat) => chat.compact(sessionId))),
     /** Send a user message, then cancel the run once the model is answering it. */
     sendAndCancel: (text: string) =>
-      sendAnd(
-        text,
-        Effect.asVoid(Effect.flatMap(AgentChat, (chat) => chat.cancel(sessionId, null))),
-      ),
+      sendAnd(text, Effect.asVoid(Effect.flatMap(AgentChat, (chat) => chat.cancel(sessionId)))),
     /**
      * Send a user message and, once the model is answering it, queue `messages` behind it in order.
      * `answer` then lets the model go on.
@@ -281,8 +277,8 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
       yield* env.use(
         Effect.gen(function* () {
           const chat = yield* AgentChat;
-          const state = yield* chat.status(sessionId, null);
-          yield* chat.continuePastUncertain(sessionId, null, {
+          const state = yield* chat.status(sessionId);
+          yield* chat.continuePastUncertain(sessionId, {
             runIds: state.uncertainRuns.map((run) => run.runId),
           });
         }),

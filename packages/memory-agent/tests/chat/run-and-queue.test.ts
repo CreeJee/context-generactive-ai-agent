@@ -28,20 +28,13 @@ const chatSession = Effect.gen(function* () {
 });
 
 const statusOf = (sessionId: string) =>
-  Effect.flatMap(agentChat, (agent) => agent.status(sessionId, null));
+  Effect.flatMap(agentChat, (agent) => agent.status(sessionId));
 
 const queueOf = (sessionId: string) =>
   Effect.flatMap(agentChat, (agent) => agent.queued(sessionId));
 
-const enqueue = (
-  sessionId: string,
-  text: string,
-  mode: "queue" | "steer",
-  holder: string | null = null,
-) =>
-  Effect.flatMap(agentChat, (agent) =>
-    agent.enqueue(sessionId, holder, { text, attachmentIds: [], mode }),
-  );
+const enqueue = (sessionId: string, text: string, mode: "queue" | "steer") =>
+  Effect.flatMap(agentChat, (agent) => agent.enqueue(sessionId, { text, attachmentIds: [], mode }));
 
 /** Send from the page without waiting: the send settles only once the run's stream ends. */
 const sendInBackground = (page: ChatPage, text: string) =>
@@ -72,7 +65,6 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat runs", (it) => 
       const starting = yield* Effect.forkChild(
         agent.start(
           {
-            holder: null,
             input: {
               runId: `${session.id}-left`,
               messages: [{ id: "m-1", role: "user", content: "hi" }],
@@ -108,10 +100,10 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat runs", (it) => 
         allowed: false,
         reason: "run_in_progress",
       });
-      expect(yield* Effect.flip(agent.moveWorkflow(session.id, null, "goal"))).toEqual({
+      expect(yield* Effect.flip(agent.moveWorkflow(session.id, "goal"))).toEqual({
         error: "run_in_progress",
       });
-      expect(yield* agent.cancel(session.id, null)).toMatchObject({
+      expect(yield* agent.cancel(session.id)).toMatchObject({
         stopped: true,
         status: "aborted",
       });
@@ -122,7 +114,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat runs", (it) => 
       expect(status.running).toBeNull();
       expect(status.lastRun?.status).toBe("aborted");
       // Nothing is running any more, so a second cancel has nothing to stop.
-      expect(yield* Effect.flip(agent.cancel(session.id, null))).toEqual({
+      expect(yield* Effect.flip(agent.cancel(session.id))).toEqual({
         error: "no_running_run",
       });
       // A reload shows exactly the durable text saved before cancellation and does not rerun it.
@@ -137,13 +129,13 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat runs", (it) => 
     Effect.gen(function* () {
       const session = yield* chatSession;
       const agent = yield* agentChat;
-      yield* agent.moveWorkflow(session.id, null, "goal");
+      yield* agent.moveWorkflow(session.id, "goal");
       yield* sendInBackground(yield* openPage(session.id), "please be slow");
       yield* until(() => session.invocations().length === 1, "the Plan run to start");
       const running = yield* statusOf(session.id);
       expect(running.running).not.toBeNull();
       expect(running.actions.moves.goal).toEqual({ allowed: false, reason: "run_in_progress" });
-      expect(yield* agent.cancel(session.id, null)).toMatchObject({
+      expect(yield* agent.cancel(session.id)).toMatchObject({
         runId: running.running!.runId,
         stopped: true,
         status: "aborted",
@@ -167,7 +159,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat runs", (it) => 
       expect(yield* Effect.flip(runTurn(session.id, `${session.id}-second`, "hi"))).toMatchObject({
         error: "run_in_progress",
       });
-      yield* agent.cancel(session.id, null);
+      yield* agent.cancel(session.id);
     }),
   );
 });
@@ -393,7 +385,6 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       // The server sends the head as it is when the run ends, not as it was queued.
       yield* agent.editQueued(
         session.id,
-        null,
         first.id,
         QueueEdit.save({ text: "hello, freshly edited" }),
       );
@@ -467,13 +458,13 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       const sending = yield* sendInBackground(yield* openPage(session.id), "please be slow");
       yield* until(() => session.invocations().length === 1, "the answer to start");
       yield* enqueue(session.id, "never mind", "queue");
-      yield* agent.cancel(session.id, null);
+      yield* agent.cancel(session.id);
       yield* Fiber.join(sending);
       expect(session.invocations()).toHaveLength(1);
 
       const [held] = (yield* queueOf(session.id)).items;
       expect(held?.state).toEqual(QueueItemState.held({ draft: null }));
-      const confirmed = yield* agent.editQueued(session.id, null, held!.id, QueueEdit.confirm());
+      const confirmed = yield* agent.editQueued(session.id, held!.id, QueueEdit.confirm());
       expect(confirmed?.state).toEqual(QueueItemState.waiting({ steered: false }));
       // Confirming is the user's go: with nothing running, the server sends it as the next turn.
       yield* until(() => session.invocations().length === 2, "the confirmed turn");

@@ -4,13 +4,11 @@ import { HttpApiBuilder } from "effect/http-api";
 import { AuthConnectionState } from "../../src/providers/contracts.ts";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { appRefusalStatus } from "../../src/api/app-api.ts";
-import { LeaseRequest } from "../../src/api/app-api/sessions.ts";
 import { ChatApi, SameSite } from "../../src/api/chat-api.ts";
 import { ChatApiHandlers } from "../../src/api/chat-api-live.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { ActiveProvider } from "../../src/providers/active-provider.ts";
 import { ProviderRegistry } from "../../src/providers/registry.ts";
-import { sessionHolderHeader } from "../../src/sessions/lease-state.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { sdk } from "./agent-env.ts";
 
@@ -66,7 +64,6 @@ const route = Effect.fnUntraced(function* (
 ) {
   const url = new URL(request.url);
   const path = url.pathname;
-  const holder = request.headers.get(sessionHolderHeader);
   const body = sdk(() => request.text()).pipe(
     Effect.flatMap((text) =>
       Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(text || "{}"),
@@ -95,24 +92,18 @@ const route = Effect.fnUntraced(function* (
     const { projectId, title } = yield* Schema.decodeUnknownEffect(SessionRequest)(yield* body);
     return Response.json(yield* (yield* Sessions).create(projectId, title), { status: 201 });
   }
-  const session = /^\/api\/sessions\/([^/]+)(?:\/(lease|cancel|approvals)(?:\/([^/]+))?)?$/.exec(
-    path,
-  );
+  const session = /^\/api\/sessions\/([^/]+)(?:\/(cancel|approvals)(?:\/([^/]+))?)?$/.exec(path);
   if (session === null) return Response.json({ error: "not_found" }, { status: 404 });
   const [, sessionId, action, approvalId] = session;
   switch (action) {
     case undefined:
-      return yield* answered(chat.status(sessionId!, url.searchParams.get("holder")));
-    case "lease": {
-      const lease = yield* Schema.decodeUnknownEffect(LeaseRequest)(yield* body);
-      return yield* answered(chat.lease(sessionId!, lease.holder, lease.action));
-    }
+      return yield* answered(chat.status(sessionId!));
     case "cancel":
-      return yield* answered(chat.cancel(sessionId!, holder));
+      return yield* answered(chat.cancel(sessionId!));
     case "approvals": {
       if (approvalId === undefined) return yield* answered(chat.approvals(sessionId!));
       const { approved } = yield* Schema.decodeUnknownEffect(ApprovalRequest)(yield* body);
-      return yield* answered(chat.answerApproval(sessionId!, holder, approvalId, approved));
+      return yield* answered(chat.answerApproval(sessionId!, approvalId, approved));
     }
     default:
       return Response.json({ error: "not_found" }, { status: 404 });

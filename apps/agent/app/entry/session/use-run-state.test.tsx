@@ -31,7 +31,6 @@ const snapshot = (version: number): SessionRunState => ({
   background: [],
   running: { runId: "run-1" },
   lastRun: null,
-  lease: { state: "mine" },
   context: {
     usedTokens: null,
     cachedTokens: null,
@@ -163,7 +162,7 @@ describe("server mutation results", () => {
         expect(yield* sdkCall(() => run.cancel())).toBe("requested");
         expect(cancel).toHaveBeenCalledWith(sessionId);
         cancel.mockRejectedValue(
-          ApiError.make({ status: 409, code: "session_in_use", reason: null }),
+          ApiError.make({ status: 409, code: "run_in_progress", reason: null }),
         );
         expect(yield* sdkCall(() => run.cancel())).toBe("failed");
         cancel.mockRejectedValue(

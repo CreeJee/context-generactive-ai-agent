@@ -391,7 +391,6 @@ testAgent({ testProvider: {} })("direct external agent conversations", (it) => {
             api
               .run({
                 params: { session },
-                headers: {},
                 payload: {
                   runId,
                   messages: [{ id: `${runId}:user`, role: "user", content: text }],

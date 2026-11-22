@@ -31,7 +31,7 @@ testAgent({ testProvider: { responder } })("repeat guard", (it) => {
       expect(results).toHaveLength(4);
       expect(results.at(-1)?.content).toEqual(expect.stringContaining("repeated_tool_call"));
       expect(events.find(AgUiEvent.guards.RUN_ERROR)?.code).toBe("repeated_tool_call");
-      const status = yield* (yield* AgentChat).status(session, null);
+      const status = yield* (yield* AgentChat).status(session);
       expect(status.lastRun).toMatchObject({
         status: "failed",
         error: { code: "repeated_tool_call" },

@@ -9,7 +9,6 @@ import {
 } from "../chat-store/schema.ts";
 import { JsonValue } from "../json.ts";
 import { AgUiEvent } from "../loop/chunks.ts";
-import type { sessionHolderHeader } from "../sessions/lease-state.ts";
 import { refusalStatusIn, refusalWith, SameSite } from "./refusal.ts";
 
 export { SameSite };
@@ -64,7 +63,6 @@ const Unprocessable = chatRefusal(422, [
   "report_image_generation_unavailable",
   "image_route_unavailable",
 ]);
-const Locked = chatRefusal(423, ["session_in_use"]);
 const Internal = chatRefusal(500, ["goal_ledger_unavailable", "goal_workflow_admission_failed"]);
 const Unavailable = chatRefusal(503, [
   "provider_auth_unavailable",
@@ -80,7 +78,6 @@ const refusals = [
   Conflict,
   PreconditionFailed,
   Unprocessable,
-  Locked,
   Internal,
   Unavailable,
 ] as const;
@@ -223,11 +220,6 @@ const PageSize = Schema.FiniteFromString.pipe(
   Schema.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: maxPageSize })),
 );
 
-/** The header a page sends with every change it makes to a session, as the server reads it. */
-const holderHeader = "x-session-holder" satisfies Lowercase<typeof sessionHolderHeader>;
-/** The `headers` of an endpoint that changes a session: the page holding it, when it sent one. */
-export const sessionHolderHeaders = { [holderHeader]: Schema.optional(Schema.String) };
-
 export class ChatGroup extends HttpApiGroup.make("chat").add(
   /** The newest `limit` messages, or those before `before`, with the run and approvals pending. */
   HttpApiEndpoint.get("snapshot", "/api/sessions/:session/messages", {
@@ -239,7 +231,6 @@ export class ChatGroup extends HttpApiGroup.make("chat").add(
   /** Starts a run and streams its events from the start. */
   HttpApiEndpoint.post("run", "/api/sessions/:session/runs", {
     params: { session: Schema.String },
-    headers: sessionHolderHeaders,
     payload: RunInput,
     success: RunEvents,
     error: refusals,
