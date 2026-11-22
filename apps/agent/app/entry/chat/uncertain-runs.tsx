@@ -22,13 +22,11 @@ const stateLabels = {
  */
 export function UncertainRuns({
   sessionId,
-  holder,
   runs,
   onContinued,
   onProblem,
 }: {
   sessionId: string;
-  holder: string;
   runs: readonly UncertainRun[];
   onContinued: () => void;
   onProblem: (message: string) => void;
@@ -45,7 +43,6 @@ export function UncertainRuns({
         trackContinue(
           api.continuePastUncertain(
             sessionId,
-            holder,
             runs.map((run) => run.runId),
           ),
         ),

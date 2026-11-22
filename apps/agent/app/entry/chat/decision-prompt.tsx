@@ -203,17 +203,15 @@ const errorText = (code: ApiErrorCode): MessageDescriptor => {
 /** One card decision with its choices; the board and the project inbox both show it. */
 export function DecisionPrompt({
   projectId,
-  holder,
   request,
   disabled,
 }: {
   readonly projectId: string;
-  readonly holder: string;
   readonly request: HumanDecisionRequest;
   readonly disabled: boolean;
 }) {
   const { t } = useLingui();
-  const answer = useAnswerDecisionMutation(projectId, holder);
+  const answer = useAnswerDecisionMutation(projectId);
   const [error, setError] = useState<MessageDescriptor | null>(null);
   const description = describeDecision(request.kind);
   const title = t(description.title);

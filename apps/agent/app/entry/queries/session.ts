@@ -4,10 +4,10 @@ import { api } from "../api";
 import { appQueryKeys } from "./keys";
 
 export const sessionQueries = {
-  runState: (projectId: string, sessionId: string, holder: string) =>
+  runState: (projectId: string, sessionId: string) =>
     queryOptions({
       queryKey: appQueryKeys.session.runState(projectId, sessionId),
-      queryFn: () => api.sessionRunState(sessionId, holder),
+      queryFn: () => api.sessionRunState(sessionId),
       staleTime: 0,
     }),
   queue: (projectId: string, sessionId: string) =>
@@ -61,14 +61,11 @@ export const sessionQueries = {
     }),
 };
 
-const useRunStateQueryBody = (projectId: string, sessionId: string, holder: string) =>
-  useQuery(sessionQueries.runState(projectId, sessionId, holder));
+const useRunStateQueryBody = (projectId: string, sessionId: string) =>
+  useQuery(sessionQueries.runState(projectId, sessionId));
 export const useRunStateQuery: {
-  (
-    sessionId: string,
-    holder: string,
-  ): (projectId: string) => ReturnType<typeof useRunStateQueryBody>;
-} & typeof useRunStateQueryBody = EffectFunction.dual(3, useRunStateQueryBody);
+  (sessionId: string): (projectId: string) => ReturnType<typeof useRunStateQueryBody>;
+} & typeof useRunStateQueryBody = EffectFunction.dual(2, useRunStateQueryBody);
 const useQueueQueryBody = (projectId: string, sessionId: string) =>
   useQuery(sessionQueries.queue(projectId, sessionId));
 export const useQueueQuery: {

@@ -51,15 +51,12 @@ export const isTakenIn = (message: QueuedMessage) =>
 
 /** The authoritative queue snapshot, refreshed by session SSE invalidations. */
 export const useMessageQueue: {
-  (
-    holder: string,
-    _generating: boolean,
-  ): (sessionId: string) => ReturnType<typeof useMessageQueueBody>;
-} & typeof useMessageQueueBody = EffectFunction.dual(3, useMessageQueueBody);
-function useMessageQueueBody(sessionId: string, holder: string, _generating: boolean) {
+  (_generating: boolean): (sessionId: string) => ReturnType<typeof useMessageQueueBody>;
+} & typeof useMessageQueueBody = EffectFunction.dual(2, useMessageQueueBody);
+function useMessageQueueBody(sessionId: string, _generating: boolean) {
   const projectId = useProjectScope("message_queue");
-  const enqueue = useEnqueueMutation(projectId, sessionId, holder);
-  const editQueue = useEditQueueMutation(projectId, sessionId, holder);
+  const enqueue = useEnqueueMutation(projectId, sessionId);
+  const editQueue = useEditQueueMutation(projectId, sessionId);
   const query = useQueueQuery(projectId, sessionId);
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const refresh = () =>

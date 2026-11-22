@@ -96,7 +96,6 @@ import {
   type CancelResult,
   type CompactResult,
   type ContextView,
-  type LeaseView,
   NextDelivery,
   QueueEdit,
   QueueItemState,
@@ -214,7 +213,6 @@ export type {
   ImageFeatureStatus,
   ImageMediaAsset,
   KagiStatus,
-  LeaseView,
   McpOverview,
   McpScope,
   CrossProviderMediaConsentMode,
@@ -434,12 +432,12 @@ export function makeSessionLifecycleClient(fetch: typeof globalThis.fetch) {
   const call = appCallOver(fetch);
   return {
     /** Active parent/child runs are checkpointed and stopped before the conversation is archived. */
-    setArchived: (session: string, holder: string, archived: boolean) =>
+    setArchived: (session: string, archived: boolean) =>
       call((client) =>
         Effect.flatMap(browserCrypto.uuidV4(), (idempotencyKey) =>
           client.sessions.change({
             params: { session },
-            headers: { "x-session-holder": holder },
+            headers: {},
             payload: SessionChange.Archive({ archived, idempotencyKey }),
           }),
         ).pipe(
@@ -455,12 +453,12 @@ export function makeSessionLifecycleClient(fetch: typeof globalThis.fetch) {
           ),
         ),
       ),
-    deleteSession: (session: string, holder: string) =>
+    deleteSession: (session: string) =>
       call((client) =>
         Effect.flatMap(browserCrypto.uuidV4(), (idempotencyKey) =>
           client.sessions.change({
             params: { session },
-            headers: { "x-session-holder": holder },
+            headers: {},
             payload: SessionChange.Delete({ idempotencyKey }),
           }),
         ).pipe(
@@ -474,11 +472,10 @@ export function makeSessionLifecycleClient(fetch: typeof globalThis.fetch) {
 /** Moves or pauses the workflow; it answers the workflow, and anything else is the server's fault. */
 const changeWorkflow = (
   session: string,
-  holder: string,
   change: Extract<SessionChange, { readonly _tag: "Move" | "Control" }>,
 ) =>
   appCall((client) => {
-    const request = { params: { session }, headers: { "x-session-holder": holder } };
+    const request = { params: { session }, headers: {} };
     // The client takes a union payload one case at a time.
     return Match.valueTags(change, {
       Move: (payload) => client.sessions.change({ ...request, payload }),
@@ -493,17 +490,12 @@ const changeWorkflow = (
  * Archives or deletes one task. A change that cannot start (409) or is still waiting (202) comes
  * back as the result; one that went ahead tells the trace views to reread.
  */
-const changeTraceTask = (
-  session: string,
-  holder: string,
-  task: string,
-  intent: "archive" | "delete",
-) =>
+const changeTraceTask = (session: string, task: string, intent: "archive" | "delete") =>
   appCall((client) =>
     Effect.flatMap(browserCrypto.uuidV4(), (idempotencyKey) =>
       client.trace.changeTask({
         params: { session, task },
-        headers: { "x-session-holder": holder },
+        headers: {},
         payload: { intent, idempotencyKey },
       }),
     ).pipe(
@@ -578,13 +570,13 @@ export const api = {
     appCall((client) => client.sessions.list({ query: { project, archived: "1" } })),
   ...makeSessionLifecycleClient(appFetch),
   /** Refused while a run is active; `run` requires a current Plan that is ready or executing. */
-  moveWorkflow: (session: string, holder: string, move: WorkflowMove) =>
-    changeWorkflow(session, holder, SessionChange.Move({ move })),
+  moveWorkflow: (session: string, move: WorkflowMove) =>
+    changeWorkflow(session, SessionChange.Move({ move })),
   board: (session: string) => appCall((client) => client.sessions.board({ params: { session } })),
   /** The user's board change; one to an executing card comes back as a stored request. */
-  editBoard: (session: string, holder: string, edit: BoardEdit) =>
+  editBoard: (session: string, edit: BoardEdit) =>
     appCall((client) => {
-      const request = { params: { session }, headers: { "x-session-holder": holder } };
+      const request = { params: { session }, headers: {} };
       // The client takes a union payload one case at a time.
       return BoardEdit.$match(edit, {
         AddCard: (payload) => client.sessions.editBoard({ ...request, payload }),
@@ -607,7 +599,6 @@ export const api = {
   runningSessions: (project: string) =>
     appCall((client) => client.projects.running({ params: { project } })),
   answerDecision: (
-    holder: string,
     request: Pick<
       HumanDecisionRequest,
       "requestId" | "sessionId" | "goalInstanceId" | "cardId" | "factsSeq"
@@ -617,7 +608,7 @@ export const api = {
     appCall((client) =>
       client.sessions.answerDecision({
         params: { session: request.sessionId, decision: request.requestId },
-        headers: { "x-session-holder": holder },
+        headers: {},
         payload: {
           goalInstanceId: request.goalInstanceId,
           cardId: request.cardId,
@@ -632,18 +623,18 @@ export const api = {
   cardFolder: (session: string, card: string) =>
     appCall((client) => client.sessions.cardFolder({ params: { session, card } })),
   /** Runs the executing Plan as a kanban board. */
-  startKanban: (session: string, holder: string) =>
+  startKanban: (session: string) =>
     appCall((client) =>
       client.sessions.kanbanAction({
         params: { session },
-        headers: { "x-session-holder": holder },
+        headers: {},
         payload: KanbanCommand.Start(),
       }),
     ),
   /** What a person meant by dragging a card; the server decides the card's status. */
-  boardIntent: (session: string, holder: string, intent: BoardIntent) =>
+  boardIntent: (session: string, intent: BoardIntent) =>
     appCall((client) => {
-      const request = { params: { session }, headers: { "x-session-holder": holder } };
+      const request = { params: { session }, headers: {} };
       // The client takes a union payload one case at a time.
       return BoardIntent.$match(intent, {
         Reorder: (payload) => client.sessions.kanbanAction({ ...request, payload }),
@@ -657,103 +648,94 @@ export const api = {
       });
     }),
   /** Runs the board's loop again after it stopped on exhausted retries or a defect. */
-  restartKanbanLoop: (session: string, holder: string) =>
+  restartKanbanLoop: (session: string) =>
     appCall((client) =>
       client.sessions.kanbanAction({
         params: { session },
-        headers: { "x-session-holder": holder },
+        headers: {},
         payload: KanbanCommand.RestartLoop(),
       }),
     ),
   /** Checks again the outcomes whose last check ended without a verdict. */
-  recheckOutcomes: (session: string, holder: string) =>
+  recheckOutcomes: (session: string) =>
     appCall((client) =>
       client.sessions.kanbanAction({
         params: { session },
-        headers: { "x-session-holder": holder },
+        headers: {},
         payload: KanbanCommand.RecheckOutcomes(),
       }),
     ),
   /** The Goals this Goal waits for; an empty list lifts the wait. */
-  setGoalDependencies: (session: string, holder: string, dependsOn: readonly string[]) =>
+  setGoalDependencies: (session: string, dependsOn: readonly string[]) =>
     appCall((client) =>
       client.sessions.kanbanAction({
         params: { session },
-        headers: { "x-session-holder": holder },
+        headers: {},
         payload: KanbanCommand.SetDependencies({ dependsOn }),
       }),
     ),
   /** Targets the branch checked out in the project now; refused once the Goal has work of its own. */
-  retargetKanban: (session: string, holder: string) =>
+  retargetKanban: (session: string) =>
     appCall((client) =>
       client.sessions.kanbanAction({
         params: { session },
-        headers: { "x-session-holder": holder },
+        headers: {},
         payload: KanbanCommand.Retarget(),
       }),
     ),
-  controlWorkflow: (session: string, holder: string, workflowAction: WorkflowAction) =>
-    changeWorkflow(session, holder, SessionChange.Control({ workflowAction })),
+  controlWorkflow: (session: string, workflowAction: WorkflowAction) =>
+    changeWorkflow(session, SessionChange.Control({ workflowAction })),
   /** `agent`: talk directly to that trusted external ACP agent instead of the app's model. */
   createSession: (projectId: string, agent?: string) =>
     appCall((client) => client.sessions.create({ payload: { projectId, agent } })),
-  sessionRunState: (session: string, holder: string) =>
-    appCall((client) => client.sessions.status({ params: { session }, query: { holder } })),
-  cancelRun: (session: string, holder: string) =>
-    appCall((client) =>
-      client.sessions.cancel({ params: { session }, headers: { "x-session-holder": holder } }),
-    ),
-  discardInterrupts: (session: string, holder: string) =>
+  sessionRunState: (session: string) =>
+    appCall((client) => client.sessions.status({ params: { session }, query: {} })),
+  cancelRun: (session: string) =>
+    appCall((client) => client.sessions.cancel({ params: { session }, headers: {} })),
+  discardInterrupts: (session: string) =>
     appCall((client) =>
       client.sessions.discardInterrupts({
         params: { session },
-        headers: { "x-session-holder": holder },
+        headers: {},
       }),
     ),
   /** Refused with 409 while something runs, or when the listed runs changed since they were shown. */
-  continuePastUncertain: (session: string, holder: string, runIds: readonly string[]) =>
+  continuePastUncertain: (session: string, runIds: readonly string[]) =>
     appCall((client) =>
       client.sessions.continuePastUncertain({
         params: { session },
-        headers: { "x-session-holder": holder },
+        headers: {},
         payload: { runIds },
       }),
     ),
   /** Refused with 409 while the session is answering. */
-  compactSession: (session: string, holder: string) =>
-    appCall((client) =>
-      client.sessions.compact({ params: { session }, headers: { "x-session-holder": holder } }),
-    ),
+  compactSession: (session: string) =>
+    appCall((client) => client.sessions.compact({ params: { session }, headers: {} })),
   /** null lets the conversation follow the app's selected model again. */
-  setSessionModel: (session: string, holder: string, model: ModelSelection | null) =>
+  setSessionModel: (session: string, model: ModelSelection | null) =>
     appCall((client) =>
       client.sessions.setModel({
         params: { session },
-        headers: { "x-session-holder": holder },
+        headers: {},
         payload: { model },
       }),
-    ),
-  leaseAction: (session: string, holder: string, action: "claim" | "release") =>
-    appCall((client) =>
-      client.sessions.lease({ params: { session }, payload: { holder, action } }),
     ),
 
   queue: (session: string) => appCall((client) => client.sessions.queue({ params: { session } })),
   enqueue: (
     session: string,
-    holder: string,
     payload: { text: string; attachmentIds: readonly string[]; mode: "queue" | "steer" },
   ) =>
     appCall((client) =>
       client.sessions.enqueue({
         params: { session },
-        headers: { "x-session-holder": holder },
+        headers: {},
         payload,
       }),
     ),
-  editQueued: (session: string, holder: string, message: string, edit: QueueEdit) =>
+  editQueued: (session: string, message: string, edit: QueueEdit) =>
     appCall((client) => {
-      const request = { params: { session, message }, headers: { "x-session-holder": holder } };
+      const request = { params: { session, message }, headers: {} };
       // The client takes a union payload one case at a time.
       return QueueEdit.$match(edit, {
         edit: (payload) => client.sessions.editQueued({ ...request, payload }),
@@ -778,7 +760,6 @@ export const api = {
   /** A paid image, written into the conversation as the prompt, a call and its result. */
   generateSessionImage: (
     session: string,
-    holder: string,
     prompt: string,
     approved: boolean,
     crossProviderApproval?: CrossProviderMediaRunApproval,
@@ -786,7 +767,7 @@ export const api = {
     appCall((client) =>
       client.sessions.generateImage({
         params: { session },
-        headers: { "x-session-holder": holder },
+        headers: {},
         payload:
           crossProviderApproval === undefined
             ? { prompt, approved }
@@ -938,7 +919,6 @@ export const api = {
     appCall((client) => client.trace.sessionTask({ params: { session, task } })),
   resumeWorkTraceTask: (
     session: string,
-    holder: string,
     task: string,
     expectedAttemptId: string,
     confirmUncertain = false,
@@ -947,7 +927,7 @@ export const api = {
       client.trace
         .changeTask({
           params: { session, task },
-          headers: { "x-session-holder": holder },
+          headers: {},
           payload: { intent: "resume", expectedAttemptId, confirmUncertain },
         })
         .pipe(
@@ -956,10 +936,9 @@ export const api = {
           Effect.filterOrFail(Schema.is(ResumeTaskResult), unexpectedAnswer),
         ),
     ),
-  archiveWorkTraceTask: (session: string, holder: string, task: string) =>
-    changeTraceTask(session, holder, task, "archive"),
-  deleteWorkTraceTask: (session: string, holder: string, task: string) =>
-    changeTraceTask(session, holder, task, "delete"),
+  archiveWorkTraceTask: (session: string, task: string) =>
+    changeTraceTask(session, task, "archive"),
+  deleteWorkTraceTask: (session: string, task: string) => changeTraceTask(session, task, "delete"),
   workTraceStreamUrl: (sessionId: string, after = 0) =>
     `/api/sessions/${encodeURIComponent(sessionId)}/trace/stream?after=${after}`,
   subagents: (session: string) =>
@@ -968,11 +947,11 @@ export const api = {
     appCall((client) => client.sessions.approvals({ params: { session } })),
   subagentTranscript: (session: string, subagent: string) =>
     appCall((client) => client.sessions.subagentTranscript({ params: { session, subagent } })),
-  answerApproval: (session: string, holder: string, approval: string, approved: boolean) =>
+  answerApproval: (session: string, approval: string, approved: boolean) =>
     appCall((client) =>
       client.sessions.answerApproval({
         params: { session, approval },
-        headers: { "x-session-holder": holder },
+        headers: {},
         payload: { approved },
       }),
     ),

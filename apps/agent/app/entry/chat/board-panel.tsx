@@ -202,18 +202,16 @@ export function OpenBoardButton({
 export function WorkflowBoard({
   projectId,
   sessionId,
-  holder,
   disabled,
 }: {
   readonly projectId: string;
   readonly sessionId: string;
-  readonly holder: string;
   readonly disabled: boolean;
 }) {
   const { t } = useLingui();
   const board = useBoardQuery(projectId, sessionId);
   const kanban = useKanbanQuery(projectId, sessionId);
-  const kanbanAction = useKanbanMutation(projectId, sessionId, holder);
+  const kanbanAction = useKanbanMutation(projectId, sessionId);
   const { openBoard } = useBoardLocation();
   const [startError, setStartError] = useState<string | null>(null);
 
@@ -354,7 +352,6 @@ export function WorkflowBoard({
 export function SessionBoard({
   projectId,
   sessionId,
-  holder,
   peekCardId,
   leading,
   onPeek,
@@ -362,7 +359,6 @@ export function SessionBoard({
 }: {
   readonly projectId: string;
   readonly sessionId: string;
-  readonly holder: string;
   readonly peekCardId: string | null;
   readonly leading?: ReactNode;
   readonly onPeek: (cardId: string | null) => void;
@@ -372,7 +368,7 @@ export function SessionBoard({
   const board = useBoardQuery(projectId, sessionId);
   const decisions = useDecisionsQuery(projectId, sessionId).data ?? [];
   const kanban = useKanbanQuery(projectId, sessionId);
-  const kanbanAction = useKanbanMutation(projectId, sessionId, holder);
+  const kanbanAction = useKanbanMutation(projectId, sessionId);
   const view = board.data;
   if (!isTruthy(view) || view.plan === null)
     return (
@@ -402,7 +398,6 @@ export function SessionBoard({
     <SessionBoardBody
       projectId={projectId}
       sessionId={sessionId}
-      holder={holder}
       view={view}
       plan={view.plan}
       decisions={decisions}
@@ -420,7 +415,6 @@ export function SessionBoard({
 function SessionBoardBody({
   projectId,
   sessionId,
-  holder,
   view,
   plan,
   decisions,
@@ -433,7 +427,6 @@ function SessionBoardBody({
 }: {
   readonly projectId: string;
   readonly sessionId: string;
-  readonly holder: string;
   readonly view: BoardView;
   readonly plan: BoardPlan;
   readonly decisions: readonly HumanDecisionRequest[];
@@ -453,7 +446,7 @@ function SessionBoardBody({
   const [actionError, setActionError] = useState<string | null>(null);
   const [askClose, setAskClose] = useState(false);
   const closed = plan.status === "completed" || plan.status === "closed";
-  const edit = useBoardsEditMutation(holder)(projectId);
+  const edit = useBoardsEditMutation(projectId);
   const closePlan = () => {
     setActionError(null);
     setAskClose(false);
@@ -630,7 +623,6 @@ function SessionBoardBody({
                     worktree={loop.mode === "worktree"}
                     decisions={goalDecisions}
                     projectId={projectId}
-                    holder={holder}
                     disabled={disabled || kanbanAction.isPending}
                     onChange={act}
                   />
@@ -680,7 +672,6 @@ function SessionBoardBody({
     >
       <BoardSurface
         projectId={projectId}
-        holder={holder}
         disabled={disabled}
         boards={[{ sessionId, label: null, view, plan, decisions, loop, rank: null }]}
         shown={[]}
@@ -701,7 +692,6 @@ function GoalSchedulePanel({
   worktree,
   decisions,
   projectId,
-  holder,
   disabled,
   onChange,
 }: {
@@ -710,7 +700,6 @@ function GoalSchedulePanel({
   readonly worktree: boolean;
   readonly decisions: readonly HumanDecisionRequest[];
   readonly projectId: string;
-  readonly holder: string;
   readonly disabled: boolean;
   readonly onChange: (action: KanbanAction) => void;
 }) {
@@ -800,7 +789,6 @@ function GoalSchedulePanel({
         <DecisionPrompt
           key={request.requestId}
           projectId={projectId}
-          holder={holder}
           request={request}
           disabled={disabled}
         />

@@ -253,7 +253,6 @@ const refOf = (item: BoardItem): BoardCardRef => ({
  */
 export function BoardSurface({
   projectId,
-  holder,
   disabled,
   boards,
   shown,
@@ -265,7 +264,6 @@ export function BoardSurface({
   className,
 }: {
   readonly projectId: string;
-  readonly holder: string;
   readonly disabled: boolean;
   /** The Plans on the board, in the order their cards are laid out. */
   readonly boards: readonly SurfaceBoard[];
@@ -283,10 +281,10 @@ export function BoardSurface({
 }) {
   // Drops and transfers get their own mutation, so the board shows one as requested while it is on
   // the way and drops it when refused; the server's board then draws the card where it really is.
-  const request = useBoardsKanbanMutation(projectId, holder);
+  const request = useBoardsKanbanMutation(projectId);
   // The peek's own actions: their pending state disables the peek, not the board.
-  const action = useBoardsKanbanMutation(projectId, holder);
-  const edit = useBoardsEditMutation(projectId, holder);
+  const action = useBoardsKanbanMutation(projectId);
+  const edit = useBoardsEditMutation(projectId);
   const [landing, setLanding] = useState<Landing | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [editingKey, setEditingKey] = useState<string | null>(null);
@@ -469,7 +467,6 @@ export function BoardSurface({
             changePending={peek !== null && changePending(peek)}
             projectId={projectId}
             sessionId={peekSession}
-            holder={holder}
             disabled={disabled}
             closed={peekBoard === null || closedIn(peekBoard)}
             planVersion={peekBoard?.plan.version ?? 0}

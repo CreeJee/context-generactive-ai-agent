@@ -51,15 +51,12 @@ export type UserContent = RunInput["messages"][number]["content"];
 
 /** A user turn the page sends. */
 export interface Send {
-  /** The page that sends it. */
-  readonly holder: string;
   readonly content: UserContent;
   readonly forwardedProps?: RunInput["forwardedProps"];
 }
 
 /** The page's answers to the approvals run `parentRunId` waits for. */
 export interface Answer {
-  readonly holder: string;
   readonly parentRunId: string;
   readonly answers: ReadonlyArray<ResumeEntry>;
 }
@@ -187,7 +184,7 @@ export const chatSessions = <E>(
         const events = yield* chat
           .run({
             params: { session },
-            headers: { "x-session-holder": input.holder },
+            headers: {},
             payload: {
               runId,
               messages: [{ id: message.id, role: "user", content: input.content }],
@@ -229,7 +226,7 @@ export const chatSessions = <E>(
         const events = yield* chat
           .run({
             params: { session },
-            headers: { "x-session-holder": input.holder },
+            headers: {},
             payload: {
               runId,
               parentRunId: input.parentRunId,

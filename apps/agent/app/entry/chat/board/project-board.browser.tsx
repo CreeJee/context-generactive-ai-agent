@@ -163,7 +163,6 @@ function Harness({ onOpenSession }: { readonly onOpenSession: (sessionId: string
       <QueryClientProvider client={new QueryClient()}>
         <ProjectBoard
           projectId="project-1"
-          holder="page-1"
           peek={peek}
           onPeek={setPeek}
           onOpenSession={onOpenSession}

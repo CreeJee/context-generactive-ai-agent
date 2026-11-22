@@ -26,11 +26,9 @@ const problemText = <F>(failure: F) =>
 /** Image requests and consent are one user action; the settings snapshot belongs to the query cache. */
 export function useImageGeneration({
   sessionId,
-  holder,
   onProblem,
 }: {
   sessionId: string;
-  holder: string;
   onProblem: (message: string) => void;
 }) {
   const [intent, _setIntent, clearIntent, toggleIntent] = useBooleanState(false);
@@ -40,7 +38,7 @@ export function useImageGeneration({
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     mutationFn: (prompt: string) =>
       runUiEffect(
-        uiPromise(() => api.generateSessionImage(sessionId, holder, prompt, true)).pipe(
+        uiPromise(() => api.generateSessionImage(sessionId, prompt, true)).pipe(
           Effect.catchTag("UnknownError", (rejected) =>
             Effect.gen(function* () {
               const failure = rejected.cause;
@@ -56,13 +54,11 @@ export function useImageGeneration({
               return yield* ApprovalChoice.$match(choice, {
                 cancel: () => Effect.succeed(null),
                 once: ({ approval: chosen }) =>
-                  uiPromise(() =>
-                    api.generateSessionImage(sessionId, holder, prompt, true, chosen),
-                  ),
+                  uiPromise(() => api.generateSessionImage(sessionId, prompt, true, chosen)),
                 always: () =>
                   uiPromise(() => consentMutation.mutateAsync("always")).pipe(
                     Effect.andThen(
-                      uiPromise(() => api.generateSessionImage(sessionId, holder, prompt, true)),
+                      uiPromise(() => api.generateSessionImage(sessionId, prompt, true)),
                     ),
                   ),
               });

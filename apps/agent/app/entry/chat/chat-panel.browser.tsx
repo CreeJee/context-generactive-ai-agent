@@ -133,12 +133,10 @@ const served: Served = { run: runState, board: draftBoard, downloads: [], answer
 /** The changes the page sent: path and body. */
 const sent: string[] = [];
 
-/** The server behind the real API clients; changes other than the lease are only recorded. */
+/** The server behind the real API clients; changes are only recorded. */
 const server = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const request = new Request(input, init);
   const { pathname } = new URL(request.url);
-  if (pathname === "/api/sessions/s1/lease")
-    return Promise.resolve(Response.json({ state: "mine" }));
   if (pathname === "/api/sessions/s1" && request.method === "GET")
     return Promise.resolve(Response.json(served.run));
   if (pathname === "/api/sessions/s1/messages")

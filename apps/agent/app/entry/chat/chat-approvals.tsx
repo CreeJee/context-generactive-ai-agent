@@ -31,7 +31,6 @@ const problems = {
 /** Answers the approvals a run waits for together, once every one has a decision. */
 export function ChatApprovals({
   sessionId,
-  holder,
   approvals,
   problem,
   resuming,
@@ -40,7 +39,6 @@ export function ChatApprovals({
   onProblem,
 }: {
   sessionId: string;
-  holder: string;
   approvals: readonly PendingApproval[];
   problem: AnswerProblem | null;
   resuming: boolean;
@@ -61,7 +59,7 @@ export function ChatApprovals({
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const discard = () =>
     runUiEffect(
-      uiPromise(() => trackDiscard(api.discardInterrupts(sessionId, holder))).pipe(
+      uiPromise(() => trackDiscard(api.discardInterrupts(sessionId))).pipe(
         Effect.tap(() => Effect.sync(onResync)),
         Effect.catchTag("UnknownError", (failure) =>
           Effect.sync(() =>

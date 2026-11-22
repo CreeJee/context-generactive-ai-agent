@@ -146,7 +146,6 @@ export function CardPeek({
   changePending,
   projectId,
   sessionId,
-  holder,
   disabled,
   closed,
   planVersion,
@@ -176,7 +175,6 @@ export function CardPeek({
   readonly projectId: string;
   /** The conversation the panel's card belongs to. */
   readonly sessionId: string;
-  readonly holder: string;
   readonly disabled: boolean;
   readonly closed: boolean;
   readonly planVersion: number;
@@ -266,7 +264,6 @@ export function CardPeek({
                 <DecisionPrompt
                   key={request.requestId}
                   projectId={projectId}
-                  holder={holder}
                   request={request}
                   disabled={disabled}
                 />

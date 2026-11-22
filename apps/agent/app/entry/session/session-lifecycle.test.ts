@@ -31,17 +31,17 @@ const completed = ArchiveTaskResult.cases.completed.make({ targetId: session.id 
 const actions = [
   {
     name: "archive",
-    invoke: () => api.setArchived(session.id, "holder-1", true),
+    invoke: () => api.setArchived(session.id, true),
     change: (idempotencyKey: string) => SessionChange.Archive({ archived: true, idempotencyKey }),
   },
   {
     name: "restore",
-    invoke: () => api.setArchived(session.id, "holder-1", false),
+    invoke: () => api.setArchived(session.id, false),
     change: (idempotencyKey: string) => SessionChange.Archive({ archived: false, idempotencyKey }),
   },
   {
     name: "delete",
-    invoke: () => api.deleteSession(session.id, "holder-1"),
+    invoke: () => api.deleteSession(session.id),
     change: (idempotencyKey: string) => SessionChange.Delete({ idempotencyKey }),
   },
 ];
@@ -72,7 +72,7 @@ describe("server-authoritative session lifecycle client", () => {
       Effect.gen(function* () {
         const snapshot = { ...session, archivedAt: archived ? session.archivedAt : null };
         respond(snapshot);
-        expect(yield* call(() => api.setArchived(session.id, "holder-1", archived))).toEqual(
+        expect(yield* call(() => api.setArchived(session.id, archived))).toEqual(
           SessionArchiveResult.completed({ session: snapshot }),
         );
       }),
@@ -81,7 +81,7 @@ describe("server-authoritative session lifecycle client", () => {
   it.effect("preserves completed deletion", () =>
     Effect.gen(function* () {
       respond(completed);
-      expect(yield* call(() => api.deleteSession(session.id, "holder-1"))).toEqual(completed);
+      expect(yield* call(() => api.deleteSession(session.id))).toEqual(completed);
     }),
   );
 
@@ -94,7 +94,7 @@ describe("server-authoritative session lifecycle client", () => {
         expect(new Request(url ?? "").url).toBe("http://app.test/api/sessions/session%2F1");
         expect(init).toMatchObject({
           method: "POST",
-          headers: { "x-session-holder": "holder-1", "content-type": "application/json" },
+          headers: { "content-type": "application/json" },
         });
         const body = yield* Schema.decodeEffect(
           Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)),

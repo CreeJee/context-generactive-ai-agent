@@ -20,7 +20,7 @@ describe("development backend restart detection", () => {
     Effect.gen(function* () {
       const transport = vi.fn<typeof fetch>((_input, init) => {
         const headers = new Headers(init?.headers);
-        expect(headers.get("x-session-holder")).toBe("holder");
+        expect(headers.get("x-test-header")).toBe("value");
         expect(
           developmentRequestDecision(
             createDevelopmentBoundary({ buildId: "build-a", instanceId: "instance-test" }),
@@ -36,7 +36,7 @@ describe("development backend restart detection", () => {
         request(
           new Request("http://localhost:5180/api/chat", {
             method: "POST",
-            headers: { "x-session-holder": "holder" },
+            headers: { "x-test-header": "value" },
           }),
         ),
       );
@@ -53,12 +53,10 @@ describe("development backend restart detection", () => {
       yield* call(() => request("https://example.com/api/chat", { method: "POST" }));
       expect(transport.mock.calls[0]?.[1]?.headers).toBeUndefined();
       yield* call(() =>
-        request("/api/chat", { method: "POST", headers: { "x-session-holder": "holder" } }),
+        request("/api/chat", { method: "POST", headers: { "x-test-header": "value" } }),
       );
       expect(transport).toHaveBeenCalledTimes(2);
-      expect(new Headers(transport.mock.calls[1]?.[1]?.headers).get("x-session-holder")).toBe(
-        "holder",
-      );
+      expect(new Headers(transport.mock.calls[1]?.[1]?.headers).get("x-test-header")).toBe("value");
     }),
   );
 
@@ -115,7 +113,7 @@ describe("official HTTP client SDK transport", () => {
   it.live("preserves multipart boundary and bytes without converting uploads to streams", () =>
     Effect.gen(function* () {
       const form = new FormData();
-      form.set("holder", "page");
+      form.set("note", "page");
       form.set("attachment", new Blob([new Uint8Array([0, 255, 13, 10])]), "probe.bin");
       const transport = vi.fn<typeof fetch>((_input, init) => {
         expect(init?.body).toBeInstanceOf(Uint8Array);
@@ -123,7 +121,7 @@ describe("official HTTP client SDK transport", () => {
         return response
           .formData()
           .then((received) => {
-            expect(received.get("holder")).toBe("page");
+            expect(received.get("note")).toBe("page");
             const file = received.get("attachment");
             expect(file).toBeInstanceOf(File);
             return file instanceof File ? file.arrayBuffer() : null;
@@ -157,7 +155,7 @@ describe("official HTTP client SDK transport", () => {
             }),
             {
               status: 200,
-              headers: { "content-type": "text/event-stream", "x-session-holder": "h" },
+              headers: { "content-type": "text/event-stream", "x-test-header": "h" },
             },
           ),
         ),
@@ -166,7 +164,7 @@ describe("official HTTP client SDK transport", () => {
       yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllGlobals()));
       const response = yield* call(() => appFetch("http://localhost/api/chat"));
       expect(response.status).toBe(200);
-      expect(response.headers.get("x-session-holder")).toBe("h");
+      expect(response.headers.get("x-test-header")).toBe("h");
       const copy = response.clone();
       const reader = response.body!.getReader();
       const first = yield* call(() => reader.read());
@@ -200,14 +198,14 @@ describe("official HTTP client SDK transport", () => {
     }),
   );
 
-  it.live("keeps JSON lease uploads buffered over HTTP/1.1, including keepalive", () =>
+  it.live("keeps JSON uploads buffered over HTTP/1.1, including keepalive", () =>
     Effect.gen(function* () {
       vi.stubGlobal("document", { baseURI: "http://localhost:5173/?session=target" });
       const transport = vi.fn<typeof fetch>((input, init) => {
         expect(input instanceof Request ? input.url : String(input)).toBe(
-          "http://localhost:5173/api/sessions/target/lease",
+          "http://localhost:5173/api/sessions/target/note",
         );
-        expect(init?.body).toBe('{"holder":"page","action":"claim"}');
+        expect(init?.body).toBe('{"note":"page"}');
         expect(init?.keepalive).toBe(true);
         expect(init?.body).not.toBeInstanceOf(ReadableStream);
         expect(new Headers(init?.headers).get("content-type")).toBe("application/json");
@@ -216,10 +214,10 @@ describe("official HTTP client SDK transport", () => {
       vi.stubGlobal("fetch", transport);
       yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllGlobals()));
       const response = yield* call(() =>
-        appFetch("/api/sessions/target/lease", {
+        appFetch("/api/sessions/target/note", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: '{"holder":"page","action":"claim"}',
+          body: '{"note":"page"}',
           keepalive: true,
         }),
       );

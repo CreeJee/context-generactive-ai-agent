@@ -24,19 +24,17 @@ import { runUiEffect, uiPromise } from "../shared/ui-effect";
 export function SessionModelPicker({
   projectId,
   sessionId,
-  holder,
   model,
   disabled,
 }: {
   readonly projectId: string;
   readonly sessionId: string;
-  readonly holder: string;
   /** The model the conversation runs on now; null when the app has none selected either. */
   readonly model: ModelSelection | null;
   readonly disabled: boolean;
 }) {
   const { t } = useLingui();
-  const mutation = useSessionModelMutation(projectId, sessionId, holder);
+  const mutation = useSessionModelMutation(projectId, sessionId);
   const { sources } = useModelSources();
   // The source the user is browsing; until one is picked it is the current model's own.
   const [browsed, setBrowsed] = useState<CatalogTarget | null>(null);

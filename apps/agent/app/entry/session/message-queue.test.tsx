@@ -36,7 +36,7 @@ function readSnapshot(snapshot: QueueSnapshot) {
   client.setQueryData(key, snapshot);
   const captured: ReturnType<typeof useMessageQueue>[] = [];
   function Probe() {
-    captured.push(useMessageQueue(sessionId, "holder", false));
+    captured.push(useMessageQueue(sessionId, false));
     return null;
   }
   renderToStaticMarkup(

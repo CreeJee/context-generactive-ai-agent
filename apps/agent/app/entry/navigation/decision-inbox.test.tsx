@@ -174,7 +174,6 @@ describe("DecisionInbox (jsdom)", () => {
                       { id: "alpha", name: "Alpha" },
                       { id: "beta", name: "Beta" },
                     ]}
-                    holder="holder-1"
                     onOpenCard={() => {}}
                   />
                 </SidebarMenu>

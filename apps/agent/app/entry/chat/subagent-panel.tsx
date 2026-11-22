@@ -32,17 +32,15 @@ function toPending(approval: RelayedApprovalView): PendingApproval {
 /** Active delegated work and permission calls relayed from it. */
 export function SubagentPanel({
   sessionId,
-  holder,
   generating,
 }: {
   sessionId: string;
-  holder: string;
   generating: boolean;
 }) {
   const { t } = useLingui();
   const { state } = useDelegatedWork(sessionId, generating);
   const projectId = useProjectScope("relayed_approval");
-  const answerMutation = useRelayedApprovalMutation(projectId, sessionId, holder);
+  const answerMutation = useRelayedApprovalMutation(projectId, sessionId);
   const running = state.subagents.filter((child) => child.status === "running");
   if (running.length === 0 && state.approvals.length === 0) return null;
 

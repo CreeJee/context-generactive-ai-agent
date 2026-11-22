@@ -70,7 +70,7 @@ const snapshot = (version: number): SessionRunState => ({
 type Run = ReturnType<typeof useRunState>;
 
 function Probe({ generating, onRun }: { generating: boolean; onRun?: (run: Run) => void }) {
-  const run = useRunState(sessionId, "holder-1", generating, {
+  const run = useRunState(sessionId, generating, {
     waitingForApproval: false,
     answered: false,
   });
@@ -161,7 +161,7 @@ describe("server mutation results", () => {
         .mockResolvedValue({ runId: "child-parent", stopped: true, status: null });
       try {
         expect(yield* sdkCall(() => run.cancel())).toBe("requested");
-        expect(cancel).toHaveBeenCalledWith(sessionId, "holder-1");
+        expect(cancel).toHaveBeenCalledWith(sessionId);
         cancel.mockRejectedValue(
           ApiError.make({ status: 409, code: "session_in_use", reason: null }),
         );
@@ -214,7 +214,7 @@ describe("durable workflow refresh", () => {
           });
           yield* sdkCall(() => vi.advanceTimersByTimeAsync(0));
           expect(fetchState).toHaveBeenCalledOnce();
-          expect(fetchState).toHaveBeenCalledWith(sessionId, "holder-1");
+          expect(fetchState).toHaveBeenCalledWith(sessionId);
           expect(client.getQueryData<SessionRunState>(queryKey)?.workflow.goal?.version).toBe(2);
           expect(client.getQueryData<SessionRunState>(queryKey)?.running).not.toBeNull();
           expect(render(client, generating)).toContain("2");
