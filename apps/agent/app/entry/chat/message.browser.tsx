@@ -18,7 +18,6 @@ const props = {
   awaitingApproval: [],
   tasks: [],
   traceConnection: "live" as const,
-  readOnly: false,
   onResumeTask: inactive,
   onArchiveTask: inactive,
   onDeleteTask: inactive,

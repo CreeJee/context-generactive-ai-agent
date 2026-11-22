@@ -34,12 +34,10 @@ export function SubagentPanel({
   sessionId,
   holder,
   generating,
-  readOnly,
 }: {
   sessionId: string;
   holder: string;
   generating: boolean;
-  readOnly: boolean;
 }) {
   const { t } = useLingui();
   const { state } = useDelegatedWork(sessionId, generating);
@@ -102,7 +100,7 @@ export function SubagentPanel({
           key={approval.id}
           requester={requesterLabel(approval.requester)}
           approval={toPending(approval)}
-          disabled={readOnly || answerMutation.isPending}
+          disabled={answerMutation.isPending}
           onAnswer={(approved) => answer(approval.id, approved)}
         />
       ))}

@@ -68,12 +68,11 @@ import {
 } from "./message";
 import { AddOutcome, isTakenIn, useMessageQueue } from "../session/message-queue";
 import { SubagentPanel } from "./subagent-panel";
-import { isBlocked, ReadOnlyBar } from "./read-only-bar";
 import { approvalAnswer, toPendingApproval } from "./pending-approval";
 import { useAgentChat } from "./use-agent-chat";
 import { RunNoticeView } from "../session/run-state";
 import { sessionDrafts } from "../session/session-drafts";
-import { useSessionLease, type PageLease } from "../session/session-lease";
+import { pageHolder } from "../session/session-lease";
 import { useWorkTrace } from "../session/work-trace";
 import { useBackendRestartRequired } from "../shared/use-backend-restart";
 import { TurnWaitsForModel } from "../shared/model-downloads";
@@ -302,17 +301,13 @@ export function SessionView({
   /** Pickers for the composer's footer. */
   composerControls?: ReactNode;
 }) {
-  const { holder, lease, refused, continueHere } = useSessionLease(sessionId);
+  const holder = pageHolder();
   const [syncRevision, setSyncRevision] = useState(0);
-  const reading = lease.state === "other" || lease.state === "free";
   return (
     <ChatPanel
-      key={`${reading ? "read" : "write"}:sync:${syncRevision}`}
+      key={`sync:${syncRevision}`}
       sessionId={sessionId}
       holder={holder}
-      lease={lease}
-      refused={refused}
-      onContinue={() => void continueHere()}
       onResync={() => setSyncRevision((current) => current + 1)}
       imagesSupported={imagesSupported}
       slash={slash}
@@ -329,9 +324,6 @@ export function SessionView({
 function ChatPanel({
   sessionId,
   holder,
-  lease,
-  refused,
-  onContinue,
   onResync,
   imagesSupported,
   slash,
@@ -340,9 +332,6 @@ function ChatPanel({
 }: {
   sessionId: string;
   holder: string;
-  lease: PageLease;
-  refused: boolean;
-  onContinue: () => void;
   onResync: () => void;
   imagesSupported: boolean;
   slash: SlashSupport;
@@ -359,9 +348,8 @@ function ChatPanel({
   const { mutateAsync: archiveTrace } = useArchiveTraceTaskMutation(projectId, sessionId, holder);
   const { mutateAsync: deleteTrace } = useDeleteTraceTaskMutation(projectId, sessionId, holder);
   const compactMutation = useCompactSessionMutation(projectId, sessionId, holder);
-  const readOnly = lease.state !== "mine";
   const backendRestartRequired = useBackendRestartRequired();
-  const mutationBlocked = readOnly || backendRestartRequired || !sendingEnabled;
+  const mutationBlocked = backendRestartRequired || !sendingEnabled;
   const workTrace = useWorkTrace(sessionId);
   const [composer, setComposer] = useState<Composer>(Composer.compose());
   const drafts = sessionDrafts(sessionId);
@@ -766,9 +754,9 @@ function ChatPanel({
   useEffect(() => {
     const settled = wasGenerating.current && !generating;
     wasGenerating.current = generating;
-    if (!settled || readOnly) return;
+    if (!settled) return;
     void handleRunSettled();
-  }, [generating, readOnly]);
+  }, [generating]);
 
   /** Changes a queued message, and says why when the server did not take the change. */
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -780,7 +768,7 @@ function ChatPanel({
     );
 
   const startEdit = (message: QueuedMessage) => {
-    if (editing !== null || readOnly) return;
+    if (editing !== null) return;
     const text = Match.value(message.state).pipe(
       Match.tag("editing", ({ draft }) => draft),
       Match.tag("held", ({ draft }) => draft ?? message.text),
@@ -1043,7 +1031,6 @@ function ChatPanel({
               awaitingApproval={awaitingApproval}
               tasks={workTrace.tasks}
               traceConnection={workTrace.connection}
-              readOnly={readOnly}
               onResumeTask={resumeTask}
               onArchiveTask={archiveTask}
               onDeleteTask={deleteTask}
@@ -1063,7 +1050,6 @@ function ChatPanel({
           holder={holder}
           approvals={approvals}
           problem={answerProblem}
-          readOnly={readOnly}
           resuming={resuming}
           onResolve={(decisions) =>
             resolveInterrupts(
@@ -1077,16 +1063,10 @@ function ChatPanel({
           sessionId={sessionId}
           holder={holder}
           runs={run.uncertainRuns}
-          readOnly={readOnly}
           onContinued={() => void run.refresh()}
           onProblem={(message) => setNotice(problem(message))}
         />
-        <SubagentPanel
-          sessionId={sessionId}
-          holder={holder}
-          generating={generating}
-          readOnly={readOnly}
-        />
+        <SubagentPanel sessionId={sessionId} holder={holder} generating={generating} />
         {submitted && (
           <Marker role="status">
             <MarkerIcon>
@@ -1152,7 +1132,7 @@ function ChatPanel({
                 projectId={projectId}
                 sessionId={sessionId}
                 holder={holder}
-                disabled={readOnly || backendRestartRequired}
+                disabled={backendRestartRequired}
               />
             }
           />
@@ -1166,46 +1146,42 @@ function ChatPanel({
               {shownNotice.text}
             </p>
           )}
-          {isBlocked(lease) ? (
-            <ReadOnlyBar lease={lease} refused={refused} onContinue={onContinue} />
-          ) : (
-            <DraftComposer
-              ref={composerInput}
-              textAtom={editing?.text ?? drafts.text}
-              onEditDraft={(id, text) => void changeQueued(id, QueueEdit.edit({ draft: text }))}
-              editingId={editing?.id ?? null}
-              slashContext={slash.context}
-              draftImages={draftImages}
-              queueItems={queue.items}
-              imageSettings={media.settings}
-              imageIntent={media.intent}
-              onToggleImageIntent={media.toggleIntent}
-              generatingImage={media.generating}
-              imagesSupported={imagesSupported}
-              mutationBlocked={mutationBlocked}
-              generating={generating}
-              stoppable={stoppable}
-              waitingForApproval={waitingForApproval}
-              canSend={canSend}
-              composerMode={composerMode}
-              run={run}
-              onSubmit={(mode, text) => void submit(mode, text)}
-              onAttach={attach}
-              onEditQueued={startEdit}
-              onRemoveQueued={(message) => void removeQueued(message)}
-              onConfirmQueued={(message) => void confirmQueued(message)}
-              onFinishEdit={() => void finishEdit("remove")}
-              onPickQueued={pickQueued}
-              onCancel={() => void cancel()}
-              onClear={clearComposer}
-              controls={composerControls}
-              onWorkflowMode={(mode) =>
-                run.workflow?.phase === "running"
-                  ? setLeaving({ move: mode, revise: false })
-                  : void moveWorkflow(mode)
-              }
-            />
-          )}
+          <DraftComposer
+            ref={composerInput}
+            textAtom={editing?.text ?? drafts.text}
+            onEditDraft={(id, text) => void changeQueued(id, QueueEdit.edit({ draft: text }))}
+            editingId={editing?.id ?? null}
+            slashContext={slash.context}
+            draftImages={draftImages}
+            queueItems={queue.items}
+            imageSettings={media.settings}
+            imageIntent={media.intent}
+            onToggleImageIntent={media.toggleIntent}
+            generatingImage={media.generating}
+            imagesSupported={imagesSupported}
+            mutationBlocked={mutationBlocked}
+            generating={generating}
+            stoppable={stoppable}
+            waitingForApproval={waitingForApproval}
+            canSend={canSend}
+            composerMode={composerMode}
+            run={run}
+            onSubmit={(mode, text) => void submit(mode, text)}
+            onAttach={attach}
+            onEditQueued={startEdit}
+            onRemoveQueued={(message) => void removeQueued(message)}
+            onConfirmQueued={(message) => void confirmQueued(message)}
+            onFinishEdit={() => void finishEdit("remove")}
+            onPickQueued={pickQueued}
+            onCancel={() => void cancel()}
+            onClear={clearComposer}
+            controls={composerControls}
+            onWorkflowMode={(mode) =>
+              run.workflow?.phase === "running"
+                ? setLeaving({ move: mode, revise: false })
+                : void moveWorkflow(mode)
+            }
+          />
           <AlertDialog
             open={imagePrompt !== null}
             onOpenChange={(open) => {

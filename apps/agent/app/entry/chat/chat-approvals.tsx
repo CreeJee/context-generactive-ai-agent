@@ -34,7 +34,6 @@ export function ChatApprovals({
   holder,
   approvals,
   problem,
-  readOnly,
   resuming,
   onResolve,
   onResync,
@@ -44,7 +43,6 @@ export function ChatApprovals({
   holder: string;
   approvals: readonly PendingApproval[];
   problem: AnswerProblem | null;
-  readOnly: boolean;
   resuming: boolean;
   onResolve: (decisions: Readonly<Record<string, boolean>>) => void;
   onResync: () => void;
@@ -113,7 +111,7 @@ export function ChatApprovals({
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={readOnly || resuming || discarding}
+                disabled={resuming || discarding}
                 onClick={shown.act}
               >
                 <RefreshCwIcon
@@ -130,7 +128,7 @@ export function ChatApprovals({
           key={approval.id}
           approval={approval}
           decision={decisions[approval.id]}
-          disabled={readOnly || resuming || problem !== null}
+          disabled={resuming || problem !== null}
           onAnswer={(approved) => answer(approval.id, approved)}
         />
       ))}

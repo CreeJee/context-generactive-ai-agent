@@ -113,19 +113,6 @@ export const useCardFolderQuery: {
     enabled: boolean,
   ): (projectId: string) => ReturnType<typeof useCardFolderQueryBody>;
 } & typeof useCardFolderQueryBody = EffectFunction.dual(4, useCardFolderQueryBody);
-const useObservedRunStateQueryBody = (
-  projectId: string,
-  sessionId: string,
-  holder: string,
-  enabled: boolean,
-) => useQuery({ ...sessionQueries.runState(projectId, sessionId, holder), enabled });
-export const useObservedRunStateQuery: {
-  (
-    sessionId: string,
-    holder: string,
-    enabled: boolean,
-  ): (projectId: string) => ReturnType<typeof useObservedRunStateQueryBody>;
-} & typeof useObservedRunStateQueryBody = EffectFunction.dual(4, useObservedRunStateQueryBody);
 const useSessionTraceQueryBody = (projectId: string, sessionId: string) =>
   useQuery(sessionQueries.trace(projectId, sessionId));
 export const useSessionTraceQuery: {
