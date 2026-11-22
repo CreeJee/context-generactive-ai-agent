@@ -112,6 +112,7 @@ import { QueueDelivery } from "./queue/delivery.ts";
 import { MessageQueue } from "./queue/queue.ts";
 import { SessionLeases } from "./sessions/leases.ts";
 import { SessionDispatches } from "./sessions/dispatches.ts";
+import { SessionInbox } from "./sessions/inbox.ts";
 import { Sessions } from "./sessions/sessions.ts";
 import { ApprovedTools } from "./tools/approved.ts";
 import { CodeSkills } from "./skills/code-skills.ts";
@@ -319,6 +320,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     PlannerStatistics.layer,
     MessageQueue.layer,
     SessionDispatches.layer,
+    SessionInbox.layer,
     Interpretations.layer,
     RelayedApprovals.layer,
     BulkNodes.layer,

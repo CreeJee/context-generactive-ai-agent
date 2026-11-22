@@ -765,6 +765,35 @@ export const notificationDeliveryMigration = `
   UPDATE work_tasks SET delivery = 'next_run' WHERE parent_run_id LIKE 'kanban:%';
 `;
 
+/** The step that creates the session inbox. */
+export const sessionInboxMigration = `
+  -- A message that enters a conversation without the user typing it now (decisions.md "대화에
+  -- 들어오는 메시지는 세션 inbox 하나에 둔다"). \`sender\` says who sent it and \`delivery\` when it is
+  -- handed to the conversation: 'interrupt' cuts into the run in progress, 'wake' starts a run when
+  -- the conversation is idle, 'next_run' waits for a run that starts anyway. A run claims the
+  -- waiting rows it hands its model; a run that finishes marks them delivered and one that does
+  -- not gives them back.
+  CREATE TABLE session_inbox (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    sender TEXT NOT NULL CHECK (sender IN ('user', 'task', 'conversation', 'board')),
+    delivery TEXT NOT NULL CHECK (delivery IN ('interrupt', 'wake', 'next_run')),
+    payload TEXT NOT NULL CHECK (json_valid(payload)),
+    state TEXT NOT NULL CHECK (state IN ('waiting', 'delivered')),
+    claimed_run_id TEXT,
+    claimed_at TEXT,
+    delivered_run_id TEXT,
+    created_at TEXT NOT NULL,
+    delivered_at TEXT,
+    CHECK ((claimed_run_id IS NULL) = (claimed_at IS NULL)),
+    CHECK ((state = 'delivered') = (delivered_run_id IS NOT NULL)),
+    CHECK ((state = 'delivered') = (delivered_at IS NOT NULL))
+  );
+  CREATE INDEX session_inbox_waiting ON session_inbox(session_id, state, created_at);
+  CREATE INDEX session_inbox_claimed ON session_inbox(claimed_run_id)
+    WHERE claimed_run_id IS NOT NULL;
+`;
+
 /**
  * The cards each workflow revision changed from the revision before it in its session, for the
  * board's history; a revision that changed no card has no row. Revisions never change, so this is
@@ -3183,6 +3212,7 @@ export const migrations: readonly string[] = [
     UNIQUE (project_id, term)
   );
   `,
+  sessionInboxMigration,
 ];
 
 /** One of the two startup migrations that may rebuild a referenced table with FK checks suspended;

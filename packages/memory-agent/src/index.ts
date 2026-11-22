@@ -477,6 +477,17 @@ export {
   SessionDispatches,
   SessionDispatchState,
 } from "./sessions/dispatches.ts";
+export {
+  ConversationMessage,
+  InboxDelivery,
+  InboxSender,
+  InboxState,
+  InboxStoreFailed,
+  inboxPayloads,
+  SessionInbox,
+  type InboxEntry,
+  type NewInboxEntry,
+} from "./sessions/inbox.ts";
 
 export { Edge, EdgeKind, edgeWeights, type NodeLink } from "./memory/edges.ts";
 export {
