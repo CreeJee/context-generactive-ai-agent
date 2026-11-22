@@ -3,7 +3,7 @@ import type {
   GoalArtifact,
   PlanArtifact,
   VerificationStatus,
-  WorkflowMode,
+  WorkflowMove,
   WorkflowPhase,
   WorkflowState,
 } from "./workflow.ts";
@@ -32,10 +32,9 @@ export interface PlanStanding {
   readonly recoveryPhase: "goal" | "plan" | null;
 }
 
-/** What decides a session's Goal transitions: its phase and mode, its Goal and its Plan. */
+/** What decides a session's Goal transitions: its phase, its Goal and its Plan. */
 export interface Standing {
   readonly phase: WorkflowPhase;
-  readonly mode: WorkflowMode;
   readonly goal: GoalStanding | null;
   readonly plan: PlanStanding | null;
 }
@@ -48,7 +47,6 @@ export const stepsOf = (steps: PlanArtifact["steps"]) => ({
 
 export const standingOf = (state: WorkflowState): Standing => ({
   phase: state.phase,
-  mode: state.mode,
   goal:
     state.goal === null
       ? null
@@ -213,8 +211,8 @@ export const reconciledPhase = ({
 
 /** Something a session's user, model or owner does to its Goal. */
 export type GoalEvent = Data.TaggedEnum<{
-  /** The user works in plain chat, or shapes the Goal in a mode. Running is `ExecutionApproved`. */
-  Navigated: { readonly to: "chat" | WorkflowMode };
+  /** The user works in plain chat, or shapes the Goal. Running is `ExecutionApproved`. */
+  Navigated: { readonly to: Exclude<WorkflowMove, "run"> };
   /** The user approves the Plan, or continues an executing one. */
   ExecutionApproved: {};
   GoalPaused: {};
@@ -301,7 +299,6 @@ const approve = ({ standing }: { readonly standing: Standing }) => {
     return refused("plan_not_ready");
   return moved({
     phase: "running",
-    mode: standing.mode,
     goal: goal.status === "draft" ? { ...goal, status: "active" } : goal,
     plan: plan.status === "ready" ? { ...plan, status: "executing" } : plan,
   });
@@ -342,7 +339,6 @@ const editGoal =
         (standing.phase === "running" && !kanban) || standing.phase === "completed"
           ? "shaping"
           : standing.phase,
-      mode: standing.mode,
       goal: { status, passed: false, proven: false },
       plan: standing.plan === null ? null : { ...standing.plan, current: false },
     });
@@ -352,7 +348,6 @@ const editPlan =
   ({ standing }: { readonly standing: Standing }) =>
     moved({
       phase: standing.phase === "running" ? "shaping" : standing.phase,
-      mode: standing.mode,
       goal: standing.goal,
       plan: {
         status,
@@ -387,7 +382,6 @@ const newGoal =
           ? standing
           : {
               phase: "shaping",
-              mode: standing.mode,
               goal: { status, passed: false, proven: false },
               plan: null,
             },
@@ -437,7 +431,6 @@ const meet = ({ standing }: { readonly standing: Standing }) =>
       ? refused("steps_incomplete")
       : moved({
           phase: "completed",
-          mode: standing.mode,
           goal: { status: "completed", passed: true, proven: true },
           plan: {
             ...standing.plan,
@@ -452,11 +445,7 @@ const meet = ({ standing }: { readonly standing: Standing }) =>
 export const goalTransitions: GoalTransitions = {
   Navigated: (state, { to }) => {
     const navigate = ({ standing }: { readonly standing: Standing }) =>
-      moved(
-        to === "chat"
-          ? { ...standing, phase: "chat" }
-          : { ...standing, phase: "shaping", mode: to },
-      );
+      moved({ ...standing, phase: to === "chat" ? "chat" : "shaping" });
     return Match.valueTags(state, {
       NoGoal: navigate,
       Shaping: navigate,

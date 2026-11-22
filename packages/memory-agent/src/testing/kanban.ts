@@ -476,7 +476,7 @@ export const replaceGoal = Effect.fn("replaceGoal")(function* (sessionId: string
   const sql = yield* SqlClient.SqlClient;
   const workflows = yield* Workflows;
   const runId = `${sessionId}:new-goal`;
-  yield* workflows.move(sessionId, "plan");
+  yield* workflows.move(sessionId, "goal");
   const [revision] = yield* sql<{ readonly id: number | null }>`SELECT MAX(id) AS id
     FROM workflow_state_revisions WHERE session_id = ${sessionId}`;
   yield* (yield* workflowRunBindings).bind(sessionId, runId, Number(revision?.id));

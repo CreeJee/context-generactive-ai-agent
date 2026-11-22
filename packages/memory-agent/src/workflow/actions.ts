@@ -96,7 +96,7 @@ function workflowActionsBody(
   const control = (value: WorkflowAction) =>
     evaluateWorkflowAction(state, WorkflowActionRequest.control({ action: value }), context);
   return {
-    moves: { chat: move("chat"), plan: move("plan"), goal: move("goal"), run: move("run") },
+    moves: { chat: move("chat"), goal: move("goal"), run: move("run") },
     controls: { pause: control("pause"), resume: control("resume"), stop: control("stop") },
   };
 }

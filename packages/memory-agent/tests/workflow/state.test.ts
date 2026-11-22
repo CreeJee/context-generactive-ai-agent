@@ -113,7 +113,7 @@ testAgent()("Workflows", (it) => {
       const workflows = yield* Workflows;
       yield* workflows.move(id, "goal");
       yield* workflows.updateGoal(id, goal);
-      yield* workflows.move(id, "plan");
+      yield* workflows.move(id, "goal");
       yield* workflows.updatePlan(id, plan);
       const state = yield* workflows.move(id, "run");
       expect(state.phase).toBe("running");
@@ -597,21 +597,21 @@ testAgent()("Workflows", (it) => {
     }),
   );
 
-  it.effect("reads a phase saved before modes as its mode and place", () =>
+  it.effect("reads a phase an older version saved as today's phase", () =>
     Effect.gen(function* () {
       const id = yield* freshSession;
       const workflows = yield* Workflows;
       const current = yield* executing(id);
       const stored = (phase: string) =>
-        stateJson({ ...Struct.omit(current, ["mode"]), phase }).pipe(
+        stateJson({ ...current, phase }).pipe(
           Effect.andThen((json) => storeWorkflowState(id, json)),
           Effect.andThen(workflows.get(id)),
-          Effect.map(({ phase, mode }) => ({ phase, mode })),
+          Effect.map((state) => state.phase),
         );
-      expect(yield* stored("goal")).toEqual({ phase: "shaping", mode: "goal" });
-      expect(yield* stored("plan")).toEqual({ phase: "shaping", mode: "plan" });
-      expect(yield* stored("execute")).toEqual({ phase: "running", mode: "plan" });
-      expect(yield* stored("verify")).toEqual({ phase: "running", mode: "plan" });
+      expect(yield* stored("goal")).toBe("shaping");
+      expect(yield* stored("plan")).toBe("shaping");
+      expect(yield* stored("execute")).toBe("running");
+      expect(yield* stored("verify")).toBe("running");
     }),
   );
 });
@@ -719,7 +719,6 @@ testAgent()("server workflow action policy", (it) => {
           { ...state, goal: { ...state.goal!, version: 2 } },
           { ...state, phase: "shaping", plan: { ...state.plan!, status: "executing" } },
           { ...state, phase: "running", plan: { ...state.plan!, status: "executing" } },
-          { ...state, phase: "shaping", mode: "goal" },
         ];
         // The ledger goes on from the stored one, as a saved state's does.
         const reset = (current: WorkflowState) =>
@@ -745,7 +744,7 @@ testAgent()("server workflow action policy", (it) => {
           Effect.fnUntraced(function* (current) {
             const advertised = workflowActions(current);
             yield* Effect.forEach(
-              ["chat", "plan", "goal", "run"] as const,
+              ["chat", "goal", "run"] as const,
               (move) => matches(current, advertised.moves[move], workflows.move(id, move)),
               { discard: true },
             );
@@ -766,7 +765,7 @@ testAgent()("server workflow action policy", (it) => {
       const id = yield* freshSession;
       const workflows = yield* Workflows;
       yield* executing(id);
-      const state = yield* workflows.move(id, "plan");
+      const state = yield* workflows.move(id, "goal");
       expect(workflowActions(state).moves.run).toEqual({ allowed: true, intent: "continue" });
       expect((yield* workflows.move(id, "run")).plan).toEqual(state.plan);
     }),

@@ -4,11 +4,10 @@ import { cardCapabilities } from "./card-capabilities.ts";
 import { OutcomeStatus } from "./outcome-ledger.ts";
 import { builtInWorkflowRules, rulePhases } from "./rules.ts";
 import { workflowInstructions } from "./tools.ts";
-import type { WorkflowMode, WorkflowPhase, WorkflowState } from "./workflow.ts";
+import type { WorkflowPhase, WorkflowState } from "./workflow.ts";
 
-const state = (phase: WorkflowPhase, mode: WorkflowMode = "plan"): WorkflowState => ({
+const state = (phase: WorkflowPhase): WorkflowState => ({
   phase,
-  mode,
   goal: null,
   plan: null,
   ledger: [],
@@ -25,28 +24,22 @@ const resolved = (phase: WorkflowPhase) => ({
 
 describe("workflowInstructions", () => {
   test("tells every planner what card agents and verifiers can do, and no other phase", () => {
-    const planner = (phase: WorkflowPhase, mode: WorkflowMode) =>
-      workflowInstructions(state(phase, mode), resolved(phase));
-    for (const prompt of [
-      planner("shaping", "goal"),
-      planner("shaping", "plan"),
-      planner("running", "plan"),
-    ]) {
+    const planner = (phase: WorkflowPhase) => workflowInstructions(state(phase), resolved(phase));
+    for (const prompt of [planner("shaping"), planner("running")]) {
       expect(prompt).toContain(cardCapabilities);
     }
-    expect(planner("completed", "plan")).not.toContain(cardCapabilities);
+    expect(planner("completed")).not.toContain(cardCapabilities);
   });
-  test("shapes a Goal the same way whatever mode the state was saved in", () => {
-    const goalMode = workflowInstructions(state("shaping", "goal"), resolved("shaping"));
-    expect(workflowInstructions(state("shaping", "plan"), resolved("shaping"))).toBe(goalMode);
-    expect(goalMode).toContain("save no Plan");
-    expect(goalMode).toContain("the project's permission mode decides who approves the Plan");
+  test("shapes a Goal by aligning first and names who approves the Plan", () => {
+    const shaping = workflowInstructions(state("shaping"), resolved("shaping"));
+    expect(shaping).toContain("save no Plan");
+    expect(shaping).toContain("the project's permission mode decides who approves the Plan");
   });
   test("provides the owner-read Goal instance ID instead of inferring it from Goal version", () => {
     const prompt = workflowInstructions(state("completed"), resolved("completed"), "owner-id-123");
     expect(prompt).toContain("Current Goal instance ID: owner-id-123");
     expect(prompt).toContain("use this exact ID as previousGoalInstanceId");
-    expect(workflowInstructions(state("shaping", "goal"), resolved("shaping"), null)).toContain(
+    expect(workflowInstructions(state("shaping"), resolved("shaping"), null)).toContain(
       "Current Goal instance ID: (none; legacy/unbound)",
     );
   });

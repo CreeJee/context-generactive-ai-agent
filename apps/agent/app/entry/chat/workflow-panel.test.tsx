@@ -32,19 +32,14 @@ function button(html: string, label: string) {
 describe("server-authoritative workflow UI", () => {
   test("labels a completed workflow as done and any other as a Goal", () => {
     expect(workflowModeLabel({ ...workflowFixture, phase: "completed" })).toBe("완료");
-    expect(workflowModeLabel({ ...workflowFixture, phase: "running", mode: "goal" })).toBe("Goal");
+    expect(workflowModeLabel({ ...workflowFixture, phase: "running" })).toBe("Goal");
     expect(workflowModeLabel(workflowFixture)).toBe("Goal");
-    expect(workflowModeLabel({ ...workflowFixture, phase: "chat", mode: "goal" })).toBe("Chat");
+    expect(workflowModeLabel({ ...workflowFixture, phase: "chat" })).toBe("Chat");
   });
   test("titles the panel with its stage", () => {
     expect(render(<WorkflowArtifactPanel {...props} />)).toContain("Goal · Plan 작성 중");
     expect(
-      render(
-        <WorkflowArtifactPanel
-          {...props}
-          state={{ ...workflowFixture, phase: "running", mode: "goal" }}
-        />,
-      ),
+      render(<WorkflowArtifactPanel {...props} state={{ ...workflowFixture, phase: "running" }} />),
     ).toContain("Goal · 실행 중");
     const done = render(
       <WorkflowArtifactPanel {...props} state={{ ...workflowFixture, phase: "completed" }} />,
@@ -88,10 +83,8 @@ describe("server-authoritative workflow UI", () => {
       ),
     ).not.toContain(' disabled=""');
   });
-  test("offers the Plan's approval whatever mode the state was saved in", () => {
-    const html = render(
-      <WorkflowArtifactPanel {...props} state={{ ...workflowFixture, mode: "goal" }} />,
-    );
+  test("offers the Plan's approval and its revision while shaping", () => {
+    const html = render(<WorkflowArtifactPanel {...props} state={workflowFixture} />);
     expect(html).toContain("승인하고 실행");
     expect(html).toContain("Plan 수정");
   });
@@ -129,11 +122,7 @@ describe("server-authoritative workflow UI", () => {
       },
     };
     const html = render(
-      <WorkflowArtifactPanel
-        {...props}
-        state={{ ...workflowFixture, mode: "goal" }}
-        actions={resumable}
-      />,
+      <WorkflowArtifactPanel {...props} state={workflowFixture} actions={resumable} />,
     );
     expect(button(html, "계속")).not.toContain(' disabled=""');
     expect(button(html, "중단")).toContain(' disabled=""');

@@ -29,7 +29,7 @@ const steps = [
 
 /** Every event a test can send. */
 const events: ReadonlyArray<GoalEvent> = [
-  ...(["chat", "plan", "goal"] as const).map((to) => GoalEvent.Navigated({ to })),
+  ...(["chat", "goal"] as const).map((to) => GoalEvent.Navigated({ to })),
   GoalEvent.ExecutionApproved(),
   GoalEvent.GoalPaused(),
   GoalEvent.GoalResumed(),
@@ -50,10 +50,9 @@ const events: ReadonlyArray<GoalEvent> = [
   GoalEvent.CardsReclassified(),
 ];
 
-const keyOf = ({ phase, mode, goal, plan }: Standing) =>
+const keyOf = ({ phase, goal, plan }: Standing) =>
   [
     phase,
-    mode,
     goal?.status,
     goal?.passed,
     goal?.proven,
@@ -117,7 +116,7 @@ const explore = (frontier: ReadonlyArray<Standing>): void => {
   });
   explore(fresh);
 };
-const start: Standing = { phase: "chat", mode: "plan", goal: null, plan: null };
+const start: Standing = { phase: "chat", goal: null, plan: null };
 MutableHashMap.set(reached.standings, keyOf(start), start);
 explore([start]);
 const standings = Array.from(MutableHashMap.values(reached.standings));
@@ -194,7 +193,7 @@ const stateFor = (standing: Standing): WorkflowState => {
           updatedAt: "now",
           status: standing.plan.status,
         };
-  return { phase: standing.phase, mode: standing.mode, goal, plan, ledger: [] };
+  return { phase: standing.phase, goal, plan, ledger: [] };
 };
 
 /** The reviewed list of transitions, grouped by state and event. Lists keep the formatter out. */
@@ -264,16 +263,11 @@ describe("Goal transitions", () => {
       recoveryPhase: null,
     } as const;
     const conflicts: ReadonlyArray<readonly [Standing, GoalState["_tag"], Standing["phase"]]> = [
-      [{ phase: "running", mode: "plan", goal, plan }, "Completed", "completed"],
-      [
-        { phase: "running", mode: "plan", goal: { ...goal, status: "active" }, plan },
-        "Running",
-        "running",
-      ],
+      [{ phase: "running", goal, plan }, "Completed", "completed"],
+      [{ phase: "running", goal: { ...goal, status: "active" }, plan }, "Running", "running"],
       [
         {
           phase: "shaping",
-          mode: "plan",
           goal: { ...goal, status: "draft" },
           plan: { ...plan, status: "executing" },
         },

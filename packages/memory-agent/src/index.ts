@@ -354,7 +354,6 @@ export {
   PlanArtifact,
   PlanStep,
   WorkflowAction,
-  WorkflowMode,
   WorkflowMove,
   WorkflowPhase,
   WorkflowState,

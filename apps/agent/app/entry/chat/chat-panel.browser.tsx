@@ -65,7 +65,7 @@ const runState: SessionRunState = {
     windowKnown: false,
     leaveOutAtTokens: 128_000,
   },
-  workflow: { phase: "chat", mode: "plan", goal: null, plan: null, ledger: [] },
+  workflow: { phase: "chat", goal: null, plan: null, ledger: [] },
   actions: allowedWorkflowActions,
   uncertainRuns: [],
   background: [],

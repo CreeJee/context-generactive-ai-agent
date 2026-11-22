@@ -5,7 +5,6 @@ import type { WorkflowState } from "../api";
 export const allowedWorkflowActions: SessionRunState["actions"] = {
   moves: {
     chat: { allowed: true },
-    plan: { allowed: true },
     goal: { allowed: true },
     run: { allowed: true, intent: "start" },
   },
@@ -14,7 +13,6 @@ export const allowedWorkflowActions: SessionRunState["actions"] = {
 
 export const workflowFixture: WorkflowState = {
   phase: "shaping",
-  mode: "plan",
   goal: {
     version: 2,
     statement: "Repair workflow",

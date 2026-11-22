@@ -5720,3 +5720,18 @@
   `tests/session-inbox-migration.test.ts`(옛 행과 claim이 옮겨짐), 그대로 통과하는
   `tests/sessions/dispatches.test.ts`·`tests/agent/dispatch-delivery.test.ts`·
   `tests/agent/notify-session-record.test.ts`.
+
+## 워크플로 상태는 Goal/Plan 모드를 저장하지 않는다 (2026-11-22)
+
+"처음 Plan의 승인자는 프로젝트 권한 모드가 정한다 (2026-11-22)"로 입력창의 Plan 모드가 없어진 뒤에도
+워크플로 상태에는 `mode: plan | goal`이 남아 있었다. 그 값을 읽어 동작을 가르는 코드는 없었다.
+
+- 상태에서 `mode`를 지웠다. 타입 `WorkflowMode`, 이동 `plan`, 표 `workflow_state_revisions`의 열 `mode`도
+  지웠다.
+- 화면이 청하는 이동은 `chat`, `goal`, `run` 셋이다. `goal`은 shaping으로 옮긴다.
+- 예전 버전이 저장한 phase(`goal`, `plan`, `execute`, `verify`)는 계속 읽는다. `goal`과 `plan`은 shaping,
+  `execute`와 `verify`는 running이다.
+- ledger의 `phase_changed` 사건은 이제 `shaping -> running`처럼 phase만 적는다. 예전 사건의
+  `shaping (plan)` 같은 글자는 그대로 남는다.
+
+구현: 계획 032.

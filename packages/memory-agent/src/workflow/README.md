@@ -9,7 +9,7 @@
 ## Interface
 
 - `Workflows` — 세션 범위의 버전 있는 Goal/Plan 산출물과 실행 ledger 서비스(`layer`, `layerWithOptions({ allowNewGoal })`)
-- `WorkflowState` / `GoalArtifact` / `PlanArtifact` / `PlanStep` / `WorkflowPhase` / `WorkflowMode` / `WorkflowMove` / `WorkflowAction` / `VerificationStatus` — 워크플로 상태 스키마(phase: chat|shaping|running|completed, mode: plan|goal). 모드가 따로 저장되기 전의 phase(goal·plan은 shaping과 그 모드, execute·verify는 running)도 읽는다. `mode`는 저장만 되고 동작을 가르지 않는다(decisions.md "처음 Plan의 승인자는 프로젝트 권한 모드가 정한다").
+- `WorkflowState` / `GoalArtifact` / `PlanArtifact` / `PlanStep` / `WorkflowPhase` / `WorkflowMove` / `WorkflowAction` / `VerificationStatus` — 워크플로 상태 스키마(phase: chat|shaping|running|completed). 예전 버전이 저장한 phase(goal·plan은 shaping, execute·verify는 running)도 읽는다.
 - `RulePhase` / `rulePhases` — 규칙 파일이 쓰는 어휘(goal|plan|execute|verify)와, phase마다 대화가 읽는 규칙(`rules.ts`)
 - `UpdateGoal` / `StartNewGoal` / `UpdatePlan` / `UpdateWorkflowProgress` — 모델 도구 입력 스키마
 - `GoalOutcome` / `OutcomeId` — Goal outcome은 `{ id, text }`다. 뜻이 같으면 id를 유지하고 뜻이 바뀌면 새 id를 쓴다. 한 Goal 안에서 id는 한 번만 쓴다. id 없이 문자열로 저장된 옛 outcome은 순서대로 `O1`, `O2`…로 읽는다
@@ -18,7 +18,7 @@
 - `decodeWorkflowState` — 저장된 상태 JSON 디코드
 - `GoalState` / `GoalStateConflict` / `GoalEvent` / `Standing` / `goalTransitions` / `transition` / `decodeGoalState` / `goalStateOf` / `repair` / `reconciledPhase` / `standingOf` / `stepsOf` — Goal 상태 전이 순수 함수(`goal-transitions.ts`)
 - `WorkflowStorageError` / `WorkflowTransitionRefused` / `NewGoalTransitionRefused`, `NewGoalSettlement` — 워크플로 오류와 새 Goal 정산 결과
-- `evaluateWorkflowAction` / `workflowActions` / `WorkflowActionRequest` / `WorkflowActionReason` — 이동(chat·plan·goal 모드, `run`)·pause/resume/stop 허용 판정(dual API)
+- `evaluateWorkflowAction` / `workflowActions` / `WorkflowActionRequest` / `WorkflowActionReason` — 이동(`chat`·`goal`·`run`)·pause/resume/stop 허용 판정(dual API)
 - `CardStatus` / `StepProgressStatus` / `stepProgressStatus` / `CardRisk` / `cardContractFields` / `cardContract` / `BoardAuthor` / `CardHold` / `CardApproval` / `CardApprovalReview` / `cardHoldFields` / `cardWaitsForNobody` — 칸반 카드 상태와 카드 계약 스키마. `CardApproval`은 실행 중인 보드에 계획자가 더해 승인을 기다리는 카드의 표시다
 - `PlanNodes` / `PlanNodeFailed` — Plan 버전마다 기억 `plan` node 하나(`plan-nodes.ts`). 처음 찾을 때 현재 Goal에서 그 버전을 처음 저장한 revision의 `plan_json`을 그대로 적는다. 새 Goal은 Plan 버전을 1부터 다시 세므로 node는 `planRevisionId`로 찾는다. revision 작성자가 workflow 도구 호출이면(`BoardAuthor.Orchestrator.toolCallId`) 그 `tool_call` node를 `cites`로 가리킨다. 대화 흐름 밖에서 적으므로 `next` edge는 없다. 카드 세션의 지시가 어디서 왔는지 가리키는 근거다
 - `Boards` — 프로젝트 보드 뷰 서비스(`BoardView`, `ProjectBoard`, `BoardCard`, `BoardRevision`, `BoardColumnCounts`). `BoardView.outcomes`는 Goal의 outcome마다 장부 상태(`BoardOutcome`의 `OutcomeStatus`)를 싣는다
@@ -58,7 +58,7 @@
 - `sqliteRunLog`는 중앙 DB의 SqlClient를 써야 하며 worker 로컬 DB를 쓰면 안 된다. 인증은 HTTP route가 맡고, 이 로그는 `workflow_run_bindings`로 session/run 바인딩을 추가로 확인한다. 재개 토큰(`sdk-stream:v1:{runId}:{cursor}`)은 그 run의 `workflow_run_log_entries` 행만 가리킨다.
 - Goal run의 출력은 이 로그에만 한 번 쓴다. 로그는 `workflow_run_log_closures` 행이 생기면 닫힌다. 닫힌 지 5분(`finishedLogTtl`)이 지나면 읽기는 `unknown_run`으로 실패하고, 다음 close나 시작 때 항목을 지운다. closure는 남아서 닫힌 로그로 읽힌다(decisions.md "Goal run의 출력은 delivery 로그에만 둔다 (2026-11-04)").
 - 재시작이 끊은 로그는 시작 시각으로 닫는다. 다시 붙은 page는 transcript에 없던 부분 출력을 끝까지 읽고 끝난다.
-- 워크플로 상태는 행으로 저장한다. 세션의 ledger 사건은 `workflow_ledger_events`에 한 번씩 쓰고 고치지 않는다. revision은 phase와 mode, Goal·Plan JSON, 자기가 가진 사건 수(`ledger_length`)를 갖고 고치지 않는다. `session_workflows`는 세션의 최신 revision을 가리킨다. ledger는 늘기만 하므로, 저장은 이미 있는 사건 뒤의 것만 쓴다. 상태는 `revisionStateSql`로 읽는다(decisions.md "Workflow ledger는 행으로, 현재 상태는 최신 revision을 가리킨다 (2026-11-04)").
+- 워크플로 상태는 행으로 저장한다. 세션의 ledger 사건은 `workflow_ledger_events`에 한 번씩 쓰고 고치지 않는다. revision은 phase, Goal·Plan JSON, 자기가 가진 사건 수(`ledger_length`)를 갖고 고치지 않는다. `session_workflows`는 세션의 최신 revision을 가리킨다. ledger는 늘기만 하므로, 저장은 이미 있는 사건 뒤의 것만 쓴다. 상태는 `revisionStateSql`로 읽는다(decisions.md "Workflow ledger는 행으로, 현재 상태는 최신 revision을 가리킨다 (2026-11-04)").
 - revision을 저장할 때 세션의 바로 앞 revision과 카드를 비교해, 바뀐 카드 id를 `workflow_board_changes`에 한 행으로 둔다. 바뀐 카드가 없으면 행도 없다. 보드 이력과 카드의 마지막 변경은 이 행만 읽고, 창 안의 Plan을 모두 decode하지 않는다. 이 표 이전에 저장된 revision은 마이그레이션의 `migrateBoardChanges`가 같은 비교로 채운다.
 - 카드 이전에 저장된 Plan의 step status(`pending`/`completed`)는 읽기만 하고 제자리에서 다시 쓰지 않는다. 읽을 때 `pending`은 의존성이 끝났으면 ready, 아니면 backlog가 되고, `completed`는 `done`이 된다.
 - Goal 상태 전이는 `goal-transitions.ts`의 `goalTransitions` 한 곳에서 정한다. 사건마다 아홉 상태를 모두 적으므로 빠진 쌍은 타입 오류다. `Workflows` 메서드와 `evaluateWorkflowAction`은 저장된 상태를 `Standing`으로 읽어 전이를 부르고, 전이가 정한 phase와 Goal·Plan status를 저장한다. 산출물 내용(버전, 근거, 검증)은 메서드가 만든다.
@@ -67,7 +67,7 @@
 - 칸반 Goal을 고치면 phase는 그대로이고 Plan만 이전 버전이 된다. `Workflows.display`가 그 동안 상태 응답에 `card_reclassifying`을 싣는다. 전이는 화면 문구를 정하지 않는다. 보드는 `Workflows.goalAt`으로 이전 Goal을 읽어 바뀐 outcome을 맡은 카드만 다시 분류한다.
 - 분류가 끝나 보류한 카드가 없으면 보드 루프가 `Workflows.cardsReclassified`(전이 `CardsReclassified`)로 Plan의 `goalVersion`을 지금 Goal 버전으로 올린다. 그래서 상태는 `GoalChanged`에서 `Running`으로 돌아가고 다시 승인하지 않아도 된다. 분류하는 동안 `reconcile`은 활성 보드의 running phase를 내리지 않는다(`reconciledPhase`의 `kanban`).
 - 처음 Plan의 승인자는 프로젝트 권한 모드가 정한다. Goal을 처음 저장한 run은 Plan을 만들지 않고 보드를 시작하지 않는다. `ask`에서는 사용자가 "승인하고 실행"을 눌러야 시작한다. `auto`·`full`에서는 서버가 시작한다(`agent/chat.ts`의 `planReady`와 `goalsUserAnswered`): 끝난 run이 사용자의 턴으로 시작했고 그때 이미 지금 Goal이 있었으며, Goal에 막는 질문이 없고, 지금 Goal의 ready Plan이 있어야 한다. 서버를 재시작하면 답했다는 기록은 사라지고 사용자의 다음 턴이 다시 만든다
-- 사용자는 chat이나 모드(plan·goal)로 옮기거나 Plan을 실행(`run`)한다. 모드로 옮기면 shaping이 되고, 실행 중인 보드는 다시 승인할 때까지 카드를 배정하지 않는다. `completed`는 서버만 정한다. `run` 외의 이동은 산출물을 승인하거나 바꾸지 않는다.
+- 사용자는 chat이나 Goal 만들기(`goal`)로 옮기거나 Plan을 실행(`run`)한다. `goal`로 옮기면 shaping이 되고, 실행 중인 보드는 다시 승인할 때까지 카드를 배정하지 않는다. `completed`는 서버만 정한다. `run` 외의 이동은 산출물을 승인하거나 바꾸지 않는다.
 - `run`(running 진입)은 `plan.goalVersion === goal.version`이고 plan status가 `ready` 또는 `executing`일 때만 허용된다. lease가 다른 소유자면 `session_in_use`, run이 진행 중이면 이동 요청과 resume이 `run_in_progress`로 거부된다.
 - 실행 가능 조건: phase가 running이고, goal status가 active, plan status가 executing이며, plan의 goalVersion이 goal의 version과 같아야 한다.
 - 연속 실행의 blocker는 서버만 기록한다(보드를 시작하지 못함, provider 재시도, 재시작). 모델이 `WorkflowBlocker`를 기록하던 때의 사유(`user_decision`·`permission`·`repeated_failure`)와 `dependency_stalled`는 저장된 실행을 읽으려고 남긴다.

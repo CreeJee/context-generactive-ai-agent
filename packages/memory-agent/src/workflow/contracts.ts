@@ -102,15 +102,11 @@ export const CompletionRequest = Schema.Struct({
 export const WorkflowPhase = Schema.Literals(["chat", "shaping", "running", "completed"]);
 export type WorkflowPhase = typeof WorkflowPhase.Type;
 
-/** Who approves the Plan and the cards added to it: the user (Plan) or the owner (Goal). */
-export const WorkflowMode = Schema.Literals(["plan", "goal"]);
-export type WorkflowMode = typeof WorkflowMode.Type;
-
-/** What the page asks of the workflow: a mode to work in, or running the approved Plan. */
-export const WorkflowMove = Schema.Literals(["chat", "plan", "goal", "run"]);
+/** What the page asks of the workflow: plain chat, shaping a Goal, or running the approved Plan. */
+export const WorkflowMove = Schema.Literals(["chat", "goal", "run"]);
 export type WorkflowMove = typeof WorkflowMove.Type;
 
-/** Phases saved before the mode was its own value; each names its mode or a running Plan. */
+/** Phases an older version saved: "goal" and "plan" were shaping, "execute" and "verify" running. */
 const LegacyWorkflowPhase = Schema.Literals(["goal", "plan", "execute", "verify"]);
 
 export const WorkflowAction = Schema.Literals(["pause", "resume", "stop"]);
@@ -307,38 +303,24 @@ const workflowStateFields = {
   ledger: Schema.Array(LedgerEvent),
 };
 
-/** Where a saved state is: an older one has a legacy phase and no mode. */
-export const storedPlaceFields = {
-  phase: Schema.Union([WorkflowPhase, LegacyWorkflowPhase]),
-  mode: Schema.optionalKey(Schema.NullOr(WorkflowMode)),
-};
-const StoredWorkflowState = Schema.Struct({ ...workflowStateFields, ...storedPlaceFields });
+/** The phase of a saved state; an older version saved a legacy one. */
+export const StoredWorkflowPhase = Schema.Union([WorkflowPhase, LegacyWorkflowPhase]);
+const StoredWorkflowState = Schema.Struct({ ...workflowStateFields, phase: StoredWorkflowPhase });
 
-/** A saved state's phase and mode; a legacy phase names its mode, and no mode was Plan mode. */
-export const decodedPlace = ({
-  phase,
-  mode,
-}: Schema.Struct.Type<typeof storedPlaceFields>): {
-  readonly phase: WorkflowPhase;
-  readonly mode: WorkflowMode;
-} =>
+/** A saved phase as today's phase. */
+export const decodedPhase = (phase: typeof StoredWorkflowPhase.Type): WorkflowPhase =>
   Match.value(phase).pipe(
-    Match.whenOr("goal", "plan", (legacy) => ({ phase: "shaping" as const, mode: legacy })),
-    Match.whenOr("execute", "verify", () => ({ phase: "running" as const, mode: mode ?? "plan" })),
-    Match.whenOr("chat", "shaping", "running", "completed", (current) => ({
-      phase: current,
-      mode: mode ?? "plan",
-    })),
+    Match.whenOr("goal", "plan", () => "shaping" as const),
+    Match.whenOr("execute", "verify", () => "running" as const),
+    Match.whenOr("chat", "shaping", "running", "completed", (current) => current),
     Match.exhaustive,
   );
 
 export const WorkflowState = StoredWorkflowState.pipe(
   Schema.decodeTo(
-    Schema.toType(
-      Schema.Struct({ ...workflowStateFields, phase: WorkflowPhase, mode: WorkflowMode }),
-    ),
+    Schema.toType(Schema.Struct({ ...workflowStateFields, phase: WorkflowPhase })),
     SchemaTransformation.transform({
-      decode: (stored) => ({ ...stored, ...decodedPlace(stored) }),
+      decode: (stored) => ({ ...stored, phase: decodedPhase(stored.phase) }),
       encode: (state) => state,
     }),
   ),

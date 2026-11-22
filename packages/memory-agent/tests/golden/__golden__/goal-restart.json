@@ -624,7 +624,6 @@
             "sequence": 1
           }
         ],
-        "mode": "plan",
         "phase": "chat",
         "plan": null
       }
