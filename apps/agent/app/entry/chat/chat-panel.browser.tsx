@@ -314,7 +314,7 @@ it.live("a Plan of ten cards waiting for approval lists them one line each", () 
     const { screen } = yield* openSession;
     const bar = screen.getByRole("region", { name: "워크플로" });
 
-    yield* sdkCall(() => expect.element(bar.getByText("Plan · Plan 작성 중")).toBeVisible());
+    yield* sdkCall(() => expect.element(bar.getByText("Goal · Plan 작성 중")).toBeVisible());
     // A Plan still waiting for approval opens unfolded, its cards in the Plan's order.
     const cards = bar.getByRole("region", { name: "카드 0/10 완료" }).getByRole("link");
     yield* sdkCall(() => expect.poll(() => cards.elements().length).toBe(10));
@@ -340,7 +340,7 @@ it.live("a running Plan stays one line until unfolded, the cards that need a loo
     const { screen } = yield* openSession;
     const bar = screen.getByRole("region", { name: "워크플로" });
     const fold = bar.getByRole("button", {
-      name: /Plan · 실행 중/,
+      name: /Goal · 실행 중/,
     });
 
     yield* sdkCall(() => expect.element(fold).toBeVisible());

@@ -328,7 +328,7 @@ Your part is what the loop cannot decide. Read the board with read_kanban_board,
 - A blocked card whose deliveries ran out: requeue once the cause is understood.
 - The user asks the board to target the branch they now have checked out: retarget.
 - A Goal outcome that is unplanned or not_met: add cards that serve it (their outcomes name its id), reading a not_met verdict for what is missing.
-Cards you add while the board runs wait for approval (awaitingApproval) before the loop assigns them: by the user, or by the project's permission mode when the owner approved the Plan in Goal mode. The cards already approved keep running meanwhile; do not add the same cards again.
+Cards you add while the board runs wait for approval (awaitingApproval) before the loop assigns them: the project's permission mode decides who approves them (the user in ask, a reviewer model in auto, nobody in full). The cards already approved keep running meanwhile; do not add the same cards again.
 The verifier judges each outcome once its cards are done. When every outcome is met the owner merges the Goal branch and completes the Goal and its Plan; you never record their completion.
 Cards in human_decision wait for a person; do not move them yourself unless the user tells you to.`;
 

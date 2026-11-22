@@ -379,7 +379,7 @@ export const workflowInstructions: {
           `- ${rule.id}@${rule.version} (${rule.priority}; ${ruleSource(rule)}): ${rule.instruction}\n  Evidence: ${rule.requiredEvidence.join("; ") || "(none)"}`,
       )
       .join("\n");
-    const common = `Workflow phase: ${state.phase} (${state.mode} mode).
+    const common = `Workflow phase: ${state.phase}.
 Current Goal instance ID: ${goalInstanceId ?? "(none; legacy/unbound)"}. For start_new_goal, use this exact ID as previousGoalInstanceId (null only if none). This is a snapshot; the owner checks the current ID again at request time.
 Goal and Plan are durable artifacts, not substitutes for a conversational answer.
 Use only the workflow artifact tools available in this phase, and update an artifact when the user's decisions materially change it.
@@ -400,35 +400,24 @@ Blocking questions:
 ${compactList(state.goal.openQuestions.filter((question) => question.blocking).map((question) => question.question))}`
       : "Goal: not recorded yet.";
 
-    // Shaping reads as its mode: the planner of a Goal mode Goal, or one the user approves.
-    return Match.value(state.phase === "shaping" ? state.mode : state.phase).pipe(
+    return Match.value(state.phase).pipe(
       Match.when("chat", () => null),
       Match.when(
         "completed",
         () =>
           `${common}\nThe Goal and Plan are complete. Do not resume verification or change their completed evidence. Answer follow-up questions conversationally. Start a new Goal only when the user explicitly requests new work.\n\n${goal}`,
       ),
-      Match.when(
-        "goal",
-        () => `${common}
-The user delegated an outcome, not merely a request to describe a goal. You are its planner, not its executor. First agree with the user on what is wanted; after that they leave the work to the board without approving the Plan.
-${goalAlignment}
-In the run that first saves the Goal, save it as a draft whose outcomes each have a stable id, save no Plan, and end your turn by telling the user ${goalAlignmentMessage}. The board never starts in that run: it starts only after the user had a turn to answer the Goal.
-When the user has answered, record the answer in the Goal with edit_goal: a confirmed assumption becomes a constraint or is removed, an answered question is removed, a correction changes the outcome it is about. If the answer changed what is wanted in a way the user has not seen written, show the changed parts and ask once more. When the user agrees and no blocking question is left, make the Goal active and save a ready Plan whose cards together serve every outcome (each card names the outcome ids it serves). When that run ends the owner approves the Plan and starts its kanban board, where card agents execute the cards and a verifier judges each outcome. Each card agent reads the Goal's statement, constraints, non-goals and assumptions with its card, so keep them true for every card. Do not implement the cards, verify outcomes or record progress yourself.
-${plannerOwnWork}
-${cardCapabilities}
-
-${goal}`,
-      ),
-      Match.when("plan", () => {
+      Match.when("shaping", () => {
         const plan = isTruthy(state.plan)
           ? `Plan v${state.plan.version} (${state.plan.status}, based on Goal v${state.plan.goalVersion}): ${state.plan.summary}`
           : "Plan: not recorded yet.";
         return `${common}
-You are planning, not executing. If no Goal is recorded, infer the smallest useful Goal from the user's request and save it before the Plan; the user does not need to enter Goal mode first.
+The user delegated an outcome, not merely a request to describe a goal. You are its planner, not its executor. First agree with the user on what is wanted; the Plan comes only after that.
 ${goalAlignment}
-Produce ordered steps with stable unique ids, dependencies (dependsOn names only other step ids in this Plan, without cycles), acceptance criteria, risks, applicable rule ids and the Goal outcome ids each step serves. When a contradiction or unanswered question arises, record what is uncertain and which decisions depend on it; continue all independent investigation and planning before asking. Narrow questions with evidence and ask only when no useful independent planning remains and the decision truly blocks progress. A non-blocking open question does not by itself require a draft Plan: save a ready Plan when its steps can proceed, and leave the unresolved decision for the step it actually affects. Never assume an answer to a blocking question or mark a Plan ready if the unresolved decision prevents safe execution of its next step. Never present investigation as implementation.
-Once the Plan is approved, its steps run as cards of a kanban board.
+In the run that first saves the Goal, save it as a draft whose outcomes each have a stable id, save no Plan, and end your turn by telling the user ${goalAlignmentMessage}. The board never starts in that run: it starts only after the user had a turn to answer the Goal.
+When the user has answered, record the answer in the Goal with edit_goal: a confirmed assumption becomes a constraint or is removed, an answered question is removed, a correction changes the outcome it is about. If the answer changed what is wanted in a way the user has not seen written, show the changed parts and ask once more. When the user agrees and no blocking question is left, make the Goal active and save a ready Plan whose cards together serve every outcome.
+Give the Plan ordered steps with stable unique ids, dependencies (dependsOn names only other step ids in this Plan, without cycles), acceptance criteria, risks, applicable rule ids and the Goal outcome ids each step serves. A non-blocking open question does not by itself require a draft Plan: save a ready Plan when its steps can proceed, and leave the unresolved decision for the step it actually affects. Never assume an answer to a blocking question or mark a Plan ready if the unresolved decision prevents safe execution of its next step. Never present investigation as implementation.
+When that run ends, the project's permission mode decides who approves the Plan: in ask the user reads the Plan and approves it, in auto and full the owner approves it. The approved Plan runs on its kanban board, where card agents execute the cards and a verifier judges each outcome. Do not ask for the approval in your message and do not say the board started; say that the Plan is ready. Each card agent reads the Goal's statement, constraints, non-goals and assumptions with its card, so keep them true for every card. Do not implement the cards, verify outcomes or record progress yourself.
 ${plannerOwnWork}
 ${cardCapabilities}
 

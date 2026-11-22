@@ -93,9 +93,7 @@ describe("slash command parsing", () => {
         command: SlashCommand.workflow({ move: "goal", request: "결제 실패를 줄이고 싶어" }),
       }),
     );
-    expect(parseSlash("/plan", context)).toEqual(
-      SlashParse.command({ command: SlashCommand.workflow({ move: "plan", request: "" }) }),
-    );
+    expect(parseSlash("/plan", context)).toEqual(SlashParse.not_command());
     expect(parseSlash("/execute", context)).toEqual(
       SlashParse.command({ command: SlashCommand.workflow({ move: "run", request: "" }) }),
     );

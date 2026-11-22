@@ -38,7 +38,7 @@ type BoardAuthor =
 
 ## Goal을 맞춘 뒤 시작 (2026-11-18)
 
-Goal 모드의 Plan 작성자는 Goal을 저장한 run에서 Plan을 만들지 않는다. 이해한 Goal, outcome, 뺀 것, 가정, 저장한 용어, outcome을 바꿀 질문을 사용자에게 말하고 턴을 끝낸다. 사용자가 답한 뒤의 run이 답을 Goal에 반영하고 ready Plan을 저장하면 owner가 Plan을 승인하고 보드를 시작한다. 서버도 같은 조건을 확인한다: 사용자의 턴으로 시작한 run이 시작할 때 이미 그 Goal이 있었고, Goal에 막는 질문이 없어야 한다. 낱말의 뜻은 프로젝트 용어 목록(`save_project_terms`)에 두고 Plan 작성자, 카드 에이전트, 검증자가 함께 읽는다. 카드 에이전트와 카드 검증자는 카드와 함께 Goal의 문장, 제약, non-goal, 가정을 읽는다. decisions.md "Goal은 맞춘 뒤에 맡긴다".
+Plan 작성자는 Goal을 저장한 run에서 Plan을 만들지 않는다. 이해한 Goal, outcome, 뺀 것, 가정, 저장한 용어, outcome을 바꿀 질문을 사용자에게 말하고 턴을 끝낸다. 사용자가 답한 뒤의 run이 답을 Goal에 반영하고 ready Plan을 저장하면 프로젝트 권한 모드가 승인자를 정한다: `ask`는 사용자가 승인하고, `auto`·`full`은 owner가 승인하고 보드를 시작한다. 서버도 같은 조건을 확인한다: 사용자의 턴으로 시작한 run이 시작할 때 이미 그 Goal이 있었고, Goal에 막는 질문이 없어야 한다. 낱말의 뜻은 프로젝트 용어 목록(`save_project_terms`)에 두고 Plan 작성자, 카드 에이전트, 검증자가 함께 읽는다. 카드 에이전트와 카드 검증자는 카드와 함께 Goal의 문장, 제약, non-goal, 가정을 읽는다. decisions.md "Goal은 맞춘 뒤에 맡긴다", "처음 Plan의 승인자는 프로젝트 권한 모드가 정한다".
 
 ## 수정 권한
 

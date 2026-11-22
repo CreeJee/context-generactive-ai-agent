@@ -786,6 +786,10 @@ msgstr "Goal 없음"
 msgid "Goal 전체를 검증하는 중"
 msgstr "Goal 전체를 검증하는 중"
 
+#: app/entry/chat/chat-panel.tsx
+msgid "Goal로 돌아와 Plan을 다시 승인하면 이어서 실행합니다."
+msgstr "Goal로 돌아와 Plan을 다시 승인하면 이어서 실행합니다."
+
 #: app/entry/settings/pages/kanban.tsx
 msgid "Goal을 붙잡고 다음 Plan을 쓰는 대화의 모델입니다. 칸반 보드로 실행 중인 대화에 쓰입니다."
 msgstr "Goal을 붙잡고 다음 Plan을 쓰는 대화의 모델입니다. 칸반 보드로 실행 중인 대화에 쓰입니다."
@@ -943,8 +947,8 @@ msgid "Plan 작성자 모델"
 msgstr "Plan 작성자 모델"
 
 #: app/entry/chat/chat-panel.tsx
-msgid "Plan 작성자가 Plan을 다시 준비하면 바로 이어서 실행합니다."
-msgstr "Plan 작성자가 Plan을 다시 준비하면 바로 이어서 실행합니다."
+msgid "Plan 작성자가 Plan을 다시 준비하면 프로젝트 권한 모드에 따라 승인을 기다리거나 바로 이어서 실행합니다."
+msgstr "Plan 작성자가 Plan을 다시 준비하면 프로젝트 권한 모드에 따라 승인을 기다리거나 바로 이어서 실행합니다."
 
 #: app/entry/chat/board/card-peek.tsx
 msgid "Plan 작성자가 실행 중에 더한 카드라 승인을 기다립니다. 승인하기 전에는 실행하지 않습니다."
@@ -961,10 +965,6 @@ msgstr "Plan 작성자가 카드를 대체하지 않았습니다. 카드를 고�
 #: app/entry/chat/workflow-panel.tsx
 msgid "Plan을 확인하고 승인하면 칸반 보드에서 실행합니다. 바꾸고 싶은 점은 그대로 입력해 주십시오."
 msgstr "Plan을 확인하고 승인하면 칸반 보드에서 실행합니다. 바꾸고 싶은 점은 그대로 입력해 주십시오."
-
-#: app/entry/chat/chat-panel.tsx
-msgid "Plan이나 Goal 모드에서 다시 승인하면 이어서 실행합니다."
-msgstr "Plan이나 Goal 모드에서 다시 승인하면 이어서 실행합니다."
 
 #: app/entry/api.ts
 #: app/entry/chat/draft-images.ts
@@ -1277,13 +1277,9 @@ msgstr "결과 확인"
 msgid "결과가 바뀌지 않는 같은 도구 호출을 되풀이해서 멈췄습니다"
 msgstr "결과가 바뀌지 않는 같은 도구 호출을 되풀이해서 멈췄습니다"
 
-#: app/entry/chat/slash-commands.ts
-msgid "결과를 맡기고 자율적으로 진행하기"
-msgstr "결과를 맡기고 자율적으로 진행하기"
-
 #: app/entry/chat/chat-composer.tsx
-msgid "결과를 맡기면 보드에서 Plan의 카드를 바로 실행합니다"
-msgstr "결과를 맡기면 보드에서 Plan의 카드를 바로 실행합니다"
+msgid "결과를 맡기면 이해한 내용을 먼저 확인한 뒤 Plan의 카드를 보드에서 실행합니다"
+msgstr "결과를 맡기면 이해한 내용을 먼저 확인한 뒤 Plan의 카드를 보드에서 실행합니다"
 
 #: app/entry/chat/decision-prompt.tsx
 msgid "결과를 알 수 없는 도구 실행"
@@ -1453,10 +1449,6 @@ msgstr "고를 수 있는 값"
 #: app/entry/chat/chat-panel.tsx
 msgid "고치기"
 msgstr "고치기"
-
-#: app/entry/chat/chat-panel.tsx
-msgid "고친 Plan을 다시 승인하면 이어서 실행합니다."
-msgstr "고친 Plan을 다시 승인하면 이어서 실행합니다."
 
 #: app/entry/settings/pages/image.tsx
 msgid "공급자 간 이미지 실행 동의를 바꾸지 못했습니다."
@@ -2025,9 +2017,13 @@ msgstr "닫기"
 msgid "닫음"
 msgstr "닫음"
 
+#: app/entry/chat/slash-commands.ts
+msgid "달성할 결과 맡기기"
+msgstr "달성할 결과 맡기기"
+
 #: app/entry/chat/workflow-panel.tsx
-msgid "달성할 결과를 입력하면 그에 맞는 카드를 Plan 작성자가 만들어 바로 실행합니다. Goal은 결과가 모두 확인되면 끝납니다."
-msgstr "달성할 결과를 입력하면 그에 맞는 카드를 Plan 작성자가 만들어 바로 실행합니다. Goal은 결과가 모두 확인되면 끝납니다."
+msgid "달성할 결과를 입력하면 Plan 작성자가 이해한 내용을 먼저 확인합니다. 답하면 Plan을 만들고, 프로젝트 권한 모드가 '매번 묻기'이면 승인을 기다리며 그 밖에는 바로 보드에서 실행합니다."
+msgstr "달성할 결과를 입력하면 Plan 작성자가 이해한 내용을 먼저 확인합니다. 답하면 Plan을 만들고, 프로젝트 권한 모드가 '매번 묻기'이면 승인을 기다리며 그 밖에는 바로 보드에서 실행합니다."
 
 #: app/entry/chat/chat-composer.tsx
 msgid "달성할 결과를 입력해 주십시오"
@@ -2812,14 +2808,6 @@ msgstr "백로그"
 msgid "버전"
 msgstr "버전"
 
-#: app/entry/chat/slash-commands.ts
-msgid "변경 없이 조사한 뒤 Plan 만들기"
-msgstr "변경 없이 조사한 뒤 Plan 만들기"
-
-#: app/entry/chat/chat-composer.tsx
-msgid "변경 없이 조사해 세울 Plan의 내용을 입력해 주십시오"
-msgstr "변경 없이 조사해 세울 Plan의 내용을 입력해 주십시오"
-
 #. Button that sends the edit as a change request
 #: app/entry/chat/board/card-peek.tsx
 msgid "변경 요청"
@@ -2950,12 +2938,8 @@ msgid "보드 실행 중"
 msgstr "보드 실행 중"
 
 #: app/entry/chat/workflow-panel.tsx
-msgid "보드가 카드를 실행하고 결과마다 확인합니다. Plan 작성자가 더한 카드는 승인한 뒤에 실행됩니다."
-msgstr "보드가 카드를 실행하고 결과마다 확인합니다. Plan 작성자가 더한 카드는 승인한 뒤에 실행됩니다."
-
-#: app/entry/chat/workflow-panel.tsx
-msgid "보드가 카드를 실행하고 결과마다 확인합니다. 결과가 모두 확인될 때까지 Plan 작성자가 카드를 더합니다."
-msgstr "보드가 카드를 실행하고 결과마다 확인합니다. 결과가 모두 확인될 때까지 Plan 작성자가 카드를 더합니다."
+msgid "보드가 카드를 실행하고 결과마다 확인합니다. Plan 작성자가 더한 카드는 프로젝트 권한 모드에 따라 승인됩니다."
+msgstr "보드가 카드를 실행하고 결과마다 확인합니다. Plan 작성자가 더한 카드는 프로젝트 권한 모드에 따라 승인됩니다."
 
 #: app/entry/chat/chat-panel.tsx
 msgid "보드는 새 카드를 맡기지 않고 기다립니다. 이미 진행 중인 카드는 끝까지 실행됩니다."
@@ -4288,7 +4272,7 @@ msgstr "옮길 대화"
 #. Kanban card status and column: finished
 #. Label before the finished and total card counts
 #. Plan status: finished
-#. Shown in place of the workflow mode (Plan, Goal) once the workflow has finished
+#. Shown in place of the workflow mode (Goal) once the workflow has finished
 #. Status badge of a task in Work Trace
 #. Status badge on a subagent task card
 #. Workflow stage after the mode: finished
@@ -4420,10 +4404,6 @@ msgstr "요청 번호가 다른 대화의 요청과 겹쳤습니다. 다시 보�
 #: app/entry/chat/message.tsx
 msgid "요청 중"
 msgstr "요청 중"
-
-#: app/entry/chat/workflow-panel.tsx
-msgid "요청을 입력하면 프로젝트를 바꾸지 않고 조사한 뒤 Plan을 만듭니다. 승인하면 칸반 보드에서 카드로 실행합니다."
-msgstr "요청을 입력하면 프로젝트를 바꾸지 않고 조사한 뒤 Plan을 만듭니다. 승인하면 칸반 보드에서 카드로 실행합니다."
 
 #: app/entry/settings/pages/improvements.tsx
 msgid "요청을 처리하지 못했습니다."
@@ -5022,7 +5002,7 @@ msgstr "임베딩 모델 내려받기"
 msgid "임베딩 모델로 비슷한 정정을 묶지 못했습니다. 임베딩 설정을 확인해 주십시오."
 msgstr "임베딩 모델로 비슷한 정정을 묶지 못했습니다. 임베딩 설정을 확인해 주십시오."
 
-#. Accessible name of the Chat/Goal/Plan mode buttons in the composer
+#. Accessible name of the Chat/Goal buttons in the composer
 #: app/entry/chat/chat-composer.tsx
 msgid "입력 방식"
 msgstr "입력 방식"
@@ -6423,10 +6403,6 @@ msgstr "프로젝트 폴더({root})가 없습니다. 옮기거나 지웠다면 �
 #: app/entry/navigation/sidebar.tsx
 msgid "프로젝트 폴더가 없습니다"
 msgstr "프로젝트 폴더가 없습니다"
-
-#: app/entry/chat/chat-composer.tsx
-msgid "프로젝트를 변경하지 않은 채 Plan을 만듭니다. 승인하면 보드에서 실행합니다"
-msgstr "프로젝트를 변경하지 않은 채 Plan을 만듭니다. 승인하면 보드에서 실행합니다"
 
 #: app/entry/index.tsx
 msgid "프로젝트를 보관에서 꺼내지 못했습니다. 잠시 뒤 다시 시도해 주십시오."

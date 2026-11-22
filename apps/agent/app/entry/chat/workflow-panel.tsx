@@ -42,26 +42,22 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "../../components/ui/collapsible";
-import { WorkflowExecutionState, type WorkflowMode, type WorkflowState } from "../api";
+import { WorkflowExecutionState, type WorkflowState } from "../api";
 import { koreanLocalTime } from "../shared/local-time";
 import { WorkflowRow, WorkflowRows } from "./workflow-rows";
 
 const localTime = (epochMillis: number) => koreanLocalTime(epochMillis);
 
-/** The modes the composer offers: plain chat, or who approves the Plan (Plan or Goal). */
-export const modeLabels: Readonly<Record<"chat" | WorkflowMode, string>> = {
-  chat: "Chat",
-  plan: "Plan",
-  goal: "Goal",
-};
+/** What the composer offers: plain chat, or a Goal whose Plan runs on a board. */
+export const modeLabels = { chat: "Chat", goal: "Goal" } as const;
 
-/** The mode the composer shows: plain chat, or the mode a workflow shapes and runs in. */
-export const composerModeOf = (state: WorkflowState | null): "chat" | WorkflowMode =>
-  state === null || state.phase === "chat" ? "chat" : state.mode;
+/** What the composer shows: plain chat, or the Goal a workflow shapes and runs. */
+export const composerModeOf = (state: WorkflowState | null): keyof typeof modeLabels =>
+  state === null || state.phase === "chat" ? "chat" : "goal";
 
 const completedModeLabel = msg({
   message: "완료",
-  comment: "Shown in place of the workflow mode (Plan, Goal) once the workflow has finished",
+  comment: "Shown in place of the workflow mode (Goal) once the workflow has finished",
 });
 
 /** A completed workflow reads as done; any other as its mode. */
@@ -128,17 +124,11 @@ export const stageLabels = {
   completed: msg({ message: "완료", comment: "Workflow stage after the mode: finished" }),
 } satisfies Record<Exclude<WorkflowState["phase"], "chat">, MessageDescriptor>;
 
-/** What happens next, in the words of each stage and mode. */
+/** What happens next, in the words of each stage. */
 const stageGuides = {
-  shaping: {
-    plan: msg`요청을 입력하면 프로젝트를 바꾸지 않고 조사한 뒤 Plan을 만듭니다. 승인하면 칸반 보드에서 카드로 실행합니다.`,
-    goal: msg`달성할 결과를 입력하면 그에 맞는 카드를 Plan 작성자가 만들어 바로 실행합니다. Goal은 결과가 모두 확인되면 끝납니다.`,
-  },
-  running: {
-    plan: msg`보드가 카드를 실행하고 결과마다 확인합니다. Plan 작성자가 더한 카드는 승인한 뒤에 실행됩니다.`,
-    goal: msg`보드가 카드를 실행하고 결과마다 확인합니다. 결과가 모두 확인될 때까지 Plan 작성자가 카드를 더합니다.`,
-  },
-} satisfies Record<"shaping" | "running", Record<WorkflowMode, MessageDescriptor>>;
+  shaping: msg`달성할 결과를 입력하면 Plan 작성자가 이해한 내용을 먼저 확인합니다. 답하면 Plan을 만들고, 프로젝트 권한 모드가 '매번 묻기'이면 승인을 기다리며 그 밖에는 바로 보드에서 실행합니다.`,
+  running: msg`보드가 카드를 실행하고 결과마다 확인합니다. Plan 작성자가 더한 카드는 프로젝트 권한 모드에 따라 승인됩니다.`,
+} satisfies Record<"shaping" | "running", MessageDescriptor>;
 
 /**
  * What the bar's icon says about the stage at a glance. It turns only while the board's loop runs
@@ -283,7 +273,7 @@ export function WorkflowArtifactPanel({
 }) {
   const { t } = useLingui();
   if (state === null || state.phase === "chat") return null;
-  const { goal, plan, phase, mode } = state;
+  const { goal, plan, phase } = state;
   const completed = phase === "completed";
   const hasWork = isTruthy(goal) || isTruthy(plan);
   const execute = actions?.moves.run;
@@ -294,9 +284,10 @@ export function WorkflowArtifactPanel({
   const verification = goal?.verification;
   // A Plan waiting for approval is read before it is approved, so it opens unfolded; each new
   // version of it opens again.
-  const reviewing = phase === "shaping" && mode === "plan" && isTruthy(plan);
+  const reviewing = phase === "shaping" && isTruthy(plan);
+  // A board that runs leaves the Plan to its loop, except a revised Plan waiting to be approved.
   const executable =
-    !completed && isTruthy(plan) && !kanbanRunning && (mode === "plan" || continuing);
+    !completed && isTruthy(plan) && (!kanbanRunning || (phase === "shaping" && !continuing));
   const resuming = !completed && isTruthy(goal) && (resumable || paused);
   return (
     <section
@@ -311,7 +302,7 @@ export function WorkflowArtifactPanel({
           <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors outline-none hover:bg-muted/60 focus-visible:ring-3 focus-visible:ring-ring/50">
             <StageIcon state={state} kanbanRunning={kanbanRunning} />
             <span className="shrink-0 font-medium">
-              {modeLabels[mode]} · {t(stageLabels[phase])}
+              {modeLabels.goal} · {t(stageLabels[phase])}
             </span>
             {paused && <Badge variant="outline">{t(goalStatusLabels.paused)}</Badge>}
             {goal?.status === "failed" && (
@@ -328,7 +319,7 @@ export function WorkflowArtifactPanel({
               />
             </span>
           </CollapsibleTrigger>
-          {/* Goal mode approves its planner's Plan by itself; a Plan left without a board can still move onto one. */}
+          {/* In ask the user approves the Plan here; in auto and full the owner does, and a Plan left without a board can still move onto one. */}
           {executable && (
             <Button
               type="button"
@@ -411,7 +402,7 @@ export function WorkflowArtifactPanel({
                     입력해 주십시오.
                   </Trans>
                 ) : (
-                  t(stageGuides[phase][mode])
+                  t(stageGuides[phase])
                 )}
               </p>
             )}
@@ -450,9 +441,7 @@ export function WorkflowArtifactPanel({
                   type="button"
                   size="sm"
                   variant="ghost"
-                  disabled={
-                    actions?.moves[mode].allowed !== true || busy || disabled || controlling
-                  }
+                  disabled={actions?.moves.goal.allowed !== true || busy || disabled || controlling}
                   onClick={onRevise}
                 >
                   <PencilIcon data-icon="inline-start" />
