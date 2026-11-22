@@ -45,7 +45,7 @@ const request = Effect.fn("devChatBoundaryTest.request")(function* (
     headers,
     body: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
       runId,
-      messages: [{ id: `${runId}:user`, role: "user", content: "dev session lease boundary" }],
+      messages: [{ id: `${runId}:user`, role: "user", content: "dev session boundary" }],
     }),
   });
 });
@@ -113,7 +113,7 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
 
 testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
   it.effect(
-    "cross-site metadata cannot borrow a valid holder or create durable Goal effects",
+    "cross-site metadata cannot create durable Goal effects",
     () =>
       Effect.gen(function* () {
         const context = yield* TestEnv;
