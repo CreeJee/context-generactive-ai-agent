@@ -4171,10 +4171,6 @@ msgstr "연결됨"
 msgid "연결을 저장했습니다."
 msgstr "연결을 저장했습니다."
 
-#: app/entry/chat/chat-approvals.tsx
-msgid "연결이 끊긴 사이 승인 목록이 바뀌었습니다. 서버의 최신 요청을 다시 불러와야 합니다."
-msgstr "연결이 끊긴 사이 승인 목록이 바뀌었습니다. 서버의 최신 요청을 다시 불러와야 합니다."
-
 #: app/entry/chat/read-only-bar.tsx
 msgid "연결하지 못했습니다. 다시 시도해 주십시오."
 msgstr "연결하지 못했습니다. 다시 시도해 주십시오."

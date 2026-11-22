@@ -33,7 +33,7 @@
 - `maxPageSize` — 한 페이지 메시지 상한 500(`limit` 쿼리 검증에 씀)
 - `ChatApiHandlers` — `AgentChat` 위의 `chat` 그룹 HttpApiBuilder 핸들러 레이어
 - `ChatApiClient` — `HttpApiClient.make(ChatApi)` 클라이언트 Context.Service와 `ChatApiClient.layer`
-- `chatSessions` — 세션 id별 Atom 묶음(`keptAtomGroups`). `state`, `custom`(마지막 CUSTOM 이벤트), `notTaken`(서버가 받지 않은 마지막 turn과 거절. 페이지가 입력창에 되돌린다), `open`, `send`, `answer`, `loadOlder`, `latest`(페이지가 알려 주는 서버의 최신 run id), `follow`(마운트된 동안 다른 탭이나 서버가 시작한 run을 따라 읽는다) 제공
+- `chatSessions` — 세션 id별 Atom 묶음(`keptAtomGroups`). `state`, `custom`(마지막 CUSTOM 이벤트), `notTaken`(서버가 받지 않은 마지막 turn과 거절. 페이지가 입력창에 되돌린다), `open`, `send`, `answer`(다른 탭이 먼저 답한 승인의 답은 `approval_not_pending`·`run_in_progress` 거절을 오류로 남기지 않고 `open`으로 대화를 다시 읽는다), `loadOlder`, `latest`(페이지가 알려 주는 서버의 최신 run id), `follow`(마운트된 동안 다른 탭이나 서버가 시작한 run을 따라 읽는다) 제공
 - `followRuns(read, sight)` / `RunSight` / `ReadRuns` (`follow-runs.ts`) — 페이지가 시작하지 않은 run을 읽을지 정하는 순수 함수. 처음 본 최신 run은 첫 읽기가 덮은 것으로 두고, 그 뒤 읽지 않은 run이 보이면 페이지가 자기 run을 읽거나 보내는 중이 아닐 때 대화를 한 번 다시 열게 한다
 - `pageSize` — 클라이언트가 한 번에 읽는 메시지 수 20
 - `partsOf` — user 메시지 content(문자열 또는 파트 배열)를 표시용 `MessagePart` 배열로 변환

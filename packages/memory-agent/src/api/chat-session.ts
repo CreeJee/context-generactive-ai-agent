@@ -73,6 +73,13 @@ export interface NotTaken {
 const isCustom = AgUiEvent.guards.CUSTOM;
 const isText = Schema.is(Schema.String);
 const isRefusal = Schema.is(Refusal);
+/**
+ * A refused answer the page no longer has to give: another page answered first, or the run its
+ * answer started is going.
+ */
+const answeredElsewhere = Schema.is(
+  Schema.Struct({ error: Schema.Literals(["approval_not_pending", "run_in_progress"]) }),
+);
 
 /** Two sights that would decide the same. */
 const sameSight = (a: RunSight, b: RunSight) =>
@@ -211,22 +218,37 @@ export const chatSessions = <E>(
       }),
     );
 
-    /** Answers the approvals a run waits for with a run that resumes it. */
+    /**
+     * Answers the approvals a run waits for with a run that resumes it. An answer to approvals
+     * another page answered first is dropped, and the conversation is read again.
+     */
     const answer = runtime.fn((input: Answer, get) =>
       Effect.gen(function* () {
         const { chat } = yield* ChatApiClient;
         const runId = yield* Effect.flatMap(SecureRandom.SecureRandom, (crypto) => crypto.uuidV7());
-        const events = yield* chat.run({
-          params: { session },
-          headers: { "x-session-holder": input.holder },
-          payload: {
-            runId,
-            parentRunId: input.parentRunId,
-            messages: [],
-            resume: input.answers,
-          },
-        });
-        yield* following(get, runId, events);
+        const events = yield* chat
+          .run({
+            params: { session },
+            headers: { "x-session-holder": input.holder },
+            payload: {
+              runId,
+              parentRunId: input.parentRunId,
+              messages: [],
+              resume: input.answers,
+            },
+          })
+          .pipe(
+            Effect.asSome,
+            Effect.catchIf(answeredElsewhere, () =>
+              Effect.as(
+                Effect.sync(() => get.set(open, undefined)),
+                Option.none(),
+              ),
+            ),
+          );
+        yield* Effect.transposeOption(
+          Option.map(events, (stream) => following(get, runId, stream)),
+        );
       }),
     );
 
