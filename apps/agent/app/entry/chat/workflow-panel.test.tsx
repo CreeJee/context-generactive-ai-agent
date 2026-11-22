@@ -83,7 +83,7 @@ describe("server-authoritative workflow UI", () => {
       ),
     ).not.toContain(' disabled=""');
   });
-  test("offers the Plan's approval whatever mode the state was saved in", () => {
+  test("offers the Plan's approval and its revision while shaping", () => {
     const html = render(<WorkflowArtifactPanel {...props} state={workflowFixture} />);
     expect(html).toContain("승인하고 실행");
     expect(html).toContain("Plan 수정");
