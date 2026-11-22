@@ -81,7 +81,7 @@ const needsUser = (surface: SurfaceBoard | null, goalDecisions: number) => {
  * names its conversation; a filter shows one conversation's cards at a time. Cards are dragged,
  * opened and decided here as on their own board, keep their order inside their own Plan, and move
  * to another conversation's Plan from the card peek. Plans not executing are only named, with a
- * way to their conversation. The server checks the conversation's lease for each change.
+ * way to their conversation.
  */
 export function ProjectBoard({
   projectId,

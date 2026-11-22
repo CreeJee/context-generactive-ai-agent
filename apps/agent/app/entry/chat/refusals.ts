@@ -26,6 +26,7 @@ export const refusalTexts = {
   automatic_goal_admission_unavailable: msg`지금은 Goal 실행을 시작할 수 없습니다. 잠시 뒤 다시 보내 주십시오.`,
   queued_message_not_next: msg`대기열 메시지를 고치는 사이라 보내지 않았습니다. 대기열에서 확인한 뒤 보내 주십시오.`,
   no_user_turn: msg`보낼 메시지가 없습니다.`,
+  approval_not_pending: msg`이미 답한 승인 요청입니다.`,
   model_unavailable_for_account: msg`선택한 모델을 지금 계정에서 쓸 수 없습니다. 모델을 다시 골라 주십시오.`,
   image_direct_workflow_required: msg`이 이미지 요청은 대화가 아닌 이미지 생성으로 보내 주십시오.`,
   notification_followup_deferred: msg`앞선 답변이 끝나지 않아 후속 실행을 미뤘습니다.`,

@@ -457,14 +457,12 @@ const archivableTaskStatuses: readonly TraceTaskView["status"][] = [
 const TaskSummaryCard = memo(function TaskSummaryCard({
   task,
   connection,
-  readOnly,
   onResume,
   onArchive,
   onDelete,
 }: {
   task: TraceTaskView;
   connection: TraceConnection;
-  readOnly: boolean;
   onResume: (task: TraceTaskView, confirmUncertain: boolean) => Promise<ResumeActionResult>;
   onArchive: (task: TraceTaskView) => Promise<ArchiveActionResult>;
   onDelete: (task: TraceTaskView) => Promise<DeleteActionResult>;
@@ -575,7 +573,7 @@ const TaskSummaryCard = memo(function TaskSummaryCard({
               type="button"
               size="sm"
               variant={resumeState === "confirm-uncertain" ? "destructive" : "outline"}
-              disabled={readOnly || resumeState === "requesting" || resumeState === "queued"}
+              disabled={resumeState === "requesting" || resumeState === "queued"}
               onClick={() => void resume(resumeState === "confirm-uncertain")}
             >
               {resumeState === "requesting" ? (
@@ -596,7 +594,7 @@ const TaskSummaryCard = memo(function TaskSummaryCard({
             type="button"
             size="sm"
             variant="ghost-muted"
-            disabled={readOnly || archiveState === "requesting"}
+            disabled={archiveState === "requesting"}
             onClick={() => void archive()}
           >
             {archiveState === "requesting" ? (
@@ -616,7 +614,7 @@ const TaskSummaryCard = memo(function TaskSummaryCard({
                   type="button"
                   size="sm"
                   variant="ghost-muted"
-                  disabled={readOnly || deleteState === "requesting"}
+                  disabled={deleteState === "requesting"}
                 />
               }
             >
@@ -667,7 +665,6 @@ function ToolCallView({
   awaitingApproval,
   task,
   traceConnection,
-  readOnly,
   onResumeTask,
   onArchiveTask,
   onDeleteTask,
@@ -677,7 +674,6 @@ function ToolCallView({
   awaitingApproval: boolean;
   task: TraceTaskView | undefined;
   traceConnection: TraceConnection;
-  readOnly: boolean;
   onResumeTask: (task: TraceTaskView, confirmUncertain: boolean) => Promise<ResumeActionResult>;
   onArchiveTask: (task: TraceTaskView) => Promise<ArchiveActionResult>;
   onDeleteTask: (task: TraceTaskView) => Promise<DeleteActionResult>;
@@ -689,7 +685,6 @@ function ToolCallView({
         <TaskSummaryCard
           task={task}
           connection={traceConnection}
-          readOnly={readOnly}
           onResume={onResumeTask}
           onArchive={onArchiveTask}
           onDelete={onDeleteTask}
@@ -773,7 +768,6 @@ type MessageViewProps = {
   awaitingApproval: readonly string[];
   tasks: readonly TraceTaskView[];
   traceConnection: TraceConnection;
-  readOnly: boolean;
   onResumeTask: (task: TraceTaskView, confirmUncertain: boolean) => Promise<ResumeActionResult>;
   onArchiveTask: (task: TraceTaskView) => Promise<ArchiveActionResult>;
   onDeleteTask: (task: TraceTaskView) => Promise<DeleteActionResult>;
@@ -787,7 +781,6 @@ const sameMessageView = (previous: MessageViewProps, next: MessageViewProps) =>
   previous.message === next.message &&
   previous.streaming === next.streaming &&
   previous.traceConnection === next.traceConnection &&
-  previous.readOnly === next.readOnly &&
   previous.onResumeTask === next.onResumeTask &&
   previous.onArchiveTask === next.onArchiveTask &&
   previous.onDeleteTask === next.onDeleteTask &&
@@ -849,7 +842,6 @@ export const MessageView = memo(function MessageView({
   awaitingApproval,
   tasks,
   traceConnection,
-  readOnly,
   onResumeTask,
   onArchiveTask,
   onDeleteTask,
@@ -932,7 +924,6 @@ export const MessageView = memo(function MessageView({
           awaitingApproval={awaitingApproval.includes(part.id)}
           task={taskForToolCall(tasks, part.id)}
           traceConnection={traceConnection}
-          readOnly={readOnly}
           onResumeTask={onResumeTask}
           onArchiveTask={onArchiveTask}
           onDeleteTask={onDeleteTask}

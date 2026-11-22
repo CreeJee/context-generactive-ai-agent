@@ -784,10 +784,6 @@ testAgent()("server workflow action policy", (it) => {
       expect(actions.controls.resume).toEqual({ allowed: false, reason: "run_in_progress" });
       expect(actions.controls.pause.allowed).toBe(true);
       expect(actions.controls.stop.allowed).toBe(true);
-      const held = workflowActions(state, { running: true, lease: { state: "other", since: 0 } });
-      [...Object.values(held.moves), ...Object.values(held.controls)].forEach((decision) =>
-        expect(decision).toEqual({ allowed: false, reason: "session_in_use" }),
-      );
       expect(
         evaluateWorkflowAction(state, WorkflowActionRequest.move({ move: "run" }), {
           lease: { state: "free" },

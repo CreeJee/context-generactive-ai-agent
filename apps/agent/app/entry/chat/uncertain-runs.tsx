@@ -24,14 +24,12 @@ export function UncertainRuns({
   sessionId,
   holder,
   runs,
-  readOnly,
   onContinued,
   onProblem,
 }: {
   sessionId: string;
   holder: string;
   runs: readonly UncertainRun[];
-  readOnly: boolean;
   onContinued: () => void;
   onProblem: (message: string) => void;
 }) {
@@ -108,7 +106,7 @@ export function UncertainRuns({
             type="button"
             size="sm"
             variant="outline"
-            disabled={readOnly || continuing}
+            disabled={continuing}
             onClick={() => void continuePast()}
           >
             <Trans>확인했으니 이어서 진행</Trans>

@@ -55,7 +55,7 @@ const request = Effect.fn("devChatBoundaryTest.request")(function* (
 
 testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
   it.effect(
-    "chat route handlers map a leased local session to its bound Goal/run without cross-site writes",
+    "chat route handlers map a local session to its bound Goal/run without cross-site writes",
     () =>
       Effect.gen(function* () {
         const context = yield* TestEnv;
@@ -83,14 +83,6 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
           yield* request(context.session.id, "foreign", "owning-page", "http://evil.example"),
         );
         expect(foreign.status).toBe(403);
-        const nonHolder = yield* serve(
-          yield* request(context.session.id, "non-holder", "other-page", "http://localhost"),
-        );
-        expect(nonHolder.status).toBe(423);
-        const missingHolder = yield* serve(
-          yield* request(context.session.id, "missing-holder", null, "http://localhost"),
-        );
-        expect(missingHolder.status).toBe(423);
         expect(context.provider!.invocations).toHaveLength(0);
         for (const table of ["workflow_run_bindings", "chat_runs", "nodes"])
           expect(yield* sqlGet(`SELECT count(*) AS n FROM ${table}`)).toEqual({ n: 0 });
@@ -112,14 +104,12 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
         );
         expect(snapshot.status).toBe(200);
         expect(yield* sdkCall(() => snapshot.text())).toContain("Hello from fast-1");
-        // Leases enforce local page ownership, not login identity. The route currently
-        // still permits a same-origin script when a session has no live page lease.
-        yield* leases.release(context.session.id, "owning-page");
-        const unleased = yield* serve(
-          yield* request(context.session.id, "unleased-local-run", null, "http://localhost"),
+        // Another page of the same origin operates the session too.
+        const other = yield* serve(
+          yield* request(context.session.id, "other-page-run", "other-page", "http://localhost"),
         );
-        expect(unleased.status).toBe(200);
-        yield* sdkCall(() => unleased.text());
+        expect(other.status).toBe(200);
+        yield* sdkCall(() => other.text());
       }),
     20000,
   );
@@ -194,7 +184,7 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
 
 testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
   it.effect(
-    "headerless local requests preserve lease and cross-session run authority",
+    "headerless local requests preserve cross-session run authority",
     () =>
       Effect.gen(function* () {
         const context = yield* TestEnv;
@@ -244,14 +234,11 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
         );
         const before = yield* snapshot;
         const calls = context.provider!.invocations.length;
-        expect((yield* serve(yield* native(second.id, "missing-holder", null))).status).toBe(423);
-        expect((yield* serve(yield* native(second.id, "wrong-holder", "page-a"))).status).toBe(423);
         expect((yield* serve(yield* native(second.id, "session-a-run", "page-b"))).status).toBe(
           409,
         );
         expect(context.provider!.invocations).toHaveLength(calls);
         expect(yield* snapshot).toEqual(before);
-        yield* leases.release(second.id, "page-b");
         const allowed = yield* serve(yield* native(second.id, "session-b-run", null));
         expect(
           allowed.status,

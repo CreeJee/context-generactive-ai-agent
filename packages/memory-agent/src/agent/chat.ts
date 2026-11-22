@@ -395,7 +395,7 @@ const AutomaticRun = Data.taggedEnum<AutomaticRun>();
 
 /** A request to start a run: who sent it, and the run it asks for. */
 export interface ChatRequest {
-  /** The page holding the session, from `X-Session-Holder`. */
+  /** The page that sent the request, from `X-Session-Holder`. */
   readonly holder: string | null;
   readonly input: RunInput;
 }
@@ -739,8 +739,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     ),
     Effect.forkScoped,
   );
-  // An owner that vanished without releasing: read-only pages hear the session is free so one can
-  // take over.
+  // A lease that ran out without being released: pages read the session's state again.
   yield* leases.onExpired((sessionId) => events.publishSession(sessionId, "run-state"));
   /** The run's record, when it belongs to the session. */
   const sessionRun = (sessionId: string, runId: string) =>
@@ -750,12 +749,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     );
   /** The session's newest run, or null before its first. */
   const lastRun = (sessionId: string) => Effect.map(runStore.lastRun(sessionId), Option.getOrNull);
-  /** Refuses a change while another page holds the session. */
-  const refuseOtherHolder = (sessionId: string, holder: string | null) =>
-    Effect.when(
-      Effect.fail({ error: "session_in_use" } as const),
-      Effect.map(leases.permits(sessionId, holder), (permitted) => !permitted),
-    );
   /** Refuses while Work Trace is off, or while the settings that say so cannot be read. */
   const traceShown = workTraceExposed.pipe(
     Effect.filterOrFail(EffectFunction.identity, () => ({ error: "work_trace_disabled" }) as const),
@@ -1210,7 +1203,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.gen(function* () {
         yield* traceShown;
         yield* sessions.get(sessionId);
-        yield* refuseOtherHolder(sessionId, holder);
         const requested = yield* workTrace.requestTaskLifecycle({
           sessionId,
           taskId,
@@ -1235,7 +1227,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.gen(function* () {
         yield* traceShown;
         yield* sessions.get(sessionId);
-        yield* refuseOtherHolder(sessionId, holder);
         const result = yield* workTrace.requestResume({
           sessionId,
           taskId,
@@ -1324,9 +1315,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         yield* Effect.addFinalizer(() => Effect.flatten(Ref.get(stopSteeringOnExit)));
         yield* Effect.addFinalizer(() => Effect.flatten(Ref.get(cancellationToRelease)));
         const { projectId, agent: external, title } = yield* sessions.get(sessionId);
-        // Sending, approving and answering all come here; a read-only page may do none of them.
-        if (internalFollowup === null && !(yield* leases.permits(sessionId, request.holder)))
-          return refused({ error: "session_in_use" });
         // Sessions reference projects by foreign key, so a missing project is a broken store.
         const project = yield* projects.get(projectId);
         const reportSource = Option.getOrNull(yield* withSql(reportBinding(sessionId, projectId)));
@@ -1391,6 +1379,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           )
             ? parentRunId
             : undefined;
+        // Answers to approvals that no longer wait: another page answered them first, or the page
+        // shows an old list. No run starts for them.
+        if ((resume?.length ?? 0) > 0 && resumeRunId === undefined)
+          return refused({ error: "approval_not_pending" });
         // A pre-bound run belongs to one owner session, even before the SDK creates chat_runs.
         const boundRun = Option.getOrUndefined(yield* runBinding(runId));
         if (isTruthy(boundRun) && boundRun.session_id !== sessionId)
@@ -2392,9 +2384,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
      * Explicit cancel of the session's running run. The intent is recorded on the run first, then
      * the run is aborted; the answer says whether it actually stopped within a few seconds.
      */
-    cancel: (sessionId: string, holder: string | null) =>
+    cancel: (sessionId: string, _holder: string | null) =>
       Effect.gen(function* () {
-        yield* refuseOtherHolder(sessionId, holder);
         const pendingExecution = WorkflowExecutionState.isAnyOf(["ready"])(
           yield* execution.get(sessionId),
         );
@@ -2452,7 +2443,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     ) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
-        yield* refuseOtherHolder(sessionId, holder);
         if (isTruthy(yield* liveRuns.get(sessionId)) || (yield* background.hasSession(sessionId)))
           return yield* runInProgress();
         const result = yield* uncertain.acknowledge(sessionId, input.runIds);
@@ -2467,9 +2457,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
      * Discards a persisted approval after its continuation has become unusable. The gated tool is
      * never run; the abandoned run becomes terminal so the conversation can accept a new turn.
      */
-    discardInterrupts: (sessionId: string, holder: string | null) =>
+    discardInterrupts: (sessionId: string, _holder: string | null) =>
       Effect.gen(function* () {
-        yield* refuseOtherHolder(sessionId, holder);
         yield* sessions.get(sessionId);
         if (isTruthy(yield* liveRuns.get(sessionId))) return yield* runInProgress();
         const discarded = yield* runStore.discardPendingInterrupts(sessionId);
@@ -2481,9 +2470,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
      * `/compact`: stops sending the model the tool output it has already answered from. Refused
      * while the session is answering, since the run in progress still works with its own output.
      */
-    compact: (sessionId: string, holder: string | null) =>
+    compact: (sessionId: string, _holder: string | null) =>
       Effect.gen(function* () {
-        yield* refuseOtherHolder(sessionId, holder);
         yield* sessions.get(sessionId);
         if (isTruthy(yield* liveRuns.get(sessionId))) return yield* runInProgress();
         const selected = yield* sessionModel(sessionId);
@@ -2505,12 +2493,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       ),
 
     /**
-     * Before a paid image generation for the conversation: refuses another page's session and a
-     * session that is answering, and gives the chat route the generation starts from.
+     * Before a paid image generation for the conversation: refuses a session that is answering,
+     * and gives the chat route the generation starts from.
      */
-    imageOrigin: (sessionId: string, holder: string | null) =>
+    imageOrigin: (sessionId: string, _holder: string | null) =>
       Effect.gen(function* () {
-        yield* refuseOtherHolder(sessionId, holder);
         yield* sessions.get(sessionId);
         if (isTruthy(yield* liveRuns.get(sessionId))) return yield* runInProgress();
         const selected = yield* sessionModel(sessionId);
@@ -2539,7 +2526,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       image: { readonly prompt: string; readonly asset: ImageMediaAsset },
     ) =>
       Effect.gen(function* () {
-        yield* refuseOtherHolder(sessionId, holder);
         const session = yield* sessions.get(sessionId);
         const write = Effect.gen(function* () {
           const prompt = (yield* redactor.redactText(image.prompt)).text;
@@ -2617,7 +2603,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
 
     /**
      * What a page needs beyond the transcript: whether a run is producing, how the last one ended,
-     * and whether this page (`holder`) may change the session.
+     * and the session's lease as this page (`holder`) sees it.
      */
     status: (sessionId: string, holder: string | null) =>
       Effect.gen(function* () {
@@ -2666,7 +2652,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     /** Moves the durable workflow to a mode; `run` also records the user's Plan approval. */
     moveWorkflow: (sessionId: string, holder: string | null, move: WorkflowMove) =>
       Effect.gen(function* () {
-        yield* refuseOtherHolder(sessionId, holder);
         yield* sessions.get(sessionId);
         if (isTruthy(yield* liveRuns.get(sessionId))) return yield* runInProgress();
         const state = yield* workflows.move(sessionId, move);
@@ -2693,7 +2678,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     /** Pauses, resumes or permanently stops the active Goal and cancels its run when needed. */
     controlWorkflow: (sessionId: string, holder: string | null, action: WorkflowAction) =>
       Effect.gen(function* () {
-        yield* refuseOtherHolder(sessionId, holder);
         yield* sessions.get(sessionId);
         const live = yield* liveRuns.get(sessionId);
         if (action === "resume" && isTruthy(live)) return yield* runInProgress();
@@ -2713,8 +2697,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       ),
 
     /**
-     * Claims or renews the session for a page, or gives it up. A page that is refused stays
-     * read-only; the answer says who holds the session from that page's point of view.
+     * Claims or renews the session's lease for a page, or gives it up. The lease refuses no
+     * change; the answer says who holds it from that page's point of view.
      */
     lease: (sessionId: string, holder: string, action: "claim" | "release") =>
       Effect.gen(function* () {
@@ -2735,7 +2719,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       idempotencyKey?: string,
     ) =>
       Effect.gen(function* () {
-        yield* refuseOtherHolder(sessionId, holder);
         yield* sessions.get(sessionId);
         const requested = yield* workTrace.requestSessionLifecycle({
           sessionId,
@@ -2753,7 +2736,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     /** Delete private conversation content while retaining project-owned task/memory provenance. */
     deleteSession: (sessionId: string, holder: string | null, idempotencyKey: string) =>
       Effect.gen(function* () {
-        yield* refuseOtherHolder(sessionId, holder);
         yield* sessions.get(sessionId);
         const requested = yield* workTrace.requestSessionLifecycle({
           sessionId,
@@ -2815,7 +2797,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     enqueue: (sessionId: string, holder: string | null, request: QueueRequest) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
-        yield* refuseOtherHolder(sessionId, holder);
         const { text, attachmentIds, mode } = request;
         if (text.trim().length === 0 && attachmentIds.length === 0)
           return yield* Effect.fail({ error: "empty_message" } as const);
@@ -2874,7 +2855,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       approved: boolean,
     ) =>
       Effect.gen(function* () {
-        yield* refuseOtherHolder(sessionId, holder);
         if (!(yield* relayed.answer(sessionId, approvalId, approved)))
           return yield* Effect.fail({ error: "approval_not_pending" } as const);
         return yield* relayed.pending(sessionId);
@@ -2885,8 +2865,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
      * unsaved draft may free the head, which the server then sends if nothing runs.
      */
     editQueued: (sessionId: string, holder: string | null, id: string, edit: QueueEdit) =>
-      refuseOtherHolder(sessionId, holder).pipe(
-        Effect.andThen(applyEdit(sessionId, id, edit)),
+      applyEdit(sessionId, id, edit).pipe(
         Effect.tap(() =>
           Effect.when(wakeNotifications(sessionId), Effect.succeed(!QueueEdit.$is("edit")(edit))),
         ),

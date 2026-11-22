@@ -11,33 +11,22 @@ import { Button } from "~/components/ui/button";
 import { cn } from "cn";
 import { api, isApiError } from "../api";
 import { ApprovalCard } from "./approval";
-import type { Refusal } from "memory-agent/chat-api";
 import type { PendingApproval } from "./pending-approval";
 import { refusalTexts } from "./refusals";
 import { AnswerProblem } from "./use-agent-chat";
 
-/**
- * A refused answer whose approvals are no longer the ones waiting: the server took it as a turn
- * with nothing to answer.
- */
-const answersOutdated = (refusal: Refusal) =>
-  refusal.error === "no_user_turn" || refusal.error === "empty_message";
-
 /** What the alert says for each problem, and what its button does. */
 const problems = {
   unsent: { text: msg`승인 응답을 전송하지 못했습니다.`, action: msg`응답 다시 보내기` },
-  outdated: {
-    text: msg`연결이 끊긴 사이 승인 목록이 바뀌었습니다. 서버의 최신 요청을 다시 불러와야 합니다.`,
-    action: msg`최신 요청 불러오기`,
-  },
+  refused: { action: msg`최신 요청 불러오기` },
   lost: {
     text: msg`승인한 뒤 실행을 이어가지 못했습니다. 요청을 폐기하면 승인을 기다리던 작업은 실행하지 않습니다. 대화와 작업 기록은 남습니다.`,
     action: msg`끊어진 요청 폐기하고 계속`,
   },
 } satisfies Record<
-  "unsent" | "outdated" | "lost",
+  "unsent" | "lost",
   { readonly text: MessageDescriptor; readonly action: MessageDescriptor }
->;
+> & { readonly refused: { readonly action: MessageDescriptor } };
 
 /** Answers the approvals a run waits for together, once every one has a decision. */
 export function ChatApprovals({
@@ -45,7 +34,6 @@ export function ChatApprovals({
   holder,
   approvals,
   problem,
-  readOnly,
   resuming,
   onResolve,
   onResync,
@@ -55,7 +43,6 @@ export function ChatApprovals({
   holder: string;
   approvals: readonly PendingApproval[];
   problem: AnswerProblem | null;
-  readOnly: boolean;
   resuming: boolean;
   onResolve: (decisions: Readonly<Record<string, boolean>>) => void;
   onResync: () => void;
@@ -87,7 +74,7 @@ export function ChatApprovals({
         ),
       ),
     );
-  // A refusal for another reason says why in the refusal's words; reading the approvals again
+  // A refusal says why in the refusal's words; reading the approvals again
   // shows what the server has now.
   const shown =
     problem === null
@@ -99,10 +86,8 @@ export function ChatApprovals({
             act: () => onResolve(decisions),
           }),
           refused: ({ refusal }) => ({
-            text: t(
-              answersOutdated(refusal) ? problems.outdated.text : refusalTexts[refusal.error],
-            ),
-            action: t(problems.outdated.action),
+            text: t(refusalTexts[refusal.error]),
+            action: t(problems.refused.action),
             act: onResync,
           }),
           lost: () => ({
@@ -126,7 +111,7 @@ export function ChatApprovals({
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={readOnly || resuming || discarding}
+                disabled={resuming || discarding}
                 onClick={shown.act}
               >
                 <RefreshCwIcon
@@ -143,7 +128,7 @@ export function ChatApprovals({
           key={approval.id}
           approval={approval}
           decision={decisions[approval.id]}
-          disabled={readOnly || resuming || problem !== null}
+          disabled={resuming || problem !== null}
           onAnswer={(approved) => answer(approval.id, approved)}
         />
       ))}

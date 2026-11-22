@@ -15,7 +15,6 @@ import {
   KanbanBoardActions,
   KanbanOrchestrator,
   Projects,
-  SessionLeases,
   Sessions,
   Workflows,
 } from "memory-agent";
@@ -38,20 +37,12 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
     const events = yield* AppEvents;
     const decisions = yield* HumanDecisions;
     const orchestrator = yield* KanbanOrchestrator;
-    const leases = yield* SessionLeases;
     const boards = yield* Boards;
     const workflows = yield* Workflows;
     const actions = yield* KanbanBoardActions;
     const chat = yield* AgentChat;
     const active = yield* ActiveProvider;
     const workflow = yield* ImageMediaWorkflow;
-
-    /** Refuses a change while another page holds the session. */
-    const checkHolder = (sessionId: string, holder: string | undefined) =>
-      Effect.when(
-        Effect.fail({ error: "session_in_use" } as const),
-        Effect.map(leases.permits(sessionId, holder ?? null), (permitted) => !permitted),
-      );
 
     /** Refuses an external agent the project has not configured, trusted and started. */
     const checkAgent = (projectId: string, external: string) =>
@@ -122,9 +113,8 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
             SchemaError: kanbanRefusal.SchemaError,
           }),
         ),
-      answerDecision: ({ params: { session, decision }, headers, payload }) =>
-        checkHolder(session, headers["x-session-holder"]).pipe(
-          Effect.andThen(decisions.answer({ ...payload, sessionId: session, requestId: decision })),
+      answerDecision: ({ params: { session, decision }, payload }) =>
+        decisions.answer({ ...payload, sessionId: session, requestId: decision }).pipe(
           // The answer moved the card; the board's loop takes it up now instead of at its next look.
           Effect.tap((answered) => orchestrator.poke(answered.goalInstanceId)),
           Effect.catchTags({
@@ -143,9 +133,8 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
             SchemaError: kanbanRefusal.SchemaError,
           }),
         ),
-      editBoard: ({ params: { session }, headers, payload }) =>
+      editBoard: ({ params: { session }, payload }) =>
         Effect.gen(function* () {
-          yield* checkHolder(session, headers["x-session-holder"]);
           yield* sessions.get(session);
           const result = yield* workflows.editBoard(session, payload, user);
           yield* Effect.when(
@@ -196,9 +185,8 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
             SchemaError: kanbanRefusal.SchemaError,
           }),
         ),
-      kanbanAction: ({ params: { session }, headers, payload }) =>
-        checkHolder(session, headers["x-session-holder"]).pipe(
-          Effect.andThen(sessions.get(session)),
+      kanbanAction: ({ params: { session }, payload }) =>
+        sessions.get(session).pipe(
           Effect.andThen(
             Match.valueTags(payload, {
               Start: () =>
@@ -309,9 +297,8 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
         refusalsOnly(
           chat.continuePastUncertain(session, headers["x-session-holder"] ?? null, payload),
         ),
-      setModel: ({ params: { session }, headers, payload: { model } }) =>
+      setModel: ({ params: { session }, payload: { model } }) =>
         Effect.gen(function* () {
-          yield* checkHolder(session, headers["x-session-holder"]);
           // A model of its own must be one its provider lists; none needs no check.
           yield* Option.match(Option.fromNullishOr(model), {
             onNone: () => Effect.void,

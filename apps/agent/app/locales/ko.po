@@ -1822,18 +1822,10 @@ msgstr "다른 대화의 카드와는 순서를 바꿀 수 없습니다. 대화 
 msgid "다른 앱의 이름으로 등록하면 그 서버의 이용 약관에 어긋날 수 있습니다."
 msgstr "다른 앱의 이름으로 등록하면 그 서버의 이용 약관에 어긋날 수 있습니다."
 
-#: app/entry/chat/read-only-bar.tsx
-msgid "다른 창에서 이 대화를 쓰고 있습니다"
-msgstr "다른 창에서 이 대화를 쓰고 있습니다"
-
 #: app/entry/chat/board/board-surface.tsx
 #: app/entry/chat/decision-prompt.tsx
 msgid "다른 창에서 이 대화를 쓰고 있습니다."
 msgstr "다른 창에서 이 대화를 쓰고 있습니다."
-
-#: app/entry/chat/read-only-bar.tsx
-msgid "다른 창이 이 대화를 더 이상 쓰지 않습니다"
-msgstr "다른 창이 이 대화를 더 이상 쓰지 않습니다"
 
 #: app/entry/chat/refusals.ts
 #: app/entry/chat/subagent-panel.tsx
@@ -1884,14 +1876,12 @@ msgstr "다시 보내기"
 msgid "다시 불러도 같음"
 msgstr "다시 불러도 같음"
 
-#. Button that asks the server again whether this window may write
 #. Button that loads a list or settings section again after it failed to load
 #. Button that loads the conversation again after it failed to load
 #. Button that queues the failed statements for interpretation again
 #. Button that reruns a subagent task as a new attempt
 #: app/entry/chat/chat-history.tsx
 #: app/entry/chat/message.tsx
-#: app/entry/chat/read-only-bar.tsx
 #: app/entry/settings/pages/failed-interpretations.tsx
 #: app/entry/shared/load-failed.tsx
 msgid "다시 시도"
@@ -3975,10 +3965,6 @@ msgstr "아직 개선 항목을 찾은 적이 없습니다."
 msgid "아직 대화가 없습니다."
 msgstr "아직 대화가 없습니다."
 
-#: app/entry/chat/read-only-bar.tsx
-msgid "아직 쓰고 있어서 이어갈 수 없습니다. 그 창을 닫거나 다른 대화로 옮기면 이어갈 수 있습니다."
-msgstr "아직 쓰고 있어서 이어갈 수 없습니다. 그 창을 닫거나 다른 대화로 옮기면 이어갈 수 있습니다."
-
 #: app/entry/chat/board-panel.tsx
 msgid "아직 카드가 없습니다. Plan 작성자가 Plan을 만들면 여기에 보입니다."
 msgstr "아직 카드가 없습니다. Plan 작성자가 Plan을 만들면 여기에 보입니다."
@@ -4129,10 +4115,6 @@ msgstr "엔드포인트가 응답하지 않았습니다. 주소와 서버 상태
 msgid "엔드포인트나 모델을 찾지 못했습니다. 목록을 새로고침해 주십시오."
 msgstr "엔드포인트나 모델을 찾지 못했습니다. 목록을 새로고침해 주십시오."
 
-#: app/entry/chat/read-only-bar.tsx
-msgid "여기서는 읽기만 할 수 있습니다."
-msgstr "여기서는 읽기만 할 수 있습니다."
-
 #. Button that opens the endpoint's connection settings
 #: app/entry/navigation/compatible-accounts.tsx
 msgid "연결"
@@ -4170,14 +4152,6 @@ msgstr "연결됨"
 #: app/entry/navigation/compatible-accounts.tsx
 msgid "연결을 저장했습니다."
 msgstr "연결을 저장했습니다."
-
-#: app/entry/chat/chat-approvals.tsx
-msgid "연결이 끊긴 사이 승인 목록이 바뀌었습니다. 서버의 최신 요청을 다시 불러와야 합니다."
-msgstr "연결이 끊긴 사이 승인 목록이 바뀌었습니다. 서버의 최신 요청을 다시 불러와야 합니다."
-
-#: app/entry/chat/read-only-bar.tsx
-msgid "연결하지 못했습니다. 다시 시도해 주십시오."
-msgstr "연결하지 못했습니다. 다시 시도해 주십시오."
 
 #. Panel title: integrations, background loops and defects
 #: app/entry/report/report-bundle.tsx
@@ -4572,10 +4546,6 @@ msgstr "이 대화가 아직 답하는 중입니다. 답변이 끝난 뒤 다시
 msgid "이 대화로 아직 모델에 요청하지 않았습니다."
 msgstr "이 대화로 아직 모델에 요청하지 않았습니다."
 
-#: app/entry/chat/read-only-bar.tsx
-msgid "이 대화를 쓸 수 있는지 확인하지 못했습니다"
-msgstr "이 대화를 쓸 수 있는지 확인하지 못했습니다"
-
 #: app/entry/chat/board-panel.tsx
 msgid "이 대화에는 아직 Plan이 없습니다. Plan이 생기면 보드에 카드가 올라옵니다."
 msgstr "이 대화에는 아직 Plan이 없습니다. Plan이 생기면 보드에 카드가 올라옵니다."
@@ -4750,6 +4720,10 @@ msgstr "이미 다른 답이 기록됐습니다. 보드를 다시 확인해 주�
 msgid "이미 답한 도구 출력 비우기"
 msgstr "이미 답한 도구 출력 비우기"
 
+#: app/entry/chat/refusals.ts
+msgid "이미 답한 승인 요청입니다."
+msgstr "이미 답한 승인 요청입니다."
+
 #: app/entry/chat/subagent-panel.tsx
 msgid "이미 답했거나 더 이상 기다리지 않는 요청입니다. 남은 요청을 다시 불러왔습니다."
 msgstr "이미 답했거나 더 이상 기다리지 않는 요청입니다. 남은 요청을 다시 불러왔습니다."
@@ -4862,11 +4836,6 @@ msgstr "이번만 허용"
 #: app/entry/chat/refusals.ts
 msgid "이어서 읽을 답변을 찾을 수 없습니다."
 msgstr "이어서 읽을 답변을 찾을 수 없습니다."
-
-#. Button that takes over the conversation in this window
-#: app/entry/chat/read-only-bar.tsx
-msgid "이어서 작업"
-msgstr "이어서 작업"
 
 #: app/entry/chat/uncertain-runs.tsx
 msgid "이어서 진행하지 못했습니다."
