@@ -4,15 +4,15 @@
 
 ## 도달한 상태 수
 
-- `NoGoal`: 28
-- `Shaping`: 88
-- `Running`: 12
-- `GoalChanged`: 24
-- `Paused`: 80
-- `Blocked`: 24
-- `Stopped`: 92
-- `Closed`: 72
-- `Completed`: 84
+- `NoGoal`: 14
+- `Shaping`: 44
+- `Running`: 6
+- `GoalChanged`: 12
+- `Paused`: 40
+- `Blocked`: 12
+- `Stopped`: 46
+- `Closed`: 36
+- `Completed`: 42
 
 ## `NoGoal`
 

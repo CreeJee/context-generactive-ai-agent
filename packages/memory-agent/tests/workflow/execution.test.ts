@@ -228,17 +228,6 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
     }),
   );
 
-  it.effect("a state saved in Plan mode follows the permission mode too", () =>
-    Effect.gen(function* () {
-      const env = yield* TestEnv;
-      yield* ownerApproves;
-      const session = yield* planned([{ text: "The Plan is ready." }]);
-      yield* env.use(Effect.flatMap(Workflows, (workflows) => workflows.move(session.id, "plan")));
-      yield* runTurn(session.id, `${session.id}-turn`, "Yes, go on");
-      yield* waitForBoard(session.board);
-    }),
-  );
-
   it.effect("the owner starts no board while a question that blocks the Goal is open", () =>
     Effect.gen(function* () {
       const env = yield* TestEnv;

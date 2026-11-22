@@ -56,8 +56,8 @@ import {
   type WorkflowMove,
   type WorkflowPhase,
   WorkflowState,
-  decodedPlace,
-  storedPlaceFields,
+  decodedPhase,
+  StoredWorkflowPhase,
 } from "./contracts.ts";
 import type { TaskStatus } from "../work-trace/contracts.ts";
 import { notStartedStatus, validatePlanDependencies } from "./plan-schedule.ts";
@@ -90,7 +90,6 @@ export {
   VerificationStatus,
   WorkflowAction,
   WorkflowDisplay,
-  WorkflowMode,
   WorkflowMove,
   WorkflowPhase,
   WorkflowState,
@@ -239,7 +238,6 @@ export type UpdatePlan = typeof UpdatePlan.Type;
 
 const emptyState = (): WorkflowState => ({
   phase: "chat",
-  mode: "plan",
   goal: null,
   plan: null,
   ledger: [],
@@ -251,7 +249,7 @@ const PersistedPlanArtifact = Schema.Struct({
   steps: Schema.Array(PersistedPlanStep),
 });
 const PersistedWorkflowState = Schema.Struct({
-  ...storedPlaceFields,
+  phase: StoredWorkflowPhase,
   goal: Schema.NullOr(GoalArtifact),
   plan: Schema.NullOr(PersistedPlanArtifact),
   ledger: Schema.Array(LedgerEvent),
@@ -261,7 +259,7 @@ const persistedPlan = (plan: typeof PersistedPlanArtifact.Type | null): Workflow
 export const decodeWorkflowState = (json: string) =>
   Schema.decodeEffect(Schema.fromJsonString(PersistedWorkflowState))(json).pipe(
     Effect.map((stored): WorkflowState => ({
-      ...decodedPlace(stored),
+      phase: decodedPhase(stored.phase),
       goal: stored.goal,
       plan: persistedPlan(stored.plan),
       ledger: stored.ledger,
@@ -334,7 +332,6 @@ export class WorkflowTransitionRefused extends Schema.TaggedError<
 const withStanding = (state: WorkflowState, standing: Standing, at: string): WorkflowState => ({
   ...state,
   phase: standing.phase,
-  mode: standing.mode,
   goal:
     state.goal === null || standing.goal === null || standing.goal.status === state.goal.status
       ? state.goal
@@ -345,14 +342,7 @@ const withStanding = (state: WorkflowState, standing: Standing, at: string): Wor
       : { ...state.plan, status: standing.plan.status, updatedAt: at },
 });
 const unchanged = (next: WorkflowState, current: WorkflowState) =>
-  next.phase === current.phase &&
-  next.mode === current.mode &&
-  next.goal === current.goal &&
-  next.plan === current.plan;
-
-/** A ledger's name for where a state is; shaping and running say whose approval they wait for. */
-const placeText = ({ phase, mode }: WorkflowState) =>
-  phase === "shaping" || phase === "running" ? `${phase} (${mode})` : phase;
+  next.phase === current.phase && next.goal === current.goal && next.plan === current.plan;
 
 const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
   Effect.gen(function* () {
@@ -492,9 +482,9 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         },
       );
       yield* sql`INSERT INTO workflow_state_revisions
-        (session_id, phase, mode, goal_json, plan_json, ledger_length, goal_version, plan_version,
+        (session_id, phase, goal_json, plan_json, ledger_length, goal_version, plan_version,
          provenance, created_at, goal_instance_id, author_json)
-        VALUES (${sessionId}, ${state.phase}, ${state.mode}, ${goalJson}, ${planJson},
+        VALUES (${sessionId}, ${state.phase}, ${goalJson}, ${planJson},
           ${state.ledger.length},
           ${state.goal?.version ?? null}, ${state.plan?.version ?? null}, 'recorded', ${now},
           (SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ${sessionId}),
@@ -736,7 +726,6 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         : insertGoalIdentity(sessionId, newId, now);
       yield* save(sessionId, {
         phase: standing.phase,
-        mode: standing.mode,
         goal: {
           ...input.goal,
           version: 1,
@@ -1005,7 +994,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         Effect.map((repaired) => repaired.flat()),
       ),
 
-      /** Works in a mode the user chose, or runs the approved Plan (`run`). */
+      /** Works in plain chat or shapes the Goal as the user chose, or runs the approved Plan (`run`). */
       move: (sessionId: string, move: WorkflowMove) =>
         transacted(
           Effect.gen(function* () {
@@ -1023,7 +1012,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
               ...next,
               ledger: [
                 ...next.ledger,
-                event(current, "phase_changed", `${placeText(current)} -> ${placeText(next)}`, now),
+                event(current, "phase_changed", `${current.phase} -> ${next.phase}`, now),
               ],
             });
           }),

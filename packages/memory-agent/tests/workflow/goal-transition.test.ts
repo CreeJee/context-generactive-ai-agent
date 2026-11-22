@@ -211,7 +211,6 @@ const transitionCases: ReadonlyArray<{
   readonly admission: Expected;
 }> = [
   { ...admissible, name: "Goal mode with an existing Goal", admission: applied },
-  { ...admissible, name: "Plan mode with an existing Goal", to: "plan", admission: applied },
   {
     ...admissible,
     name: "completed workflow",
@@ -578,7 +577,6 @@ testAgent()("new Goal transition across reopening", (it) => {
         expect(newId).not.toBe(old);
         expect(yield* workflows.get(session)).toMatchObject({
           phase: "shaping",
-          mode: "goal",
           plan: null,
           goal: { version: 1, evidence: [], verification: { status: "not_run", evidence: [] } },
         });
@@ -641,7 +639,6 @@ testAgent()("new Goal transition across reopening", (it) => {
         yield* expectHistoryKept(f.session, before);
         expect(yield* f.workflows.get(f.session)).toMatchObject({
           phase: "shaping",
-          mode: "goal",
           goal: { statement: "second", version: 1 },
           plan: null,
         });

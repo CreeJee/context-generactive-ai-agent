@@ -43,7 +43,6 @@ const snapshot = (version: number): SessionRunState => ({
   },
   workflow: {
     phase: "shaping",
-    mode: "plan",
     goal: {
       version,
       statement: "Repair workflow",
@@ -131,7 +130,7 @@ describe("server mutation results", () => {
           const move = vi.spyOn(api, "moveWorkflow").mockResolvedValue(snapshot(2).workflow);
           const control = vi.spyOn(api, "controlWorkflow").mockResolvedValue(snapshot(2).workflow);
           const mutate = () =>
-            kind === "move" ? run.moveWorkflow("plan") : run.controlWorkflow("pause");
+            kind === "move" ? run.moveWorkflow("goal") : run.controlWorkflow("pause");
           yield* sdkCall(() => mutate());
           expect(client.getQueryData(queryKey)).toEqual(latest);
           const refusal = ApiError.make({ status: 409, code: "run_in_progress", reason: null });

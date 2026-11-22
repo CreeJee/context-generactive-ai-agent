@@ -108,7 +108,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat runs", (it) => 
         allowed: false,
         reason: "run_in_progress",
       });
-      expect(yield* Effect.flip(agent.moveWorkflow(session.id, null, "plan"))).toEqual({
+      expect(yield* Effect.flip(agent.moveWorkflow(session.id, null, "goal"))).toEqual({
         error: "run_in_progress",
       });
       expect(yield* agent.cancel(session.id, null)).toMatchObject({
@@ -137,12 +137,12 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat runs", (it) => 
     Effect.gen(function* () {
       const session = yield* chatSession;
       const agent = yield* agentChat;
-      yield* agent.moveWorkflow(session.id, null, "plan");
+      yield* agent.moveWorkflow(session.id, null, "goal");
       yield* sendInBackground(yield* openPage(session.id), "please be slow");
       yield* until(() => session.invocations().length === 1, "the Plan run to start");
       const running = yield* statusOf(session.id);
       expect(running.running).not.toBeNull();
-      expect(running.actions.moves.plan).toEqual({ allowed: false, reason: "run_in_progress" });
+      expect(running.actions.moves.goal).toEqual({ allowed: false, reason: "run_in_progress" });
       expect(yield* agent.cancel(session.id, null)).toMatchObject({
         runId: running.running!.runId,
         stopped: true,
@@ -151,10 +151,9 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat runs", (it) => 
       const stopped = yield* statusOf(session.id);
       expect(stopped.running).toBeNull();
       expect(stopped.lastRun).toMatchObject({ runId: running.running!.runId, status: "aborted" });
-      expect(stopped.actions.moves.plan).toEqual({ allowed: true });
+      expect(stopped.actions.moves.goal).toEqual({ allowed: true });
       expect(yield* (yield* Workflows).get(session.id)).toMatchObject({
         phase: "shaping",
-        mode: "plan",
       });
     }),
   );

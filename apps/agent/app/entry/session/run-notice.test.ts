@@ -24,7 +24,7 @@ const record = (
     windowKnown: false,
     leaveOutAtTokens: 128_000,
   },
-  workflow: { phase: "chat", mode: "plan", goal: null, plan: null, ledger: [] },
+  workflow: { phase: "chat", goal: null, plan: null, ledger: [] },
 });
 const ended = (status: "completed" | "interrupted" | "failed" | "aborted", code?: string) =>
   record({
