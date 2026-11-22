@@ -14,7 +14,7 @@ const notifyToolFor = (projectId: string, sessionId: string) =>
   );
 
 const rowsFor = (toSessionId: string) =>
-  sqlGet("SELECT count(*) AS rows FROM session_dispatches WHERE to_session_id = ?", toSessionId);
+  sqlGet("SELECT count(*) AS rows FROM session_inbox WHERE session_id = ?", toSessionId);
 
 testAgent()(function (it) {
   it.effect("a call stores a waiting dispatch for a chat conversation of the project", () =>
@@ -38,7 +38,7 @@ testAgent()(function (it) {
       );
       expect(
         yield* sqlGet(
-          "SELECT body, state, project_id, from_session_id, from_run_id, to_session_id, delivered_run_id, delivered_at FROM session_dispatches WHERE to_session_id = ?",
+          "SELECT json_extract(payload, '$.body') AS body, state, json_extract(payload, '$.projectId') AS project_id, json_extract(payload, '$.fromSessionId') AS from_session_id, json_extract(payload, '$.fromRunId') AS from_run_id, session_id AS to_session_id, delivered_run_id, delivered_at FROM session_inbox WHERE session_id = ?",
           other.id,
         ),
       ).toEqual({
@@ -177,7 +177,7 @@ testAgent()(function (it) {
       yield* env.reopen;
       expect(
         yield* sqlGet(
-          "SELECT id, state, body FROM session_dispatches WHERE to_session_id = ?",
+          "SELECT id, state, json_extract(payload, '$.body') AS body FROM session_inbox WHERE session_id = ?",
           other.id,
         ),
       ).toEqual({ id: before.id, state: "waiting", body: "persist" });
@@ -213,10 +213,7 @@ testAgent()(function (it) {
         ),
       );
       expect(
-        yield* sqlGet(
-          "SELECT state, delivered_run_id FROM session_dispatches WHERE id = ?",
-          stored.id,
-        ),
+        yield* sqlGet("SELECT state, delivered_run_id FROM session_inbox WHERE id = ?", stored.id),
       ).toEqual({ state: "delivered", delivered_run_id: "run-2" });
       expect(
         yield* env.use(
@@ -256,12 +253,10 @@ testAgent()(function (it) {
         { id: first.id, body: "one" },
         { body: "two", id: expect.any(String) },
       ]);
-      // Both rows carry the run's mark in the claims table.
+      // Both rows carry the run's mark in their claim columns.
       expect(
         yield* sqlAll(
-          "SELECT d.body AS body, c.run_id AS run_id FROM session_dispatch_claims c" +
-            " JOIN session_dispatches d ON d.id = c.dispatch_id" +
-            " WHERE c.dispatch_id IN (?, ?) ORDER BY d.body",
+          "SELECT json_extract(payload, '$.body') AS body, claimed_run_id AS run_id FROM session_inbox WHERE id IN (?, ?) AND claimed_run_id IS NOT NULL ORDER BY body",
           first.id,
           taken[1]!.id,
         ),
@@ -296,13 +291,13 @@ testAgent()(function (it) {
       // The claim is gone and the row is waiting again, with no delivery fields written.
       expect(
         yield* sqlGet(
-          "SELECT state, delivered_run_id, delivered_at FROM session_dispatches WHERE id = ?",
+          "SELECT state, delivered_run_id, delivered_at FROM session_inbox WHERE id = ?",
           stored.id,
         ),
       ).toEqual({ state: "waiting", delivered_run_id: null, delivered_at: null });
       expect(
         yield* sqlGet(
-          "SELECT count(*) AS n FROM session_dispatch_claims WHERE dispatch_id = ?",
+          "SELECT count(*) AS n FROM session_inbox WHERE id = ? AND claimed_run_id IS NOT NULL",
           stored.id,
         ),
       ).toEqual({ n: 0 });
@@ -335,13 +330,13 @@ testAgent()(function (it) {
       // The row keeps waiting, unclaimed, and the next run after the hold is lifted takes it.
       expect(
         yield* sqlGet(
-          "SELECT state, delivered_run_id, delivered_at FROM session_dispatches WHERE id = ?",
+          "SELECT state, delivered_run_id, delivered_at FROM session_inbox WHERE id = ?",
           stored.id,
         ),
       ).toEqual({ state: "waiting", delivered_run_id: null, delivered_at: null });
       expect(
         yield* sqlGet(
-          "SELECT count(*) AS n FROM session_dispatch_claims WHERE dispatch_id = ?",
+          "SELECT count(*) AS n FROM session_inbox WHERE id = ? AND claimed_run_id IS NOT NULL",
           stored.id,
         ),
       ).toEqual({ n: 0 });

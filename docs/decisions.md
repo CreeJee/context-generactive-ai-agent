@@ -5683,3 +5683,40 @@
 - 남긴 것: 저장된 값 `mode`와 `/execute`. `mode`는 읽지 않는다. 뒤따르는 작업이 지운다. `/plan`은
   없앴다.
 - 사용자: "프로젝트 권한모드 하나로 해야하는게 맞을듯.", "M1이 원래 의도였다."
+
+## 대화에 들어오는 메시지는 세션 inbox 하나에 둔다 (2026-11-22)
+
+- 결정(사용자): 대화에 들어오는 메시지는 한 종류다. 꼬리표 둘로 가른다. 누가 보냈는가(사용자, 끝난 작업,
+  다른 대화, 보드)와 언제 전달하는가(지금 끼어든다, 쉬고 있으면 깨운다, 다음 run을 기다린다). 세션 inbox 표
+  하나가 지금의 장부들을 대신한다.
+- 계기: 대화에 "사용자가 지금 치지 않은 메시지"가 들어오는 길이 다섯이었고, 보내는 쪽마다 표, claim 규칙,
+  재시작 복구, 알림 멈춤 검사를 따로 가졌다. 새 보내는 쪽이 생길 때마다 이것들을 다시 만들었다.
+
+  | 누가 보냈나          | 두던 곳                                          | 실행 중인 run에 끼어드나      | 쉬는 대화를 깨우나      |
+  | -------------------- | ------------------------------------------------ | ----------------------------- | ----------------------- |
+  | 사용자(대기 메시지)  | `queued_messages`                                | 도구 경계에서, 또는 답을 끊고 | 서버가 다음 턴으로 보냄 |
+  | 끝난 하위 작업       | `parent_notifications`                           | 다음 모델 호출 앞             | `delivery='wake'`일 때  |
+  | 끝난 백그라운드 작업 | `background_tasks.delivered_*`                   | 다음 모델 호출 앞             | `delivery='wake'`일 때  |
+  | 다른 대화            | `session_dispatches` + `session_dispatch_claims` | 다음 모델 호출 앞             | 안 깨움                 |
+  | 칸반 보드            | 메모리 `kanbanAttention`                         | 안 끼어듦                     | 깨움                    |
+
+- 첫 단계: `session_inbox` 표와 `SessionInbox` 서비스(`packages/memory-agent/src/sessions/inbox.ts`)를
+  만들었다. 행은 `sender`(user·task·conversation·board)와 `delivery`(interrupt·wake·next_run)를 가진다.
+  다른 대화가 남긴 메시지가 먼저 옮겨 왔다(`sender`는 conversation, `delivery`는 next_run). 동작은 같다:
+  다음 run에 전달하고, 쉬는 대화를 깨우지 않는다. `SessionDispatches`는 받는 대화 검사와 `notify_session`
+  도구를 맡고 저장과 읽기는 inbox를 부른다. 옛 행은 migration 한 단계가 옮기고 옛 표 둘을 지운다.
+- 대체하는 결정: "세션 dispatch는 표에 영속으로 저장한다 (2026-11-13)"의 표 이름(`session_dispatches`)과
+  "대상 세션의 다음 run에 전달한다 (2026-11-13)"의 claim 표(`session_dispatch_claims`). claim은 이제 inbox
+  행의 두 열(`claimed_run_id`, `claimed_at`)이다. claim한 run이 행을 들고 있는 동안 `state`는 `waiting`이다.
+- 달라진 것 둘:
+  - 옛 표는 보낸 대화가 지워지면 그 대화가 보낸 행도 지웠다(`ON DELETE CASCADE`). 이제 보낸 대화는 payload
+    안의 값이라, 보낸 대화가 지워져도 이미 남긴 메시지는 전달된다.
+  - 옛 표의 `CHECK (from_session_id <> to_session_id)`가 없어졌다. 자기에게 보내는 것은 `notify`의 검사만
+    막는다.
+- 남은 단계: 끝난 작업, 보드, 사용자의 대기 메시지를 inbox로 옮기고, 화면에 inbox를 보인다. `delivery`의
+  `wake`와 `interrupt`는 아직 아무도 쓰지 않는다. `wake`는 끝난 작업과 보드를 옮길 때, `interrupt`는 사용자의
+  대기 메시지를 옮길 때 쓴다.
+- 확인: `packages/memory-agent/tests/sessions/inbox.test.ts`(claim, 돌려주기, 전달, 알림 멈춤, 재시작 정리),
+  `tests/session-inbox-migration.test.ts`(옛 행과 claim이 옮겨짐), 그대로 통과하는
+  `tests/sessions/dispatches.test.ts`·`tests/agent/dispatch-delivery.test.ts`·
+  `tests/agent/notify-session-record.test.ts`.
