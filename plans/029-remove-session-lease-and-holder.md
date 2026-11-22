@@ -8,7 +8,7 @@
 > `apps/agent/app/.server`는 이름이 점으로 시작해서 `rg`가 기본으로 건너뛴다.
 >
 > **먼저 확인**: 계획 028이 들어와 있어야 한다.
-> `rg --hidden -n 'refuseOtherHolder|checkHolder|useSessionLease' packages/memory-agent/src apps/agent/app -g '!*.test.ts'`
+> `rg --hidden -n 'refuseOtherHolder|checkHolder|useSessionLease' packages/memory-agent/src apps/agent/app -g '!*.test.ts' -g '!*.md'`
 > 가 결과를 내면 028이 아직 없는 것이다. STOP이다.
 >
 > **Drift check**: 이 계획은 028 뒤의 코드를 고친다. 발췌의 줄 번호는 028 이전(`2dcc89aa`) 기준이라 몇
@@ -68,7 +68,7 @@ ACP holder 갱신을 걷어낸다."
 - 내보내기: `src/index.ts:459`(`SessionLeases, defaultLeaseTtlMs, makeLeases`), `src/index.ts:469`
   (`sessionHolderHeader, ClaimResult, LeaseView`), `src/tools/definitions.ts:41`.
 - layer: `src/layers.ts:113`(import), `179`(`leaseTtlMs` 옵션), `317`(`SessionLeases.layer(options.leaseTtlMs)`).
-  `leaseTtlMs`를 넘기는 테스트 지원 코드도 그 옵션을 뺀다.
+  `leaseTtlMs`를 넘기는 코드는 없다. `src/README.md:11`이 이 옵션을 적고 있으면 Step 4에서 고친다.
 
 ### 서버: `AgentChat`과 run 상태
 
@@ -201,8 +201,11 @@ ACP holder 갱신을 걷어낸다."
 
 **Out of scope**:
 
-- `apps/agent/server/tests/dev-agent-chat-boundary.test.ts`의 403 단언(다른 origin). `leases.claim`을 부르는
-  줄과 `X-Session-Holder`를 붙이는 줄만 지운다. `request` 도우미의 `holder` 인자를 빼고 호출을 맞춘다.
+- `apps/agent/server/tests/dev-agent-chat-boundary.test.ts`의 403 단언(다른 origin). 이 파일에서 지우는
+  것은 다음뿐이다: `leases.claim`을 부르는 줄, `X-Session-Holder`를 붙이는 줄, `request` 도우미의 `holder`
+  인자(호출을 맞춘다), 5행 import의 `SessionLeases`, 66·138·205행 `Effect.all({ leases: SessionLeases, … })`의
+  `leases: SessionLeases`와 그것을 받아 쓰던 이름. 이 파일은 `vp run agent#typecheck`의
+  `tsc -p server/tests/tsconfig.json`이 본다.
 - 다른 origin을 막는 코드(`SameSite` 관련).
 - "release"라는 낱말이 들어간 다른 것들(`releaseNext`, `releaseResources`, 릴리스 계약 등). lease와
   무관하다. `rg -i lease`는 이것들을 함께 잡으므로 `rg -w -i 'lease|leases'`나 이름으로 찾는다.
@@ -223,13 +226,23 @@ ACP holder 갱신을 걷어낸다."
 지운다. `open`은 claim 없이 세션을 연다. `BridgeSession`에서 `holder`와 `renew`를 빼고, 닫을 때의 release와
 `Fiber.interrupt(session.renew)`를 지운다. `app-api.ts`의 `sessionState`는 `holder` 없이
 `/api/sessions/<id>`를 부르고 `RunSummary`에서 `lease`를 뺀다. `ExplainedFailure`의 `session_in_use`를
-지우고 `vp run memory-agent#i18n:extract`를 돌린다. 브리지 테스트에서 lease 요청을 기대하던 단언을 지운다.
+지우고 `vp run memory-agent#i18n:extract`를 돌린다. 브리지 테스트(`tests/agents/acp-bridge.test.ts`,
+`tests/acp-app-api-effect.test.ts`)에는 lease를 단언하는 줄이 없다. 지울 단언이 없다.
+
+- `agent-bridge.ts` 408행의 `headers: { "x-session-holder": session.holder }`는 `headers: {}`로 둔다. endpoint가
+  `headers` schema를 선언하고 있는 동안에는 client 요청에 `headers` 키가 있어야 typecheck가 통과한다. 선언은
+  Step 3에서 지우고, 그때 이 `headers: {}`도 지운다.
+- 닫을 때의 `Effect.all([Fiber.interrupt(session.renew), Effect.ignore(api.lease(…, "release"))], …)`(735-752행
+  근처)에서 두 effect를 지우면 할 일이 남지 않는다. 빈 `Effect.all`이나 빈 `Effect.forEach`를 남기지 않고
+  `Ref.set(sessions, HashMap.empty())`만 남긴다.
 
 **Verify**:
 
-- `rg -n -i 'holder|lease' packages/memory-agent/src/acp -g '!*.test.ts' | rg -v -i 'release'` → 결과 없음
+- `rg -n -i 'holder|lease' packages/memory-agent/src/acp -g '!*.test.ts' -g '!*.md' | rg -v -i 'release'` →
+  `x-session-holder`가 없는 `headers: {}` 말고는 결과 없음(README는 Step 4에서 고친다)
 - `vp run memory-agent#typecheck` → exit 0
-- `cd packages/memory-agent && vp test run --maxWorkers=4 src/acp tests/acp`(있는 폴더만) → 모두 통과
+- `cd packages/memory-agent && vp test run --maxWorkers=4 src/acp tests/acp-app-api-effect.test.ts tests/agents/acp-bridge.test.ts`
+  → 모두 통과
 
 commit: `refactor(acp): 브리지가 세션 lease를 잡지 않는다`
 
@@ -237,16 +250,33 @@ commit: `refactor(acp): 브리지가 세션 lease를 잡지 않는다`
 
 1. `apps/agent/app/entry/session/session-lease.ts`를 지운다.
 2. `apps/agent/app/entry/api.ts`에서 `holder` 인자와 `"x-session-holder"` 헤더를 모두 지운다. `leaseAction`,
-   `LeaseView`의 import와 재내보내기를 지운다. 타입이 `headers` 객체를 요구하면 이 단계에서는
-   `headers: {}`를 넘기고 Step 3에서 지운다.
-3. `packages/memory-agent/src/api/chat-session.ts`의 `Send.holder`, `Answer.holder`와 두 헤더를 지운다.
+   `LeaseView`의 import와 재내보내기를 지운다. endpoint가 `headers`나 `query` schema를 선언하고 있는
+   동안에는 client 요청에 그 키가 있어야 typecheck가 통과한다. 그래서 이 단계에서는 `headers: {}`를 넘기고,
+   `sessionRunState`(703행 근처의 `query: { holder }`)는 `query: {}`를 넘긴다. Step 3에서 지운다.
+3. `packages/memory-agent/src/api/chat-session.ts`의 `Send.holder`, `Answer.holder`를 지우고, 두 헤더(183,
+   221행)는 같은 까닭으로 `headers: {}`로 둔다. Step 3에서 지운다.
 4. 두 typecheck를 돌려 오류가 가리키는 쓰임을 고친다. `holder`를 넘기던 prop과 인자를 지운다. `dual`의
    arity를 맞춘다("지킬 규칙").
 5. 테스트의 `holder` 인자를 지운다(`{ holder: "tab-a", content: "hi" }` → `{ content: "hi" }`).
+6. `holder`나 lease를 **예시 값**으로만 쓰는 테스트는 단언을 지우지 않고 예시를 바꾼다:
+   - `apps/agent/app/entry/shared/backend-restart.test.ts`: 전송 계층이 헤더, form 필드, JSON body를 그대로
+     보내는지 보는 테스트다. 서버 API와 상관없이 값이 지나가는지만 본다. 헤더 이름 `x-session-holder`는
+     `x-test-header`로(23, 39, 56-60, 160, 169행), form 필드 `holder`는 `note`로(118, 126행) 바꾼다. 203-222행은
+     경로 `/api/sessions/target/lease`를 `/api/sessions/target/note`로, body
+     `'{"holder":"page","action":"claim"}'`을 `'{"note":"page"}'`로, 테스트 이름의 "JSON lease uploads"를 "JSON
+     uploads"로 바꾼다. 단언은 바꾼 값으로 유지한다.
+   - `apps/agent/app/entry/session/session-lifecycle.test.ts` 97행: `toMatchObject`의 `headers`에서
+     `"x-session-holder": "holder-1"` 키만 지운다. `"content-type"`은 남긴다. `"holder-1"`을 넘기던 인자와
+     `toHaveBeenCalledWith(sessionId, "holder-1")`의 둘째 인자도 지운다.
+   - 같은 파일 116-121행(테스트 "keeps lease failures as errors")과 `session/use-run-state.test.tsx` 167행은
+     `session_in_use`를 "서버가 거절한 오류"의 예시로 쓴다. 이 단계에서는 그대로 둔다. Step 3에서 고친다.
+   - `apps/agent/app/entry/chat/chat-panel.browser.tsx` 140행 근처의 `/api/sessions/s1/lease` mock 분기는
+     화면이 더는 부르지 않으므로 지운다.
 
 **Verify**:
 
 - `rg --hidden -n -w 'holder|pageHolder' apps/agent/app -g '!*.md'` → `apps/agent/app/.server`의 줄만 남는다
+  (`backend-restart.test.ts`도 예시 이름을 바꿨으므로 나오지 않는다)
 - `rg -n 'x-session-holder' apps/agent/app/entry packages/memory-agent/src/api/chat-session.ts` → 결과 없음
 - 두 typecheck → exit 0
 - 고친 테스트 파일을 돌린다 → 모두 통과
@@ -265,19 +295,30 @@ commit: `refactor(app): 화면이 요청에 페이지 이름을 붙이지 않는
    적은 것을 지운다. `error` 배열에서 `SessionInUse`를 뺀다. 배열이 `SessionInUse` 하나뿐이었으면 그 `error`
    키를 지운다.
 5. route 핸들러 `apps/agent/app/.server/api/sessions.ts`, `trace.ts`와 `tests/agents/app-fetch.ts`를 맞춘다.
-6. 화면: `session_in_use` 문구와 분기("화면" 절의 목록)를 지운다. Step 2에서 `headers: {}`를 넘긴 곳이
-   있으면 지운다. fixture의 `lease` 필드를 지운다(`use-run-state.test.tsx`, `run-notice.test.ts`,
+6. 화면: `session_in_use` 문구와 분기("화면" 절의 목록)를 지운다. Step 1·2에서 둔 `headers: {}`와
+   `query: {}`를 지운다(`agent-bridge.ts`, `chat-session.ts`, `apps/agent/app/entry/api.ts`).
+   `session-lifecycle.test.ts` 116-121행은 `respond({ error: "run_in_progress" }, 409)`와
+   `{ status: 409, code: "run_in_progress" }`로 바꾸고 테스트 이름을 "keeps refusals as errors"로 바꾼다.
+   `use-run-state.test.tsx` 167행은 `code: "run_in_progress"`로 바꾼다(status 409는 그대로). fixture의 `lease` 필드를 지운다(`use-run-state.test.tsx`, `run-notice.test.ts`,
    `chat-panel.browser.tsx` 등 typecheck가 가리키는 곳).
 7. 두 typecheck가 깨끗해질 때까지 가리키는 쓰임을 고친다. 테스트에서 `agent.lease(…)`를 부르는 줄,
    `leases.claim(…)`을 부르는 줄, 메서드에 넘기던 holder 인자(`agent.compact(id, null)` → `agent.compact(id)`)를
-   지운다.
-8. `vp run agent#i18n:extract`와 `vp run memory-agent#i18n:extract`를 돌린다.
+   지운다. `tests/workflow/state.test.ts` 800-824행의 테스트("GET exposes the same policy with the requesting
+   page's lease")는 `["owner", "observer"]` 둘을 도는 뜻이 없어진다. 한 번만 부르고 이름에서 "with the
+   requesting page's lease"를 뺀다. 단언은 남긴다.
+8. Verify가 잡지 않는 남은 자리를 고친다:
+   - `tools/navigation-verification.mjs`의 `/lease` mock 분기와 `lease: { state: "mine" }` 필드.
+   - `packages/memory-agent/src/sessions/contracts.ts` 4-6행의 `lease-state.ts`를 말하는 주석,
+     `src/api/app-api/sessions.ts` 267-268행의 `SessionInUse`를 말하는 주석. 지운 것을 가리키는 문장만 고친다.
+9. `vp run agent#i18n:extract`와 `vp run memory-agent#i18n:extract`를 돌린다.
 
 **Verify**:
 
 - `rg --hidden -n 'SessionLeases|LeaseView|LeaseRequest|sessionHolderHeader|x-session-holder|session_in_use|leaseTtlMs|ClaimResult' packages/memory-agent apps/agent -g '!node_modules' -g '!*.md' -g '!build'`
   → 결과 없음
 - `rg --hidden -n -w 'holder' packages/memory-agent/src/agent packages/memory-agent/src/api apps/agent/app -g '!*.md'`
+  → 결과 없음
+- `rg -n -i -w 'lease' tools/navigation-verification.mjs apps/agent/app/entry/chat/chat-panel.browser.tsx`
   → 결과 없음
 - 두 typecheck → exit 0
 - `cd packages/memory-agent && vp test run --maxWorkers=4 tests/chat tests/workflow tests/compaction tests/integrations/archive.test.ts tests/agents`
@@ -292,7 +333,9 @@ commit: `refactor(chat): 세션 lease와 holder 인자를 지운다`
 
 1. lease, `holder`, `X-Session-Holder`, 423 `session_in_use`를 말하는 README 줄을 지우거나 고친다. 찾는 명령:
    `rg --hidden -n -i -w 'lease|leases|holder|session_in_use' apps packages docs/app-state-streams.md -g '*.md' -g '!node_modules'`
-   (`docs/decisions.md`의 지난 기록은 고치지 않는다.)
+   (`docs/decisions.md`의 지난 기록은 고치지 않는다.) 이 명령의 범위 밖에 있는 `tools/README.md` 17행 근처와
+   `docs/httpapi-migration.md`(25, 104행 근처)도 같은 식으로 고친다. `docs/httpapi-migration.md`가 지난 작업의
+   기록으로 쓰인 문단이면 고치지 않고 그대로 둔다.
 2. `docs/decisions.md` 끝의 "대화는 어느 탭에서든 조작한다 (2026-11-22)" 절(028이 썼다)에 한 줄을 더한다:
    "`holder` 인자, `X-Session-Holder` 헤더, lease API, `SessionLeases`, run 상태의 `lease` 필드를 지웠다. ACP
    브리지도 lease를 잡지 않아 같은 대화에 에디터 연결을 여럿 받는다."
@@ -305,8 +348,8 @@ commit: `docs: 세션 lease를 지운 것을 문서에 반영한다`
 ## Test plan
 
 - 새 테스트는 쓰지 않는다. 지우는 계획이다.
-- 지우는 테스트: `src/sessions/leases.test.ts`, `tests/session-leases-effect.test.ts`, lease 요청을 단언하는
-  ACP 브리지 테스트의 해당 줄.
+- 지우는 테스트: `src/sessions/leases.test.ts`, `tests/session-leases-effect.test.ts`. ACP 브리지 테스트에는
+  지울 단언이 없다.
 - 028의 `tests/chat/two-pages.test.ts`가 그대로 통과해야 한다(인자만 맞춘다). 이 테스트가 "두 탭이 함께
   조작한다"를 지킨다.
 

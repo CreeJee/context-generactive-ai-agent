@@ -431,6 +431,9 @@ ProtectedBranchMerge 1), 카드 161장 가운데 위험 2장·경계 0·필요�
   20이 아니라 19다. migration 테스트는 단계를 "마지막"이 아니라 이름으로 찾는다.
 - 032: 독립 검토를 한 번 거쳐 고쳤다(2026-11-22). 상태 수 문서 `docs/goal-transitions.md`와 golden 파일 셋이
   `mode`를 담고 있어 테스트가 깨질 곳이었다.
-- 029: 검토를 거치지 않았다. 지우는 계획이고 typecheck가 쓰임을 가리키므로, 실행 뒤 diff 검토로 본다.
+- 029: 독립 검토를 한 번 거쳐 고쳤다(2026-11-22). endpoint가 `headers`·`query` schema를 선언하는 동안에는 client
+  요청에서 그 키를 지울 수 없어, 앞 단계는 `headers: {}`·`query: {}`를 두고 마지막 서버 단계에서 지우게 했다.
+  Verify의 `rg`가 README를 잡던 것, 없는 테스트 폴더 이름, `holder`를 예시 값으로만 쓰는 전송 테스트의 처리를
+  고쳤다.
 - 028: route 핸들러 폴더 `apps/agent/app/.server`는 이름이 점으로 시작해 `rg`가 기본으로 건너뛴다. 같은 lease
   검사(`checkHolder`)가 거기에 하나 더 있었다. 이 저장소에서 쓰임을 찾을 때는 `rg --hidden`을 쓴다.
