@@ -318,7 +318,7 @@ export function ApprovalCard({
   onAnswer,
 }: {
   approval: PendingApproval;
-  /** A read-only page shows the request but cannot answer it. */
+  /** The request is shown but takes no answer now. */
   disabled: boolean;
   /** Who asks, when it is not the conversation's own agent (a subagent). */
   requester?: string;

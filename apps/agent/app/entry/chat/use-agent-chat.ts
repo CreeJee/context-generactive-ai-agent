@@ -58,7 +58,7 @@ export function useAgentChat({
   onNotTaken,
 }: {
   readonly sessionId: string;
-  /** The page that holds the session; the server refuses another page's turns and answers. */
+  /** This page's name, sent with its turns and answers. */
   readonly holder: string;
   readonly onCustomEvent: (event: CustomEvent) => void;
   readonly onNotTaken: (turn: NotTaken) => void;

@@ -68,7 +68,7 @@
 - 분류가 끝나 보류한 카드가 없으면 보드 루프가 `Workflows.cardsReclassified`(전이 `CardsReclassified`)로 Plan의 `goalVersion`을 지금 Goal 버전으로 올린다. 그래서 상태는 `GoalChanged`에서 `Running`으로 돌아가고 다시 승인하지 않아도 된다. 분류하는 동안 `reconcile`은 활성 보드의 running phase를 내리지 않는다(`reconciledPhase`의 `kanban`).
 - 처음 Plan의 승인자는 프로젝트 권한 모드가 정한다. Goal을 처음 저장한 run은 Plan을 만들지 않고 보드를 시작하지 않는다. `ask`에서는 사용자가 "승인하고 실행"을 눌러야 시작한다. `auto`·`full`에서는 서버가 시작한다(`agent/chat.ts`의 `planReady`와 `goalsUserAnswered`): 끝난 run이 사용자의 턴으로 시작했고 그때 이미 지금 Goal이 있었으며, Goal에 막는 질문이 없고, 지금 Goal의 ready Plan이 있어야 한다. 서버를 재시작하면 답했다는 기록은 사라지고 사용자의 다음 턴이 다시 만든다
 - 사용자는 chat이나 Goal 만들기(`goal`)로 옮기거나 Plan을 실행(`run`)한다. `goal`로 옮기면 shaping이 되고, 실행 중인 보드는 다시 승인할 때까지 카드를 배정하지 않는다. `completed`는 서버만 정한다. `run` 외의 이동은 산출물을 승인하거나 바꾸지 않는다.
-- `run`(running 진입)은 `plan.goalVersion === goal.version`이고 plan status가 `ready` 또는 `executing`일 때만 허용된다. lease가 다른 소유자면 `session_in_use`, run이 진행 중이면 이동 요청과 resume이 `run_in_progress`로 거부된다.
+- `run`(running 진입)은 `plan.goalVersion === goal.version`이고 plan status가 `ready` 또는 `executing`일 때만 허용된다. run이 진행 중이면 이동 요청과 resume이 `run_in_progress`로 거부된다.
 - 실행 가능 조건: phase가 running이고, goal status가 active, plan status가 executing이며, plan의 goalVersion이 goal의 version과 같아야 한다.
 - 연속 실행의 blocker는 서버만 기록한다(보드를 시작하지 못함, provider 재시도, 재시작). 모델이 `WorkflowBlocker`를 기록하던 때의 사유(`user_decision`·`permission`·`repeated_failure`)와 `dependency_stalled`는 저장된 실행을 읽으려고 남긴다.
 - 턴을 끝내는 모델 텍스트로는 Plan이 완료되지 않는다(`WorkflowExecution` doc).

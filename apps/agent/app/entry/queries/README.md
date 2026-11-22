@@ -24,7 +24,7 @@
 - `useDecisionInboxQuery` / `useProjectBoardsQuery` — project 범위 일반 `useQuery` 훅
 - `useSuspenseMcpQuery` / `useSuspenseAgentsQuery` / `useSuspenseSkillsQuery` / `useSuspenseProjectKanbanQuery` — project 범위 Suspense 훅
 - `usableAgents(overview)` — `api.externalAgents` 결과에서 shadowed가 아니고 `AgentTrustState`가 `trusted`인 agent의 이름만 고른다
-- `useRunStateQuery` / `useObservedRunStateQuery` — session run-state 훅. `Function.dual(3)`과 `Function.dual(4)`로 data-first와 data-last `(sessionId, holder[, enabled])(projectId)` 호출을 지원한다
+- `useRunStateQuery` — session run-state 훅. `Function.dual(3)`으로 data-first와 data-last `(sessionId, holder)(projectId)` 호출을 지원한다
 - `useQueueQuery` / `useSubagentsQuery` / `useApprovalsQuery` / `useBoardQuery` / `useDecisionsQuery` / `useKanbanQuery` / `useSessionTraceQuery` — `Function.dual(2)` session 훅. `(projectId, sessionId)` 또는 `(sessionId)(projectId)`로 호출한다
 - `useSessionTraceTaskQuery` — `Function.dual(3)` session 훅. 작업 하나의 상세를 읽고, taskId가 null이면 비활성화한다
 - `QuerySection` — `QueryErrorResetBoundary`, 내부 `SectionErrorBoundary`, `Suspense`(Spinner fallback)로 감싸 실패나 로딩을 설정 섹션 안에 가두는 React 컴포넌트. '다시 시도' 버튼이 query reset과 오류 상태 초기화를 함께 한다

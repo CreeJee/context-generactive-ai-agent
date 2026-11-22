@@ -5,7 +5,7 @@ import { isTruthy } from "../../truthy.ts";
 const holderKey = "context-agent:page-holder";
 
 const newHolder = () => {
-  // Browser boundary: session ownership requires a cryptographic token.
+  // Browser boundary: the page's name is a cryptographic token.
   const created = Effect.runSync(browserCrypto.uuidV4());
   try {
     sessionStorage.setItem(holderKey, created);

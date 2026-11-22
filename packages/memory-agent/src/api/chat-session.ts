@@ -51,7 +51,7 @@ export type UserContent = RunInput["messages"][number]["content"];
 
 /** A user turn the page sends. */
 export interface Send {
-  /** The page that holds the session. */
+  /** The page that sends it. */
   readonly holder: string;
   readonly content: UserContent;
   readonly forwardedProps?: RunInput["forwardedProps"];

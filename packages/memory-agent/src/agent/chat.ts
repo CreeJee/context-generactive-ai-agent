@@ -395,7 +395,7 @@ const AutomaticRun = Data.taggedEnum<AutomaticRun>();
 
 /** A request to start a run: who sent it, and the run it asks for. */
 export interface ChatRequest {
-  /** The page holding the session, from `X-Session-Holder`. */
+  /** The page that sent the request, from `X-Session-Holder`. */
   readonly holder: string | null;
   readonly input: RunInput;
 }
@@ -739,8 +739,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     ),
     Effect.forkScoped,
   );
-  // An owner that vanished without releasing: read-only pages hear the session is free so one can
-  // take over.
+  // A lease that ran out without being released: pages read the session's state again.
   yield* leases.onExpired((sessionId) => events.publishSession(sessionId, "run-state"));
   /** The run's record, when it belongs to the session. */
   const sessionRun = (sessionId: string, runId: string) =>
@@ -2494,8 +2493,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       ),
 
     /**
-     * Before a paid image generation for the conversation: refuses another page's session and a
-     * session that is answering, and gives the chat route the generation starts from.
+     * Before a paid image generation for the conversation: refuses a session that is answering,
+     * and gives the chat route the generation starts from.
      */
     imageOrigin: (sessionId: string, _holder: string | null) =>
       Effect.gen(function* () {
@@ -2604,7 +2603,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
 
     /**
      * What a page needs beyond the transcript: whether a run is producing, how the last one ended,
-     * and whether this page (`holder`) may change the session.
+     * and the session's lease as this page (`holder`) sees it.
      */
     status: (sessionId: string, holder: string | null) =>
       Effect.gen(function* () {
@@ -2698,8 +2697,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       ),
 
     /**
-     * Claims or renews the session for a page, or gives it up. A page that is refused stays
-     * read-only; the answer says who holds the session from that page's point of view.
+     * Claims or renews the session's lease for a page, or gives it up. The lease refuses no
+     * change; the answer says who holds it from that page's point of view.
      */
     lease: (sessionId: string, holder: string, action: "claim" | "release") =>
       Effect.gen(function* () {
