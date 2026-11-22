@@ -15,10 +15,10 @@ import { scriptedRun } from "../support/loop-run.ts";
 
 const Count = Schema.Struct({ count: Schema.Finite });
 
-/** The one row of `session_dispatches` the id names, as fixture SQL reads it. */
+/** The one row of `session_inbox` the id names, as fixture SQL reads it. */
 const dispatchRow = (id: string) =>
   Effect.flatMap(
-    sqlGet("SELECT state, delivered_run_id, delivered_at FROM session_dispatches WHERE id = ?", id),
+    sqlGet("SELECT state, delivered_run_id, delivered_at FROM session_inbox WHERE id = ?", id),
     Schema.decodeUnknownEffect(
       Schema.Struct({
         state: Schema.Literals(["waiting", "delivered"]),
@@ -31,7 +31,10 @@ const dispatchRow = (id: string) =>
 /** The claims on one dispatch. */
 const claimCount = (id: string) =>
   Effect.flatMap(
-    sqlGet("SELECT count(*) AS count FROM session_dispatch_claims WHERE dispatch_id = ?", id),
+    sqlGet(
+      "SELECT count(*) AS count FROM session_inbox WHERE id = ? AND claimed_run_id IS NOT NULL",
+      id,
+    ),
     Schema.decodeUnknownEffect(Count),
   );
 
@@ -256,7 +259,7 @@ testAgent({ testProvider: {} })("dispatch delivery in chat", (it) => {
 function dispatchRowByTarget(sessionId: string) {
   return Effect.flatMap(
     sqlGet(
-      "SELECT state, delivered_run_id, delivered_at FROM session_dispatches WHERE to_session_id = ?",
+      "SELECT state, delivered_run_id, delivered_at FROM session_inbox WHERE session_id = ?",
       sessionId,
     ),
     Schema.decodeUnknownEffect(

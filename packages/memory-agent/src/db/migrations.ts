@@ -765,7 +765,7 @@ export const notificationDeliveryMigration = `
   UPDATE work_tasks SET delivery = 'next_run' WHERE parent_run_id LIKE 'kanban:%';
 `;
 
-/** The step that creates the session inbox. */
+/** The step that creates the session inbox and moves the session dispatches into it. */
 export const sessionInboxMigration = `
   -- A message that enters a conversation without the user typing it now (decisions.md "대화에
   -- 들어오는 메시지는 세션 inbox 하나에 둔다"). \`sender\` says who sent it and \`delivery\` when it is
@@ -792,6 +792,18 @@ export const sessionInboxMigration = `
   CREATE INDEX session_inbox_waiting ON session_inbox(session_id, state, created_at);
   CREATE INDEX session_inbox_claimed ON session_inbox(claimed_run_id)
     WHERE claimed_run_id IS NOT NULL;
+  -- The messages another conversation left (session dispatches) move here, a claim as the two
+  -- claim columns of its row, and their own tables go.
+  INSERT INTO session_inbox (id, session_id, sender, delivery, payload, state, claimed_run_id,
+    claimed_at, delivered_run_id, created_at, delivered_at)
+  SELECT d.id, d.to_session_id, 'conversation', 'next_run',
+    json_object('projectId', d.project_id, 'fromSessionId', d.from_session_id,
+      'fromRunId', d.from_run_id, 'body', d.body),
+    d.state, c.run_id, c.claimed_at, d.delivered_run_id, d.created_at, d.delivered_at
+  FROM session_dispatches d
+  LEFT JOIN session_dispatch_claims c ON c.dispatch_id = d.id AND d.state = 'waiting';
+  DROP TABLE session_dispatch_claims;
+  DROP TABLE session_dispatches;
 `;
 
 /**

@@ -319,7 +319,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     FreePages.layer,
     PlannerStatistics.layer,
     MessageQueue.layer,
-    SessionDispatches.layer,
+    SessionDispatches.layer.pipe(Layer.provide(SessionInbox.layer)),
     SessionInbox.layer,
     Interpretations.layer,
     RelayedApprovals.layer,
