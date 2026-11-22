@@ -21,7 +21,7 @@ Query keys are hierarchical: global, project, session, then resource. Events inv
 - One global stream is open only while Settings is open or an OAuth login is pending.
 - Changing selection or closing Settings aborts the provider and closes its `EventSource`.
 - Session event invalidations are coalesced for 50 ms and duplicate/older revisions are ignored.
-- The session owner lease renewal remains a 20-second heartbeat. Retry/backoff, edit debounce, and the importer's five-minute source schedule are not app-state polling and remain unchanged.
+- Retry/backoff, edit debounce, and the importer's five-minute source schedule are not app-state polling and remain unchanged.
 
 Normal conversation view therefore has **2 app invalidation EventSources**. Settings raises that to **3**. The Work Trace hook adds its durable stream, opening the Work Trace panel may add its panel stream, and an active chat adds the fetch-based chat stream. This inventory matters on HTTP/1.1, where the busiest view can approach the per-origin connection limit; HTTP/2 is preferred. If another persistent stream is added, multiplex or remove an existing connection rather than adding a widget-local EventSource.
 
@@ -60,4 +60,4 @@ pnpm exec vp test
 pnpm build
 ```
 
-A source audit should find no general browser `setInterval` polling under `apps/agent/app/entry`; `session-lease.ts` is the intentional owner heartbeat exception.
+A source audit should find no general browser `setInterval` polling under `apps/agent/app/entry`.

@@ -19,7 +19,7 @@
 - `EventConnectionContext` / `useEventConnection()` — 연결 상태 Context와 hook이다. 기본값은 `{ _tag: "connecting" }`이다.
 - `SessionEventScopeContext` / `useSessionEventScope()` — 세션 스코프 Context와 hook이다. 기본값은 `{ projectId: null, sessionId: null }`이다.
 - `useProjectScope(consumer)` — 현재 projectId를 반환한다. 값이 없으면 `ProjectScopeMissing`을 throw한다.
-- `ProjectScopeMissing` — 세션 뷰가 프로젝트 스코프 밖에서 렌더링될 때 쓰는 TaggedError이다. `consumer`는 `chat`,`delegated_work`,`message_queue`,`relayed_approval`,`run_state`,`session_lease`,`work_trace` 중 하나이다.
+- `ProjectScopeMissing` — 세션 뷰가 프로젝트 스코프 밖에서 렌더링될 때 쓰는 TaggedError이다. `consumer`는 `chat`,`delegated_work`,`message_queue`,`relayed_approval`,`run_state`,`work_trace` 중 하나이다.
 
 ## Invariants
 

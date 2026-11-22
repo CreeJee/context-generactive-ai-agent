@@ -17,12 +17,12 @@
 - `useImageGenerationEnabledMutation` / `useCrossProviderConsentMutation` / `useKagiMutation` / `useImportMutation` / `useEmbeddingMutation` / `useAddProjectMutation` — 설정 쓰기 후 해당 global 쿼리를 무효화한다.
 - `useGoalOrderMutation(projectId)` — `api.moveGoal`로 대화 Goal 순서를 바꾼다. 성공하면 project kanban 캐시에 쓰고, 끝나면 boards를 무효화한다.
 - `AgentChange` / `useExternalAgentMutation(projectId)` — 외부 에이전트 trust와 reconnect용 tagged enum과 그 mutation
-- `SessionLifecycleChange` / `useSessionLifecycleMutation` — 대화 archive·restore·delete. holder는 `() => string` thunk다. 사이드바가 다른 프로젝트의 대화도 다루므로 각 변경이 `projectId`와 `sessionId`를 함께 담는다. 훅은 렌더 중에만 부를 수 있어서, 프로젝트를 훅 인자가 아니라 변경 값으로 받는다. 성공하면 그 변경의 프로젝트 sessions 키를 무효화한다.
+- `SessionLifecycleChange` / `useSessionLifecycleMutation` — 대화 archive·restore·delete. 사이드바가 다른 프로젝트의 대화도 다루므로 각 변경이 `projectId`와 `sessionId`를 함께 담는다. 훅은 렌더 중에만 부를 수 있어서, 프로젝트를 훅 인자가 아니라 변경 값으로 받는다. 성공하면 그 변경의 프로젝트 sessions 키를 무효화한다.
 - `useMcpMutation` (신뢰·로그인·로그인 취소·로그아웃) / `useProtectedBranchesMutation` / `usePermissionModeMutation` / `useCrossRecallMutation` / `useHideProjectMutation` / `useCreateSessionMutation` — 프로젝트 단위 설정과 세션 생성 mutation
 - `useRestoreProjectMutation` — `api.restoreProject`로 보관한 프로젝트를 목록에 되돌린다. 성공하면 projects 키를 무효화하고, 그 아래의 보관 목록도 함께 다시 읽는다.
 - `KanbanAction` — 칸반 동작 tagged enum: `Start`, `RestartLoop`, `Intent{intent: BoardIntent}`, `SetDependencies{dependsOn}`
-- `useKanbanMutation` — 한 대화의 칸반 시작, intent, 의존성 변경. 끝나면 kanban과 board를 무효화한다(dual arity 3).
-- `useBoardsKanbanMutation` — 여러 Plan을 보여 주는 보드에서 요청마다 sessionId를 지정하는 칸반 동작. Transfer면 받는 대화의 kanban·board도 무효화한다(dual arity 2).
+- `useKanbanMutation` — 한 대화의 칸반 시작, intent, 의존성 변경. 끝나면 kanban과 board를 무효화한다(dual arity 2).
+- `useBoardsKanbanMutation` — 여러 Plan을 보여 주는 보드에서 요청마다 sessionId를 지정하는 칸반 동작. Transfer면 받는 대화의 kanban·board도 무효화한다(`projectId`만 받는 보통 함수).
 - `useEditBoardMutation` / `useBoardsEditMutation` — `api.editBoard`로 보드를 편집한다. 끝나면 board·runState(+boards)를 무효화한다.
 - `useAnswerDecisionMutation` — 프로젝트 안 아무 세션의 카드 결정에 답한다. board·decisions·kanban·project decisions를 무효화한다.
 - `WorkflowChange` / `useWorkflowMutation` — workflow 변경 tagged enum과 mutation. `api.moveWorkflow` 또는 `api.controlWorkflow`를 호출한다(301행 이후는 그래프로만 확인).
@@ -39,8 +39,7 @@
 - quota·auth·models 갱신은 `void client.invalidateQueries`로 띄우고 기다리지 않는다. 그 오류는 React Query가 해당 쿼리에 보고한다(주석 근거).
 - openai-compatible 계정 목록을 바꾸면 `publishCompatibleAccounts`가 compatibleAccounts 캐시를 쓰고 `auth("openai-compatible")`와 models를 무효화해야 한다.
 - 설정 mutation의 응답은 그 쿼리의 완전한 새 서버 스냅샷이다. 그래서 conversation·kanban·recall·project kanban은 `setQueryData`로 바로 덮어쓴다.
-- 세션 범위 API 호출에는 항상 `holder`(세션 소유자 식별자)를 넘긴다. `useSessionLifecycleMutation`은 holder를 thunk로 받아 mutate 시점에 평가한다.
-- dual 훅의 arity는 고정이다. `(projectId, sessionId, holder)` 형태는 3, `(projectId, holder)` 형태는 2다. data-last 형태는 `projectId`를 마지막에 받는다.
+- dual 훅의 arity는 고정이다. `(projectId, sessionId)` 형태는 2다. data-last 형태는 `projectId`를 마지막에 받는다. `projectId`만 받는 훅(`useAnswerDecisionMutation`, `useBoardsKanbanMutation`, `useBoardsEditMutation`)은 dual이 아닌 보통 함수다.
 - 보드와 칸반 변경(`useEditBoardMutation`, `useKanbanMutation`, `useBoardsKanbanMutation`, `useBoardsEditMutation`, `useAnswerDecisionMutation`, `useGoalOrderMutation`의 boards)은 `onSettled`에서 무효화한다. 실패해도 다시 읽는다. 나머지 대부분은 `onSuccess`에서만 무효화한다.
 - Transfer intent는 보내는 대화와 받는 대화(`intent.toSessionId`)의 kanban·board를 둘 다 무효화하고, project boards도 무효화한다.
 - tagged enum(`KanbanAction`, `AgentChange`, `SessionLifecycleChange`, `WorkflowChange`)은 `$match`로 모든 케이스를 API 호출에 매핑한다. 케이스를 추가하면 매핑도 추가해야 한다.

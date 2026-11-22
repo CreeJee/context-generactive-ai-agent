@@ -22,7 +22,7 @@
 - `saveCodeSkillSpec` / `writeOutsideFileSpec` / `deleteOutsideFileSpec` — 게이트 도구의 이름·설명·파라미터 스펙
 - `SaveCodeSkillInput` / `RunSkillInput` / `WriteOutsideFileInput` / `DeleteOutsideFileInput` / `TsSkillProgram` / `ShSkillProgram` / `NetworkHost` — 코드 스킬·외부 파일 도구 입력 스키마
 - `PermissionReviewPayload` / `PermissionReviewResponse` — 권한 검토 요청(`askedBy: review | every_call`)과 응답 계약
-- `definitions.ts` 재수출 묶음 — run-state, report(diagnosis/bundle/delivery), uncertain-runs, lease, shown-failure, subagent, loop-health, provider-retry, approvals, queue, improve 계약을 채팅 UI와 공유
+- `definitions.ts` 재수출 묶음 — run-state, report(diagnosis/bundle/delivery), uncertain-runs, shown-failure, subagent, loop-health, provider-retry, approvals, queue, improve 계약을 채팅 UI와 공유
 - `ApprovedTools` — 코드 스킬 저장·`run_skill`(sh 스킬 샌드박스 실행)·`run_command`(저장하지 않는 스크립트의 샌드박스 실행)·외부 파일 쓰기/삭제를 제공하는 서비스(`ApprovedTools.layer`)
 - `save_project_commands` — 프로젝트 명령 목록에 줄을 넣고 빼는 도구(`projects/commands.ts`의 `ProjectCommands.toolFor`). 승인 없이 실행된다. 목록은 메모이고, 거기 있는 명령도 `run_command`로 실행한다. 채팅 run과 그 서브에이전트, 카드 에이전트가 받고 검증자는 받지 않는다. 프로그램(`run_code`, ts 스킬)은 부르지 못한다
 - `save_project_terms` — 프로젝트 용어 목록에 낱말의 뜻을 넣고 빼는 도구(`projects/terms.ts`의 `ProjectTerms.toolFor`). 승인 없이 실행된다. 채팅 run만 받는다. 카드 에이전트와 검증자는 목록을 읽기만 한다. 프로그램(`run_code`, ts 스킬)은 부르지 못한다

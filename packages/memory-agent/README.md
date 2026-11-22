@@ -127,7 +127,6 @@ MCP 도구는 실행 중에 생기므로 브라우저가 정의를 모릅니다.
 - `AgentChat.status`는 진행 중인 run과 마지막 run의 상태, 오류를 돌려줍니다(`SessionRunState`).
 - `ChatState`가 만들어질 때 `running`으로 남은 run은 `failed`/`server_restarted`로 바뀝니다. 다시 실행하지 않습니다.
 - 작성 중인 답변은 1초마다 스냅샷으로 저장하며, 취소하거나 실패하면 즉시 저장합니다.
-- `SessionLeases`는 세션마다 쓰기 가능한 페이지(holder) 하나를 메모리에 둡니다(`claim`, `release`, `permits`, `view`). `AgentChat.handle`, `cancel`은 `X-Session-Holder`가 소유자가 아니면 423을 돌려주고, `AgentChat.lease`가 claim/release를, `status`가 요청한 페이지 기준 `LeaseView`(`mine`, `other`, `free`)를 돌려줍니다. 테스트는 `tests/leases.test.ts`.
 - `MessageQueue`는 답변 중에 보낸 메시지를 순서대로 둡니다(`waiting`, `editing`, `held`, `delivered`, `failed`). `deliverable`은 앞에서부터 `waiting`만 돌려주고 편집 중이거나 확인이 필요한 메시지에서 멈춥니다. 새 프로세스는 남은 `waiting`/`editing`을 `held`로 바꿉니다.
 - `QueueDelivery.forRun` middleware는 도구 결과 뒤(`beforeModel`) 대기 메시지를 provider의 live-turn steering과 대화에 함께 넣고 사용자 노드로 기록합니다. `steer`를 지원하지 않는 provider에서는 다음 모델 요청의 대화로 전달합니다.
 - `AgentChat.enqueue`, `editQueued`, `queued`가 대기열 API입니다. 조회는 `{ items, nextDelivery }`를 돌려줍니다. 답변이 정상으로 끝나면 서버가 대기열의 첫 메시지를 선택·예약해 다음 턴으로 보냅니다. 편집 저장·제거·확인 뒤에도 도는 run이 없으면 서버가 다시 봅니다. 전달 가능한 묶음은 도구 경계에서만 계산합니다. run이 취소·실패로 끝나면 남은 메시지를 `held`로 둡니다. 테스트는 `tests/queue.test.ts`, `tests/queue-next-turn.test.ts`.

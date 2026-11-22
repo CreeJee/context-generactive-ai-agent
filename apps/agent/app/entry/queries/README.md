@@ -10,7 +10,7 @@
 - `AppQueryKey` — 쿼리 키 타입 `readonly unknown[]`
 - `globalQueries` — global 범위 `queryOptions` 팩토리: auth(60초 `refetchInterval`), accounts, compatibleAccounts(`compatibleQueryKey`+`compatibleClient.list`), accountQuota, projects, hiddenProjects, imports, embedding, downloads, interpretation, imageSettings, kagi, conversation, recall, kanban, skillRouter, models
 - `projectQueries` — project 범위 `queryOptions` 팩토리: sessions(active와 archived를 `Effect.all`로 함께 읽어 `{active, archived}` 반환), mcp, agents, skills, decisions, boards, running, kanban
-- `sessionQueries` — session 범위 `queryOptions` 팩토리: runState(holder 인자), queue, subagents, approvals, trace, traceTask, board, decisions, kanban
+- `sessionQueries` — session 범위 `queryOptions` 팩토리: runState, queue, subagents, approvals, trace, traceTask, board, decisions, kanban
 - `useAuthQuery` / `useCompatibleAccountsQuery` / `useProjectsQuery` / `useHiddenProjectsQuery` / `useImageSettingsQuery` — global 범위의 일반 `useQuery` 훅
 - `useAccountsQuery` / `useAccountQuotaQuery` / `useModelsQuery` — `(provider, enabled)` 형태의 global 훅. `Function.dual(2, ...)`로 data-last `(enabled)(provider)` 호출도 지원한다
 - `useCatalogQuery(target | null)` — 구독 공급자나 호환 계정 하나(`CatalogTarget`)의 모델 목록. 호환 계정은 선택된 계정과 상관없이 그 계정의 목록을 `endpointModels(account)` 키로 읽는다. null이면 읽지 않는다
@@ -24,7 +24,7 @@
 - `useDecisionInboxQuery` / `useProjectBoardsQuery` — project 범위 일반 `useQuery` 훅
 - `useSuspenseMcpQuery` / `useSuspenseAgentsQuery` / `useSuspenseSkillsQuery` / `useSuspenseProjectKanbanQuery` — project 범위 Suspense 훅
 - `usableAgents(overview)` — `api.externalAgents` 결과에서 shadowed가 아니고 `AgentTrustState`가 `trusted`인 agent의 이름만 고른다
-- `useRunStateQuery` — session run-state 훅. `Function.dual(3)`으로 data-first와 data-last `(sessionId, holder)(projectId)` 호출을 지원한다
+- `useRunStateQuery` — session run-state 훅. `Function.dual(2)`으로 data-first와 data-last `(sessionId)(projectId)` 호출을 지원한다
 - `useQueueQuery` / `useSubagentsQuery` / `useApprovalsQuery` / `useBoardQuery` / `useDecisionsQuery` / `useKanbanQuery` / `useSessionTraceQuery` — `Function.dual(2)` session 훅. `(projectId, sessionId)` 또는 `(sessionId)(projectId)`로 호출한다
 - `useSessionTraceTaskQuery` — `Function.dual(3)` session 훅. 작업 하나의 상세를 읽고, taskId가 null이면 비활성화한다
 - `QuerySection` — `QueryErrorResetBoundary`, 내부 `SectionErrorBoundary`, `Suspense`(Spinner fallback)로 감싸 실패나 로딩을 설정 섹션 안에 가두는 React 컴포넌트. '다시 시도' 버튼이 query reset과 오류 상태 초기화를 함께 한다
@@ -37,8 +37,7 @@
 - session 키는 `["app","project",projectId,"session",sessionId, ...]`로 project 키 아래에 중첩된다. 그래서 project root 키를 무효화하면 그 프로젝트의 session 쿼리도 함께 무효화된다. session API 호출은 sessionId만 쓰지만 키에는 projectId를 넣어야 한다.
 - `accounts(provider)`와 `models(provider)` 키는 `accountsRoot`와 `modelsRoot` 아래에 놓인다. 그래서 root 키로 모든 provider를 한꺼번에 무효화할 수 있다. mutation의 `publishModelSelection`은 이 구조에 의존한다.
 - `hiddenProjects` 키는 `projects` 키 아래(`["app","global","projects","hidden"]`)에 놓인다. 그래서 프로젝트 목록을 무효화하면 보관 목록도 함께 다시 읽는다.
-- `sessionQueries.runState` 키에는 `holder`가 들어가지 않는다. 같은 세션의 run-state 캐시는 holder와 관계없이 하나다.
-- 첫 문서에서는 `../../routes/_index.tsx`의 loader(`app/.server/first-screen.ts`)가 이 팩토리의 `queryKey`로 캐시를 채운다: global projects·hiddenProjects·imageSettings, project sessions·agents·skills·decisions·boards, session queue·subagents·approvals·trace·kanban. `queryKey`의 data 타입이 채우는 값의 타입과 맞아야 컴파일된다. auth·accounts·accountQuota·models는 공급자·keychain·원격을 부르므로, runState는 page holder에 따라 달라서 채우지 않는다. staleTime 0인 query는 채운 값을 먼저 보이고 마운트할 때 다시 읽는다.
+- 첫 문서에서는 `../../routes/_index.tsx`의 loader(`app/.server/first-screen.ts`)가 이 팩토리의 `queryKey`로 캐시를 채운다: global projects·hiddenProjects·imageSettings, project sessions·agents·skills·decisions·boards, session queue·subagents·approvals·trace·kanban. `queryKey`의 data 타입이 채우는 값의 타입과 맞아야 컴파일된다. auth·accounts·accountQuota·models는 공급자·keychain·원격을 부르므로 채우지 않는다. runState도 채우지 않고 페이지가 읽는다. staleTime 0인 query는 채운 값을 먼저 보이고 마운트할 때 다시 읽는다.
 - staleTime 0을 유지하는 쿼리: project decisions·boards, session runState·board·decisions·kanban. 이 쿼리들은 항상 최신 서버 상태를 다시 읽어야 한다.
 - 설정 페이지의 MCP 서버·외부 에이전트·skills Suspense 훅은 `refetchOnMount: "always"`로 페이지를 열 때마다 다시 읽는다. 이 셋은 서버 이벤트가 없고(파일과 연결 상태가 스스로 바뀐다), 사이드바가 agents·skills를 계속 구독해서 캐시가 오래 남는다.
 - nullable id 훅(`useProjectSessionsQuery`, `useAgentsQuery`, `useSessionTraceTaskQuery`)은 null이면 키에 빈 문자열을 넣고 `enabled: false`로 둔다. 코드 주석은 '프로젝트는 URL과 프로젝트 목록이 정리되는 동안 없을 수 있다'고 설명한다.
