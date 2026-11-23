@@ -138,11 +138,11 @@ testAgent()(function (it) {
       const { env, to, put } = yield* target;
       const notifications = yield* env.use(OrchestratorNotifications);
       const told = yield* put("told");
-      yield* env.use(notifications.claim(to.id, "inbox-run-finished"));
+      yield* env.use(notifications.claim(to.id, "notifications-run-finished"));
       const untold = yield* put("untold");
-      yield* env.use(notifications.claim(to.id, "inbox-run-died"));
+      yield* env.use(notifications.claim(to.id, "notifications-run-died"));
       yield* sqlRun(
-        "INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES ('inbox-run-finished', ?, 'completed', 1)",
+        "INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES ('notifications-run-finished', ?, 'completed', 1)",
         to.id,
       );
       yield* env.reopen;
@@ -151,7 +151,7 @@ testAgent()(function (it) {
       expect(yield* stateOf(told.id)).toEqual({
         state: "delivered",
         claimed_run_id: null,
-        delivered_run_id: "inbox-run-finished",
+        delivered_run_id: "notifications-run-finished",
       });
       expect(
         yield* env.use(
