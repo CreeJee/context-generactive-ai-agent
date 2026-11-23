@@ -1,4 +1,5 @@
 import {
+  Clock,
   Effect,
   FileSystem,
   Iterable,
@@ -589,6 +590,33 @@ testAgent({ embedder: brokenEmbedder })("MemorySearch.find with a failing embedd
         degraded: ["vector"],
       });
     }),
+  );
+});
+
+/** An embedding batch that cannot be stopped and outlasts the search's wait, as on a busy machine. */
+const slowEmbedder = Layer.succeed(Embedder, {
+  identity: "slow",
+  dimensions: 64,
+  embed: () =>
+    Effect.uninterruptible(Effect.sleep("3 seconds")).pipe(
+      Effect.andThen(Effect.fail(EmbeddingError.make({ cause: new Error("too late") }))),
+    ),
+  runtime: () => EmbedderRuntime.other(),
+});
+
+testAgent({ embedder: slowEmbedder })("MemorySearch.find with a slow embedder", (it) => {
+  it.effect(
+    "reads without the vector channel instead of waiting for the question's embedding",
+    () =>
+      Effect.gen(function* () {
+        const earlier = yield* earlierSession;
+        yield* lexicalAll;
+        const started = yield* Clock.currentTimeMillis;
+        const result = yield* find({ query: "Postgres", projectId: earlier.project.id });
+        expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(3_000);
+        expect(result.degraded).toEqual(["vector"]);
+        expect(result.matches[0]).toMatchObject({ id: earlier.decision.id, foundBy: "text" });
+      }),
   );
 });
 

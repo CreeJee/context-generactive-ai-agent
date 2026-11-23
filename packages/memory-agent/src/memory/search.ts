@@ -170,6 +170,13 @@ const defaultLimit = 12;
  */
 const coverageWait = Duration.seconds(2);
 /**
+ * How long a search waits for its question's embedding, again the time its native read gets.
+ * Past it the search reads without the vector channel and says so (`degraded: ["vector"]`); the
+ * batch ends on its own in the embedding worker. A one-line question takes 0.05–0.5 s, but took
+ * 13.6 s on a busy machine, and the read's own 2 s budget only started after it (2026-11-23).
+ */
+const queryEmbedWait = Duration.seconds(2);
+/**
  * The seeds with the fused scores of `ranked` handed out again in its order: the reranker decides
  * the order among its candidates, and the fusion keeps the scale the graph walk's utility floor
  * reads.
@@ -337,6 +344,21 @@ const make = (tuning: SearchTuning) =>
     const reranker = yield* Reranker;
     const vectors = yield* VectorIndex;
     const graph = yield* Graph;
+    const scope = yield* Effect.scope;
+    /**
+     * `work`'s result if it comes within `wait`, else none. ONNX inference cannot be interrupted
+     * in place, so `work` runs in the service's scope: neither the timeout nor an interrupted
+     * caller waits for it. It is interrupted in the background and ends on its own.
+     */
+    const withinWait = <A, E>(work: Effect.Effect<A, E>, wait: Duration.Duration) =>
+      Effect.flatMap(Effect.forkIn(work, scope), (fiber) => {
+        const leave = Effect.forkIn(Fiber.interrupt(fiber), scope);
+        return Fiber.join(fiber).pipe(
+          Effect.timeoutOption(wait),
+          Effect.tap((done) => Effect.when(leave, Effect.succeed(Option.isNone(done)))),
+          Effect.onInterrupt(() => leave),
+        );
+      });
     const authority = sql.literal(changeAuthoritySql("n", "t"));
     const supersededBy = SqlSchema.findAll({
       Request: Schema.String,
@@ -644,9 +666,14 @@ const make = (tuning: SearchTuning) =>
       limit: number,
     ) {
       // Model/network stays in the host, outside the publication admission permit.
-      const embedded = yield* embedder.embed([input.query], "query").pipe(
-        Effect.map((values) => values[0]),
+      const embedded = yield* withinWait(
+        embedder.embed([input.query], "query"),
+        queryEmbedWait,
+      ).pipe(
         Effect.option,
+        Effect.map((found) =>
+          Option.flatMap(Option.flatten(found), (values) => Option.fromNullishOr(values[0])),
+        ),
       );
       const query = Option.getOrUndefined(embedded);
       const grouped = searchTerms(input.query);
