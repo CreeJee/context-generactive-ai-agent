@@ -2,7 +2,6 @@ import {
   Array as EffectArray,
   Clock,
   Context,
-  Duration,
   Effect,
   Exit,
   FileSystem,
@@ -339,7 +338,6 @@ const owner = Effect.gen(function* () {
       "memory-search": (command) =>
         Effect.gen(function* () {
           const session = yield* Effect.fromOption(reader, () => fail("read-failed"));
-          const sqlite = yield* Effect.fromOption(counter, () => fail("read-failed"));
           if (command.controlToken === undefined || setup.ownerKey === undefined)
             return yield* fail("invalid-input");
           const beforeCpu = process.threadCpuUsage();
@@ -357,31 +355,25 @@ const owner = Effect.gen(function* () {
             "read-failed",
           ).pipe(Effect.withSpan("MemoryReadSession.search"));
           if (result.kind === "read-failed") return yield* fail("read-failed");
-          // A failed read reports no coverage, as it reports no hits.
-          const coverage = yield* result.kind === "success"
-            ? Effect.map(
-                Effect.timed(
-                  readCoverage(
-                    sqlite,
-                    command.input.embedder,
-                    command.input.allowedProjects,
-                    command.input.coverage,
-                  ).pipe(
-                    Effect.mapError((cause) =>
-                      NativeOwnerFailed.make({ reason: "read-failed", cause }),
-                    ),
-                    Effect.withSpan("NativeWorker.readCoverage"),
-                  ),
-                ),
-                ([took, counts]) => ({ ...counts, coverageMs: Duration.toMillis(took) }),
-              )
-            : Effect.succeed({ unindexed: 0, lexicalPending: 0, uninterpreted: 0, coverageMs: 0 });
           const cpu = process.threadCpuUsage(beforeCpu);
           return OwnerReply.cases["memory-result"].make({
             workerCpuUs: cpu.user + cpu.system,
             requestId: command.requestId,
             epoch: setup.epoch,
-            result: { ...result, ...coverage },
+            result,
+          });
+        }),
+      "memory-coverage": (command) =>
+        Effect.gen(function* () {
+          const sqlite = yield* Effect.fromOption(counter, () => fail("read-failed"));
+          const coverage = yield* readCoverage(sqlite, command.input).pipe(
+            Effect.mapError((cause) => NativeOwnerFailed.make({ reason: "read-failed", cause })),
+            Effect.withSpan("NativeWorker.readCoverage"),
+          );
+          return OwnerReply.cases["coverage-result"].make({
+            requestId: command.requestId,
+            epoch: setup.epoch,
+            coverage,
           });
         }),
       "lexical-apply": (command) =>

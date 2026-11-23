@@ -15,15 +15,16 @@
 - `ReadAdmission` — 읽기 진입 결과 TaggedEnum(`pinned` | `completed{reply}`)이다.
 - `OwnerInspection` — `inspect` 결과 TaggedEnum(`open{queued, active}` | `failed{reason}`)이다.
 - `OwnerSetup` — worker 설정 Schema(`epoch`, `dimensions`, `bits`, `cacheDirectory`, 선택 `ownerKey`/`databasePath`/`lexicalDirectory`/`recover`)다.
-- `OwnerCommand` — owner 명령 TaggedUnion(`add`, `remove`, `save`, `reset`, `validate`, `vector-search`, `vector-search-controlled`, `memory-search`, `lexical-apply`, `lexical-reset`)이다. 모든 명령에 `requestId`·`epoch`가 붙는다.
-- `OwnerReply` — owner 응답 TaggedUnion(`ack`, `removed`, `vector-hits`, `controlled-result`, `memory-result`, `lexical-ack`)이다.
+- `OwnerCommand` — owner 명령 TaggedUnion(`add`, `remove`, `save`, `reset`, `validate`, `vector-search`, `vector-search-controlled`, `memory-search`, `memory-coverage`, `lexical-apply`, `lexical-reset`)이다. 모든 명령에 `requestId`·`epoch`가 붙는다.
+- `OwnerReply` — owner 응답 TaggedUnion(`ack`, `removed`, `vector-hits`, `controlled-result`, `memory-result`, `coverage-result`, `lexical-ack`)이다.
 - `LexicalDocument` — lexical 색인이 받는 노드 Schema(`seq`, `project`, `text`)다.
 - `NativeOwnerFailed` — Schema.TaggedError다. `reason` 리터럴 13종(`invalid-input`, `queue-full`, `input-budget`, `worker-exit`, `worker-error`, `startup-timeout`, `request-timeout`, `closed`, `epoch-mismatch`, `index-failed`, `lease-unavailable`, `read-failed`, `native-incompatible`)과 프로세스 내부에만 남는 `cause`를 가진다.
 - `OwnerReady` / `Open` / `Execute` / `NativeOwnerRpcs` — 준비 보고 Schema(lexical 색인이 있으면 그 build 이름 `lexical.instance`)와 Effect RPC 정의다. `Open`은 setup 결과를, `Execute`는 `OwnerCommand`를 `OwnerReply`로 처리한다.
-- `NativeReadInput` / `NativeReadOutput` — native memory read의 입출력 Schema다. budget 0~2000ms, bytes ≤ 1 MiB, `vectorK ≤ maxVectorK` 범위를 검사한다. text 검색어 수 상한(trigram 24, 두 글자 8; 넘으면 이름 같은 것·긴 것을 먼저 남긴다 — 2026-10-30)은 호스트가 적용한다. morph는 질문 원문(`morphQuery`)을 보내고 worker의 lexical 색인이 형태소 검색어로 나눈다. `beforeSeq`가 있으면 모든 채널이 그 seq 전에 저장된 노드만 읽는다. `coverage`(`CoverageCounts`)는 읽기 뒤에 셀 coverage를 고른다. `every-project`는 전체 수(`unindexed`, `lexicalPending`)와 허용 프로젝트의 `uninterpreted`를, `allowed-projects`는 `uninterpreted`만 세고, `none`은 세지 않는다. 세지 않은 수는 0이다. 응답은 단계 시간, 등록→claim 대기 `queueMs`, worker가 센 coverage와 `coverageMs`를 함께 돌려준다.
+- `NativeReadInput` / `NativeReadOutput` — native memory read의 입출력 Schema다. budget 0~2000ms, bytes ≤ 1 MiB, `vectorK ≤ maxVectorK` 범위를 검사한다. text 검색어 수 상한(trigram 24, 두 글자 8; 넘으면 이름 같은 것·긴 것을 먼저 남긴다 — 2026-10-30)은 호스트가 적용한다. morph는 질문 원문(`morphQuery`)을 보내고 worker의 lexical 색인이 형태소 검색어로 나눈다. `beforeSeq`가 있으면 모든 채널이 그 seq 전에 저장된 노드만 읽는다. 응답은 단계 시간과 등록→claim 대기 `queueMs`를 함께 돌려준다. coverage는 읽기가 세지 않는다(`NativeCoverageInput`).
 - `nativeReadInputLogicalBytes` — 복사 전 경계에서 입력의 논리 바이트를 계산한다. 한도를 넘으면 `inputBudgetBytes + 1`을 반환한다.
 - `TransferredVector` / `maxVectorK`(48) / `ReadStage` — 버퍼를 전송(transfer)하는 Float32Array Schema, 벡터 k 상한, 읽기 단계 순서 리터럴(candidate→vector→mapping→text→morph)이다.
-- `readCoverage` / `ReadCoverage` — worker의 read-only `DatabaseSync`로 세는 coverage(미임베딩 발언 수, lexical 색인 미반영 변경 수, 허용 프로젝트의 미해석 노드 수) 중 `CoverageCounts`가 고른 것이다. 나머지는 0이다. 필터는 `quality.ts`의 `meaningfulNodeFilter`·`embeddedKindFilter`를 쓴다. 모델에게 주는 힌트라 읽기 스냅샷과 같을 필요가 없다. 읽기 실패는 Effect 오류(`UnknownError`, `SchemaError`)로 돌려주고 worker가 `read-failed`로 바꾼다.
+- `NativeCoverageInput` / `NativeCoverage` — `memory-coverage` 명령의 입출력 Schema다. 임베더와 허용 프로젝트를 받아 미임베딩 발언 수(`unindexed`)와 lexical 색인 미반영 변경 수(`lexicalPending`)는 모든 프로젝트에서, 미해석 노드 수(`uninterpreted`)는 허용 프로젝트에서 센다. 읽기와 따로 세므로, 느린 count가 읽기의 응답을 늦추지 않고 호출자는 count만 기다리지 않을 수 있다(2026-11-23).
+- `readCoverage` — worker의 read-only `DatabaseSync`로 `NativeCoverage`를 센다. 필터는 `quality.ts`의 `meaningfulNodeFilter`·`embeddedKindFilter`를 쓴다. 모델에게 주는 힌트라 읽기 스냅샷과 같을 필요가 없다. 읽기 실패는 Effect 오류(`UnknownError`, `SchemaError`)로 돌려주고 worker가 `read-failed`로 바꾼다.
 - `NativeSearchRequest` / `NativeSearchOutcome` — 상위 검색 요청 계약과 결과 TaggedEnum(`success`, `degraded`, `cancelled`, `budget-exceeded`, `stale-generation`, `error`)이다.
 - `NativeSearchClient` — 프레임워크 중립 비동기 전송 인터페이스(`search(request, signal) => Promise<NativeSearchOutcome>`, `close`)다.
 - `nativeSearchBounds` — 고정 한도 상수(admittedSearches 32, activeSearches 1, workBudgetMs 2000, queuedAbortMs 50, activeAbortAcknowledgeMs 100, input/output 1 MiB)다.
@@ -40,7 +41,7 @@
 - 호출자가 떠나면 queued 작업은 dispatch 전에 멈춘다. 이미 active인 작업은 worker가 답할 때까지 슬롯을 놓지 않는다. 시작된 native 호출은 호출자가 떠나도 끝나지 않기 때문이다.
 - `forget`은 `result` Deferred가 같은 작업만 지운다. 같은 requestId를 나중 작업이 재사용할 수 있기 때문이다.
 - `cachedSize`의 유일한 writer는 reply ingress다. command waiter를 풀기 전에 갱신된다.
-- reply 기한: `memory-search`는 `input.remainingMs`+2초, `vector-search-controlled`는 `budgetMs`+2초, 파일을 쓰는 `save`·`lexical-apply`·`lexical-reset`은 15초, 나머지 명령은 2초다. 이 기한 덕에 typed `budget-exceeded`가 `request-timeout`보다 먼저 도착한다. 파일 쓰기는 디스크가 바쁘면 2초를 넘기고(부하 중 32MB `save` 3.9초), 시간 초과는 벡터 색인을 owner를 다시 열 때까지 멈추므로, 그 기한은 응답하지 않는 worker만 가린다.
+- reply 기한: `memory-search`는 `input.remainingMs`+2초, `vector-search-controlled`는 `budgetMs`+2초, 파일을 쓰는 `save`·`lexical-apply`·`lexical-reset`과 임베딩 가능한 노드를 모두 훑는 `memory-coverage`는 15초, 나머지 명령은 2초다. `memory-coverage`는 혼자 0.2–0.3초지만 바쁜 머신에서 2.9초가 걸렸다(2026-11-23). 검색은 그보다 훨씬 먼저 기다리기를 멈추므로(`MemorySearch`) 이 기한도 응답하지 않는 worker만 가린다. 이 기한 덕에 typed `budget-exceeded`가 `request-timeout`보다 먼저 도착한다. 파일 쓰기는 디스크가 바쁘면 2초를 넘기고(부하 중 32MB `save` 3.9초), 시간 초과는 벡터 색인을 owner를 다시 열 때까지 멈추므로, 그 기한은 응답하지 않는 worker만 가린다.
 - 기한은 dispatch 시점부터 잰다. 앞 작업 뒤에서 기다린 시간은 넣지 않는다. 앞 작업도 각자 기한이 있기 때문이다. 슬롯을 쥔 작업이 기한을 넘기면 owner의 `overdue` 신호가 완료되고, 그 작업과 대기 중인 호출이 모두 `request-timeout`으로 끝난다. 그 작업의 reply가 오면 신호를 새로 만든다.
 - `index-failed`, `read-failed`, `native-incompatible`, `worker-exit`, `worker-error`는 `fatal`이다. 주석상 이후 아무것도 신뢰할 수 없다. worker 종료나 Scope 종료 시 `failAll`이 모든 대기 작업을 실패시키고 control을 닫는다.
 - `controlToken`은 호스트 dispatch만 설정한다. 사용자 값은 채택하지 않는다. controlled 명령에 control이 없거나, worker에 `controlToken`/`ownerKey`가 없으면 `invalid-input`이다.
@@ -49,7 +50,7 @@
 - IPC로는 `reason`만 넘는다. native 예외 메시지와 cache 경로는 worker 안에 남는다. worker의 `reported`는 `epoch-mismatch`, `invalid-input`, `read-failed`, `native-incompatible`, `lease-unavailable` 외 사유를 모두 `index-failed`로 바꾼다.
 - 동기 native 호출과 파일시스템 호출은 owning worker 안에서만 한다. `NativeSearchClient` 구현은 무거운 동기 native search를 호출자 스레드에서 실행하면 안 된다.
 - memory read의 text·morph 채널은 worker가 연 lexical 색인에서 찾고, 같은 SQLite 스냅샷에서 노드가 허용 프로젝트이고 `lexical_changes`에 남은 변경이 없는지 확인한 뒤에만 남긴다. lexical 색인 없이 text나 morph를 켜면 `invalid-input`이다.
-- memory read에서 text 단계만 자기 몫(남은 예산 600ms 여유)을 넘으면 그 결과만 버리고 `textUnavailable=true`로 표시해 읽기를 계속한다. `success`에 벡터·morph·coverage가 함께 온다. `FindResult.degraded`의 `"text"`로 모델에 전달된다(`docs/decisions.md` 2026-10-30).
+- memory read에서 text 단계만 자기 몫(남은 예산 600ms 여유)을 넘으면 그 결과만 버리고 `textUnavailable=true`로 표시해 읽기를 계속한다. `success`에 벡터·morph가 함께 온다. `FindResult.degraded`의 `"text"`로 모델에 전달된다(`docs/decisions.md` 2026-10-30).
 - setup 검증: `dimensions`는 0보다 큰 8의 배수이면서 4294967295 이하다. `bits`는 1, 2, 4, 8 중 하나다. id는 canonical 10진 u64 문자열이다(20자 이하, 18446744073709551615 이하).
 - add는 `vectors.length === ids.length * dimensions`이고 모든 값이 finite여야 한다. vector-search 계열은 `query.length === dimensions`이고 `0 < k ≤ 4294967295`여야 한다. memory read의 `vectorK`는 `maxVectorK`(48) 이하여야 하며, 넘으면 read 전체가 실패한다.
 - lexical 색인은 `lexicalDirectory`가 있을 때만 연다. 없으면 `lexical-apply`/`lexical-reset`은 `invalid-input`이다. `lexical-apply`의 seq가 음수여도 `invalid-input`이다. 두 명령의 reply 기한은 2초이고, native 실패는 다른 명령처럼 `index-failed`(fatal)다.
@@ -66,7 +67,7 @@
 
 - `node:worker_threads` `Worker`를 생성하고 `terminate`한다(`rpcTransport`). worker 쪽은 최상위 `await runNativeEffect(Layer.launch(server))`로 RPC 서버를 실행한다.
 - `requireRuntime("turbovec")`로 native 애드온을 로드하고 `initializeNodeSqlite(addon.addonPath)`를 호출한다(worker). `runtimeWorkerOptions(setup)`로 worker 옵션을 얻는다(호스트).
-- `setup.databasePath`가 있으면 `node:sqlite` `DatabaseSync`를 read-only로 Scope 동안 열어 둔다. 먼저 `assertDatabaseSchema`를 실행하고, 이후 성공한 memory read마다 coverage를 센다. 이어서 `binding.MemoryReadSession`으로 read-only SQLite 세션을 Scope 동안 연다.
+- `setup.databasePath`가 있으면 `node:sqlite` `DatabaseSync`를 read-only로 Scope 동안 열어 둔다. 먼저 `assertDatabaseSchema`를 실행하고, 이후 `memory-coverage` 명령마다 coverage를 센다. 이어서 `binding.MemoryReadSession`으로 read-only SQLite 세션을 Scope 동안 연다.
 - 파일시스템: `cacheDirectory`를 `mkdir -p`(mode `0o700`)로 만든다. `index.tvim`의 존재를 확인하고 load한다. save는 `index.tvim.tmp`에 쓴 뒤 rename한다.
 - `setup.lexicalDirectory`가 있으면 `binding.LexicalIndex.open`으로 Tantivy 색인을 Scope 동안 연다(writer lock 포함).
 - `binding.CacheLease`로 `cacheDirectory/writer.lock` 프로세스 간 lease(lock)를 Scope 동안 잡는다. 실패하면 `lease-unavailable`다.

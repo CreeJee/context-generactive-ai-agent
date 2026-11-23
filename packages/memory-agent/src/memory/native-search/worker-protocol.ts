@@ -1,6 +1,12 @@
 import { Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/rpc";
-import { NativeReadInput, NativeReadOutput, TransferredVector } from "./read-protocol.ts";
+import {
+  NativeCoverage,
+  NativeCoverageInput,
+  NativeReadInput,
+  NativeReadOutput,
+  TransferredVector,
+} from "./read-protocol.ts";
 
 // Only the owner transport uses these low-level commands. Public high-level search never
 // sends a candidate allowlist; its separate request contract is in contracts.ts.
@@ -62,6 +68,11 @@ export const OwnerCommand = Schema.TaggedUnion({
     controlToken: Schema.optional(Schema.String),
   },
   /**
+   * Counts what a search has not covered yet. Apart from `memory-search`, so a slow count leaves
+   * the read's reply on time and its caller can stop waiting for the count alone.
+   */
+  "memory-coverage": { ...correlation, input: NativeCoverageInput },
+  /**
    * Replaces the lexical documents of `removed` and of every document's seq with `documents`, in
    * one commit that the next read sees.
    */
@@ -111,6 +122,7 @@ export const OwnerReply = Schema.TaggedUnion({
     result: NativeReadOutput,
     workerCpuUs: Schema.optional(Schema.Finite),
   },
+  "coverage-result": { ...correlation, coverage: NativeCoverage },
   /** How many documents the lexical index holds after the command. */
   "lexical-ack": { ...correlation, size: Schema.Int },
 });

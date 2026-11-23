@@ -7,7 +7,9 @@ import {
   Function as EffectFunction,
   Option,
   Context,
+  Duration,
   Effect,
+  Fiber,
   Layer,
   Match,
   Result,
@@ -22,12 +24,7 @@ import { Graph, type Hop } from "./graph.ts";
 import { latestResolver, type LatestEvidence } from "./latest.ts";
 import type { NodeKind } from "./nodes.ts";
 import { ChunkSpan } from "./embedding/chunks.ts";
-import {
-  type CoverageCounts,
-  maxVectorK,
-  type NativeReadInput,
-  ReadStage,
-} from "./native-search/read-protocol.ts";
+import { maxVectorK, type NativeReadInput, ReadStage } from "./native-search/read-protocol.ts";
 import { NativeOwnerFailed } from "./native-search/worker-protocol.ts";
 import { fuseRanks } from "./rank-fusion.ts";
 import { optionalProperty } from "../optional-property.ts";
@@ -112,7 +109,8 @@ export interface FoundMatches {
 
 /**
  * What a search has not covered yet, for the model to judge a miss by. Counting it walks every
- * embeddable node, so only the searches that report it to the model count it.
+ * embeddable node, so only the searches that report it to the model count it, and they answer
+ * without it when the count is slow (`coverageWait`).
  */
 export interface SearchCoverage {
   /**
@@ -132,7 +130,10 @@ export interface SearchCoverage {
   readonly uninterpreted: number;
 }
 
-export interface FindResult extends FoundMatches, SearchCoverage {}
+export interface FindResult extends FoundMatches {
+  /** Absent when the count failed or took longer than the search waits for it. */
+  readonly coverage?: SearchCoverage;
+}
 
 export class NativeMemorySearchFailed extends Schema.TaggedError<
   NativeMemorySearchFailed,
@@ -161,6 +162,13 @@ export interface SkippedRead {
 
 const snippetLength = 300;
 const defaultLimit = 12;
+/**
+ * How long a search waits for its coverage counts: the time its native read gets, as the
+ * reranker's. Past it the count runs to its end in the worker and the search answers without it.
+ * A count once took 2.9 s on a busy machine and, made inside the read, failed the whole search
+ * (2026-11-23).
+ */
+const coverageWait = Duration.seconds(2);
 /**
  * The seeds with the fused scores of `ranked` handed out again in its order: the reranker decides
  * the order among its candidates, and the fusion keeps the scale the graph walk's utility floor
@@ -550,7 +558,6 @@ const make = (tuning: SearchTuning) =>
         mappingMs: result.mappingMs,
         textMs: result.textMs,
         morphMs: result.morphMs,
-        coverageMs: result.coverageMs,
         // Inside the text stage: the trigram query, then the short terms that finished. A text
         // failure spent the rest of textMs on the short term it stopped in.
         ...optionalProperty("trigramMs", result.trigramMs ?? undefined),
@@ -592,11 +599,6 @@ const make = (tuning: SearchTuning) =>
                 vectorUnavailable: result.vectorUnavailable,
                 textUnavailable: result.textUnavailable,
                 spans,
-                coverage: {
-                  unindexed: result.unindexed,
-                  textUnindexed: result.lexicalPending,
-                  uninterpreted: result.uninterpreted,
-                },
               };
             }),
           ),
@@ -611,19 +613,35 @@ const make = (tuning: SearchTuning) =>
                 result.vectorMs +
                 result.mappingMs +
                 result.textMs +
-                result.morphMs +
-                result.coverageMs,
+                result.morphMs,
             }),
           ),
         ),
       );
     });
 
+    /**
+     * What the search has not covered in `projects`, or none when the count failed or did not come
+     * within {@link coverageWait}: the counts are hints, so they never hold up or fail the search.
+     */
+    const countCoverage = (projects: readonly string[]) =>
+      vectors.backend.coverage({ embedder: embedder.identity, allowedProjects: projects }).pipe(
+        Effect.timeoutOption(coverageWait),
+        Effect.withSpan("MemorySearch.countCoverage"),
+        Effect.option,
+        Effect.map((counted) =>
+          Option.map(Option.flatten(counted), (coverage): SearchCoverage => ({
+            unindexed: coverage.unindexed,
+            textUnindexed: coverage.lexicalPending,
+            uninterpreted: coverage.uninterpreted,
+          })),
+        ),
+      );
+
     const collectSeeds = Effect.fn("MemorySearch.collectSeeds")(function* (
       input: FindInput,
       allowed: readonly string[],
       limit: number,
-      counted: boolean,
     ) {
       // Model/network stays in the host, outside the publication admission permit.
       const embedded = yield* embedder.embed([input.query], "query").pipe(
@@ -632,7 +650,7 @@ const make = (tuning: SearchTuning) =>
       );
       const query = Option.getOrUndefined(embedded);
       const grouped = searchTerms(input.query);
-      const readOver = (projects: readonly string[], coverage: CoverageCounts) =>
+      const readOver = (projects: readonly string[]) =>
         readSeeds({
           allowedProjects: projects,
           embedder: embedder.identity,
@@ -651,20 +669,18 @@ const make = (tuning: SearchTuning) =>
           remainingMs: 2000,
           inputBudgetBytes: 1048576,
           outputBudgetBytes: 1048576,
-          coverage,
         });
       // The conversation's own project is read first, on its own budget. The other projects hold
       // most of the memory; a failed read of them leaves the project's matches standing and says
       // why, so the model can judge whether to search again. The own read's failure fails the
       // search.
-      // The counts over every project are the same in each read, so only the first makes them.
       const [own, ...others] = allowed;
-      const ownSeeds = yield* readOver([own!], counted ? "every-project" : "none");
+      const ownSeeds = yield* readOver([own!]);
       const skip = (skipped: SkippedRead) => Effect.succeed(Result.fail(skipped));
       const otherSeeds =
         others.length === 0
           ? Result.succeed(Option.none())
-          : yield* readOver(others, counted ? "allowed-projects" : "none").pipe(
+          : yield* readOver(others).pipe(
               Effect.map((seeds) => Result.succeed(Option.some(seeds))),
               Effect.catchTags({
                 NativeMemorySearchFailed: ({ reason, stage, elapsedMs }) =>
@@ -707,12 +723,6 @@ const make = (tuning: SearchTuning) =>
           tuning.otherProjectMerge,
         ),
         spans: MutableHashMap.fromIterable(scopes.flatMap((scope) => [...scope.spans])),
-        coverage: {
-          // Counts over every project, the same in each read.
-          unindexed: ownSeeds.coverage.unindexed,
-          textUnindexed: ownSeeds.coverage.textUnindexed,
-          uninterpreted: scopes.reduce((sum, scope) => sum + scope.coverage.uninterpreted, 0),
-        },
         otherProjectsSkipped: Option.getOrUndefined(Result.getFailure(otherSeeds)),
         degraded,
       };
@@ -723,8 +733,12 @@ const make = (tuning: SearchTuning) =>
       Effect.gen(function* () {
         const limit = input.limit ?? defaultLimit;
         const allowed = yield* allowedProjects(input.projectId, input.crossProject ?? true);
-        const { byVector, byText, byMorph, coverage, spans, otherProjectsSkipped, degraded } =
-          yield* collectSeeds(input, allowed, limit, counted);
+        const { byVector, byText, byMorph, spans, otherProjectsSkipped, degraded } =
+          yield* collectSeeds(input, allowed, limit);
+        // The count runs in the worker while the host ranks and walks the matches.
+        const counting = yield* Effect.forkChild(
+          counted ? countCoverage(allowed) : Effect.succeedNone,
+        );
         // The vector list is always full, related or not. For a query that names something
         // exactly it would outvote the text match, so the text ranking goes first and counts more.
         const morph = byMorph.length > 0 ? [byMorph] : [];
@@ -755,8 +769,6 @@ const make = (tuning: SearchTuning) =>
           includeEmpty: false,
           ...optionalProperty("beforeSeq", input.beforeSeq),
         });
-        const { unindexed, textUnindexed, uninterpreted } = coverage;
-
         const matches = yield* Effect.forEach(walk.visits.slice(0, limit), (visit) =>
           Effect.all({
             latest: latest(visit.node.id),
@@ -819,7 +831,7 @@ const make = (tuning: SearchTuning) =>
             degraded,
             ...optionalProperty("otherProjectsSkipped", otherProjectsSkipped),
           } satisfies FoundMatches,
-          coverage: { unindexed, textUnindexed, uninterpreted } satisfies SearchCoverage,
+          coverage: yield* Fiber.join(counting),
         };
       });
 
@@ -827,7 +839,7 @@ const make = (tuning: SearchTuning) =>
     const find = (input: FindInput) =>
       Effect.map(search(input, true), ({ found, coverage }): FindResult => ({
         ...found,
-        ...coverage,
+        ...optionalProperty("coverage", Option.getOrUndefined(coverage)),
       }));
 
     /**

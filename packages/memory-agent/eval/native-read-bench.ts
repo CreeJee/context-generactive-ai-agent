@@ -38,7 +38,8 @@ import { SecureRandom } from "effect/crypto";
 import { addonPath, loadTurbovec, type NativeReadOutput } from "../../turbovec/index.js";
 import { initializeNodeSqlite } from "../src/runtime/node-sqlite-bridge.ts";
 import { lexicalLayout } from "../src/memory/embedding/native-vector-index.ts";
-import { readCoverage, type ReadCoverage } from "../src/memory/native-search/coverage.ts";
+import { readCoverage } from "../src/memory/native-search/coverage.ts";
+import type { NativeCoverage } from "../src/memory/native-search/read-protocol.ts";
 import { searchTerms } from "../src/memory/search.ts";
 import { nodePlatform } from "../src/runtime/node-platform.ts";
 import { sha256 } from "../src/runtime/synchronous-crypto.ts";
@@ -238,7 +239,7 @@ interface Row {
   readonly shortTerms: number;
   readonly morphTerms: number;
   readonly out: NativeReadOutput;
-  readonly coverage: ReadCoverage;
+  readonly coverage: NativeCoverage;
   readonly coverageMs: number;
   readonly wallMs: number;
 }
@@ -275,11 +276,11 @@ const readOnce = (reader: InstanceType<typeof MemoryReadSession>, q: BenchQuery)
       "bench",
       requestId,
     );
-    // The worker counts coverage on its own connection after the read, as here.
+    // The worker counts coverage on its own connection apart from the read, as here.
     const coverageStarted = performance.now();
     const coverage =
       out.kind === "success"
-        ? Effect.runSync(readCoverage(db, embedder, [q.projectId], "every-project"))
+        ? Effect.runSync(readCoverage(db, { embedder, allowedProjects: [q.projectId] }))
         : { unindexed: 0, lexicalPending: 0, uninterpreted: 0 };
     const coverageMs = performance.now() - coverageStarted;
     return { out, coverage, coverageMs, wallMs: performance.now() - started, terms, morphTerms };

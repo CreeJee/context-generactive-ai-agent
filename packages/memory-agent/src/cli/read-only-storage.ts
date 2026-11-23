@@ -269,53 +269,23 @@ const readOnlyVectorIndex = (sqlite: DatabaseSync, storage: string, mode: Embedd
               catch: (cause) => VectorIndexError.make({ operation: "search", cause }),
             }),
             ({ result, control }) =>
-              // The worker counts coverage on its own read-only connection after the read.
-              result.kind === "success"
-                ? readCoverage(sqlite, input.embedder, input.allowedProjects, input.coverage).pipe(
-                    Effect.map((coverage) => {
-                      control.close();
-                      return {
-                        publication: { epoch: "read-only", generation: 0 },
-                        result: {
+              Effect.sync(() => {
+                control.close();
+                return {
+                  publication: { epoch: "read-only", generation: 0 },
+                  result:
+                    result.kind === "success"
+                      ? {
                           ...result,
                           textUnavailable: result.textUnavailable || lexicalMissing(input),
-                          unindexed: coverage.unindexed,
-                          lexicalPending: coverage.lexicalPending,
-                          uninterpreted: coverage.uninterpreted,
-                          coverageMs: 0,
-                        },
-                      } as const;
-                    }),
-                    Effect.catch(() =>
-                      Effect.sync(() => {
-                        control.close();
-                        return {
-                          publication: { epoch: "read-only", generation: 0 },
-                          result: {
-                            ...result,
-                            textUnavailable: result.textUnavailable || lexicalMissing(input),
-                            unindexed: 0,
-                            lexicalPending: 0,
-                            uninterpreted: 0,
-                            coverageMs: 0,
-                          },
-                        } as const;
-                      }),
-                    ),
-                  )
-                : Effect.sync(() => {
-                    control.close();
-                    return {
-                      publication: { epoch: "read-only", generation: 0 },
-                      result: {
-                        ...result,
-                        unindexed: 0,
-                        lexicalPending: 0,
-                        uninterpreted: 0,
-                        coverageMs: 0,
-                      },
-                    } as const;
-                  }),
+                        }
+                      : result,
+                } as const;
+              }),
+          ),
+        coverage: (input) =>
+          readCoverage(sqlite, input).pipe(
+            Effect.mapError((cause) => VectorIndexError.make({ operation: "search", cause })),
           ),
       },
       // Write paths the read-only CLI never calls; a call would be a defect, not a write.

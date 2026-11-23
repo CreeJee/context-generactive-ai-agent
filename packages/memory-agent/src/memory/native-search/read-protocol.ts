@@ -16,14 +16,6 @@ const elapsed = Schema.Finite.check(Schema.makeFilter((value) => value >= 0));
 /** Same bound as the native `admitted`: a larger vector k fails the whole read. */
 export const maxVectorK = 48;
 
-/**
- * The coverage counts a read asks for. `every-project` adds the counts over every project to the
- * allowed projects' uninterpreted nodes, as a search's first read does. A later read of other
- * projects asks for `allowed-projects` only, and a search that reports no coverage for `none`.
- */
-export const CoverageCounts = Schema.Literals(["every-project", "allowed-projects", "none"]);
-export type CoverageCounts = typeof CoverageCounts.Type;
-
 export const NativeReadInput = Schema.Struct({
   allowedProjects: ids,
   embedder: Schema.String,
@@ -42,8 +34,6 @@ export const NativeReadInput = Schema.Struct({
   remainingMs: Budget,
   inputBudgetBytes: Bytes,
   outputBudgetBytes: Bytes,
-  /** Which coverage counts the worker makes after the read (`coverage.ts`); the rest are 0. */
-  coverage: CoverageCounts,
 });
 export type NativeReadInput = typeof NativeReadInput.Type;
 
@@ -91,10 +81,6 @@ export const NativeReadOutput = Schema.Struct({
   textUnavailable: Schema.Boolean,
   textIds: ids,
   morphIds: ids,
-  // The coverage counts and their time come from the worker beside the read (`coverage.ts`).
-  unindexed: Count,
-  lexicalPending: Count,
-  uninterpreted: Count,
   candidateCount: Count,
   sqliteExecutions: Count,
   candidateMs: elapsed,
@@ -102,7 +88,6 @@ export const NativeReadOutput = Schema.Struct({
   textMs: elapsed,
   morphMs: elapsed,
   mappingMs: elapsed,
-  coverageMs: elapsed,
   queueMs: elapsed,
   trigramMs: Schema.optional(Schema.NullOr(elapsed)),
   shortTermMs: elapsed,
@@ -113,3 +98,21 @@ export const NativeReadOutput = Schema.Struct({
   outputLogicalBytes: Bytes,
 });
 export type NativeReadOutput = typeof NativeReadOutput.Type;
+
+/** The projects a search read, for counting what it has not covered yet (`coverage.ts`). */
+export const NativeCoverageInput = Schema.Struct({
+  embedder: Schema.String,
+  allowedProjects: ids,
+});
+export type NativeCoverageInput = typeof NativeCoverageInput.Type;
+
+/** What a search has not covered yet, counted apart from its read. */
+export const NativeCoverage = Schema.Struct({
+  /** Statements the embedder has not embedded yet, over every project. */
+  unindexed: Count,
+  /** Journaled node changes the lexical index has not applied yet, over every project. */
+  lexicalPending: Count,
+  /** Searchable nodes of the allowed projects whose interpretation is not done. */
+  uninterpreted: Count,
+});
+export type NativeCoverage = typeof NativeCoverage.Type;

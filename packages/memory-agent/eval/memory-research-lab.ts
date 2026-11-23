@@ -280,7 +280,7 @@ const runStageEffects = Effect.fn("lab.stage.effects")(function* (stage: Stage) 
             found,
             rank: found.indexOf(item.expected),
             queryNanos,
-            unindexed: result.unindexed,
+            unindexed: result.coverage?.unindexed ?? -1,
             degraded: result.degraded,
           };
         }),

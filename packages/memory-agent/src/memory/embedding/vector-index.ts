@@ -1,6 +1,11 @@
 import { Context, Effect, Match, Option, Schema } from "effect";
 import { NativeOwnerFailed } from "../native-search/worker-protocol.ts";
-import type { NativeReadInput, NativeReadOutput } from "../native-search/read-protocol.ts";
+import type {
+  NativeCoverage,
+  NativeCoverageInput,
+  NativeReadInput,
+  NativeReadOutput,
+} from "../native-search/read-protocol.ts";
 import type { LexicalDocument } from "../native-search/worker-protocol.ts";
 
 export interface VectorBackend {
@@ -12,6 +17,10 @@ export interface VectorBackend {
     },
     VectorIndexError
   >;
+  /** What a search has not covered yet, counted apart from its reads. */
+  readonly coverage: (
+    input: NativeCoverageInput,
+  ) => Effect.Effect<NativeCoverage, VectorIndexError>;
 }
 
 export interface VectorIndexApi {

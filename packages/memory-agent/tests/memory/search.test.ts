@@ -116,7 +116,7 @@ testAgent()("MemorySearch.find", (it) => {
         );
         const match = (id: string) => Option.getOrUndefined(MutableHashMap.get(byId, id));
         expect(result.degraded).toEqual([]);
-        expect(result.unindexed).toBe(0);
+        expect(result.coverage?.unindexed).toBe(0);
         expect(match(earlier.decision.id)?.foundBy).toMatch(/vector|text/);
         expect(match(earlier.result.id)).toMatchObject({
           foundBy: "graph",
@@ -215,6 +215,32 @@ testAgent()("MemorySearch.find", (it) => {
       });
       expect(result.matches.map((match) => match.id)).toContain(own.id);
       expect(result.matches.map((match) => match.id)).not.toContain(shared.node.id);
+    }),
+  );
+
+  it.effect("answers without the coverage counts when they do not come in time", () =>
+    Effect.gen(function* () {
+      const { project, session } = yield* freshProject;
+      const own = yield* (yield* Nodes).append({
+        projectId: project.id,
+        sessionId: session.id,
+        kind: "user",
+        text: "검색 결과는 coverage 없이도 돌아온다",
+      });
+      yield* indexAll;
+      const index = yield* VectorIndex;
+      // A count that never answers, as one held up behind a busy disk.
+      const stuckCount = Layer.succeed(VectorIndex, {
+        ...index,
+        backend: { ...index.backend, coverage: () => Effect.never },
+      });
+      const result = yield* Effect.scoped(
+        Effect.flatMap(Layer.build(MemorySearch.layer.pipe(Layer.provide(stuckCount))), (search) =>
+          Effect.provideContext(find({ query: "coverage", projectId: project.id }), search),
+        ),
+      );
+      expect(result.matches.map((match) => match.id)).toContain(own.id);
+      expect(result.coverage).toBeUndefined();
     }),
   );
 
@@ -550,7 +576,7 @@ testAgent({ embedder: brokenEmbedder })("MemorySearch.find with a failing embedd
       const result = yield* find({ query: "Postgres", projectId: earlier.project.id });
       expect(result.degraded).toEqual(["vector"]);
       // The two statements; tool calls and results are never embedded.
-      expect(result.unindexed).toBe(2);
+      expect(result.coverage?.unindexed).toBe(2);
       expect(result.matches[0]).toMatchObject({ id: earlier.decision.id, foundBy: "text" });
       // The same search without the coverage counts finds the same matches.
       const matches = yield* (yield* MemorySearch).findMatches({

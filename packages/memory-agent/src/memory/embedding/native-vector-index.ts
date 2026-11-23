@@ -20,7 +20,7 @@ import { failureAnnotations, failureTags } from "../../runtime/logged-failures.t
 import { runtimeWorker } from "../../runtime/resources.ts";
 import { NativeOwner } from "../native-search/client.ts";
 import { NativePublication } from "../native-search/publication.ts";
-import type { NativeReadInput } from "../native-search/read-protocol.ts";
+import type { NativeCoverageInput, NativeReadInput } from "../native-search/read-protocol.ts";
 import {
   type LexicalDocument,
   NativeOwnerFailed,
@@ -477,6 +477,15 @@ const makeNativeVectorIndex = Effect.gen(function* () {
           .pipe(Effect.mapError(publicationError));
         if (!OwnerReply.guards["memory-result"](result)) return yield* publicationError(result);
         return { publication: current, result: result.result };
+      }),
+      // A hint for the model, not a read of the published index: no publication gate.
+      coverage: Effect.fnUntraced(function* (input: NativeCoverageInput) {
+        const reply = yield* command(
+          OwnerCommand.cases["memory-coverage"].make({ ...(yield* identity), input }),
+          "search",
+        );
+        if (!OwnerReply.guards["coverage-result"](reply)) return yield* publicationError(reply);
+        return reply.coverage;
       }),
     },
   };

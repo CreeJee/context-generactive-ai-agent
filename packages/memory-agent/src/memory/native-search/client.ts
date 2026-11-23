@@ -98,6 +98,15 @@ const startupTimeout = Duration.seconds(15);
 const writeTimeout = Duration.seconds(15);
 
 /**
+ * How long a coverage count may take before the host gives up on a hung worker. It walks every
+ * embeddable node on the worker's read-only connection: 0.2–0.3 s alone, 2.9 s while a card run,
+ * the local model and a busy disk shared the machine (2026-11-23). The search stops waiting long
+ * before this (`MemorySearch`), so, like `writeTimeout`, this only bounds a worker that never
+ * answers.
+ */
+const countTimeout = Duration.seconds(15);
+
+/**
  * A budgeted search answers `budget-exceeded` itself once its budget runs out, but an engine call
  * already admitted runs to its end. The host waits that long past the budget, so the typed native
  * outcome reaches the caller instead of a `request-timeout`.
@@ -107,6 +116,7 @@ const replyDeadline = OwnerCommand.match({
     Duration.sum(Duration.millis(command.input.remainingMs), replyTimeout),
   "vector-search-controlled": (command) =>
     Duration.sum(Duration.millis(command.budgetMs), replyTimeout),
+  "memory-coverage": () => countTimeout,
   add: () => replyTimeout,
   remove: () => replyTimeout,
   reset: () => replyTimeout,
@@ -289,6 +299,7 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
     "vector-hits": (reply) => Option.some(reply.size),
     "controlled-result": (reply) => Option.some(reply.size),
     "memory-result": () => Option.none(),
+    "coverage-result": () => Option.none(),
     "lexical-ack": () => Option.none(),
   });
 
@@ -312,6 +323,7 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
               return OwnerCommand.match(job.command, {
                 "vector-search-controlled": controlled,
                 "memory-search": controlled,
+                "memory-coverage": transport.send,
                 add: transport.send,
                 remove: transport.send,
                 reset: transport.send,
@@ -404,6 +416,10 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
           trigramTerms: [...input.input.trigramTerms],
           shortTerms: [...input.input.shortTerms],
         },
+      }),
+      "memory-coverage": (input) => ({
+        ...input,
+        input: { ...input.input, allowedProjects: [...input.input.allowedProjects] },
       }),
       validate: (input) => ({ ...input, ids: [...input.ids] }),
       remove: (input) => ({ ...input, ids: [...input.ids] }),
@@ -546,6 +562,7 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
       OwnerCommand.match(command, {
         "memory-search": (command) => controlled(command.input.remainingMs),
         "vector-search-controlled": (command) => controlled(command.budgetMs),
+        "memory-coverage": () => Effect.succeedNone,
         add: () => Effect.succeedNone,
         remove: () => Effect.succeedNone,
         reset: () => Effect.succeedNone,

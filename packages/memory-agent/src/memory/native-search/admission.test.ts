@@ -51,7 +51,6 @@ it("settles scoped admission on real pin or terminal result and propagates pre-a
                 remainingMs: 2_000,
                 inputBudgetBytes: 65_536,
                 outputBudgetBytes: 4_096,
-                coverage: "every-project",
               };
               const seeded = new Float32Array(3 * 384);
               seeded[0] = 1;
@@ -86,7 +85,17 @@ it("settles scoped admission on real pin or terminal result and propagates pre-a
               });
               expect(OwnerReply.guards["memory-result"](read.result)).toBe(true);
               expect(read.result).toMatchObject({ result: { kind: "success" } });
-              expect(read.result).toMatchObject({ result: { unindexed: 2 } });
+              // The worker's own connection counts what has no vector yet: latest, and another
+              // project's node. Latest gets one below.
+              const unindexed = (requestId: string) =>
+                owner.execute(
+                  OwnerCommand.cases["memory-coverage"].make({
+                    epoch: owner.epoch,
+                    requestId,
+                    input: { embedder: "fixture", allowedProjects: ["allowed"] },
+                  }),
+                );
+              expect(yield* unindexed("coverage")).toMatchObject({ coverage: { unindexed: 2 } });
               const added = new Float32Array(384);
               added[0] = 1;
               yield* publication.withMutation(
@@ -131,7 +140,10 @@ it("settles scoped admission on real pin or terminal result and propagates pre-a
               expect(published.publication).toEqual({ epoch: owner.epoch, generation: 1 });
               expect(OwnerReply.guards["memory-result"](published.result)).toBe(true);
               expect(published.result).toMatchObject({
-                result: { kind: "success", unindexed: 1 },
+                result: { kind: "success" },
+              });
+              expect(yield* unindexed("published-coverage")).toMatchObject({
+                coverage: { unindexed: 1 },
               });
               const mapped = yield* owner.execute(
                 OwnerCommand.cases.validate.make({

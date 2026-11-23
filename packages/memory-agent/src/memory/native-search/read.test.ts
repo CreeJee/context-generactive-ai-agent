@@ -133,7 +133,6 @@ it(
               remainingMs: 2_000,
               inputBudgetBytes: 1_048_576,
               outputBudgetBytes: 1_048_576,
-              coverage: "every-project",
             };
             const search = (id: string, patch: Partial<NativeReadInput> = {}) =>
               owner.execute(
@@ -169,28 +168,21 @@ it(
             expect(reply.result.textIds).toEqual(text);
             expect(reply.result.textIds.length).toBeGreaterThan(input.textK);
             expect(reply.result.morphIds).toEqual(["alpha", "beta"]);
-            expect(reply.result.unindexed).toBe(unindexed);
-            expect(reply.result.uninterpreted).toBe(uninterpreted);
-            expect(reply.result.lexicalPending).toBe(0);
-            // A read of other projects counts only their uninterpreted nodes, and a search that
-            // reports no coverage counts nothing; the matches stay the same.
-            const allowedOnly = yield* search("allowed-projects", { coverage: "allowed-projects" });
-            const uncounted = yield* search("none", { coverage: "none" });
-            expect(allowedOnly).toMatchObject({
-              result: {
-                unindexed: 0,
-                lexicalPending: 0,
-                uninterpreted,
-                morphIds: ["alpha", "beta"],
-              },
+            // The counts are a command of their own, apart from the read: the totals over every
+            // project, and the uninterpreted nodes of the projects asked for.
+            const count = (id: string, allowedProjects: readonly string[]) =>
+              owner.execute(
+                OwnerCommand.cases["memory-coverage"].make({
+                  epoch: owner.epoch,
+                  requestId: id,
+                  input: { embedder: "fixture", allowedProjects },
+                }),
+              );
+            expect(yield* count("coverage", ["allowed"])).toMatchObject({
+              coverage: { unindexed, uninterpreted, lexicalPending: 0 },
             });
-            expect(uncounted).toMatchObject({
-              result: {
-                unindexed: 0,
-                lexicalPending: 0,
-                uninterpreted: 0,
-                vectorIds: ["alpha", "beta"],
-              },
+            expect(yield* count("coverage-of-none", [])).toMatchObject({
+              coverage: { unindexed, uninterpreted: 0, lexicalPending: 0 },
             });
             // A change not applied yet: the index may hold text or a project the node no longer
             // has, so the read drops the node until it is applied.
@@ -198,7 +190,9 @@ it(
             const pending = yield* search("pending");
             if (!OwnerReply.guards["memory-result"](pending))
               return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
-            expect(pending.result.lexicalPending).toBe(1);
+            expect(yield* count("coverage-pending", ["allowed"])).toMatchObject({
+              coverage: { lexicalPending: 1 },
+            });
             expect(pending.result.textIds).toEqual(["alpha", "latest"]);
             expect(pending.result.morphIds).not.toContain("beta");
             db.exec("DELETE FROM lexical_changes");
@@ -273,8 +267,6 @@ it(
                 vectorIds: [],
                 textIds: [],
                 morphIds: [],
-                uninterpreted: 0,
-                unindexed,
               },
             });
             const small = yield* search("output", { outputBudgetBytes: 1 });
@@ -283,8 +275,8 @@ it(
               result: { kind: "budget-exceeded", vectorIds: [], textIds: [], morphIds: [] },
             });
             // The text stage alone past its share of the budget drops only the text matches: the
-            // read goes on with the vector and morph channels and coverage, marked textUnavailable,
-            // instead of failing the whole search.
+            // read goes on with the vector and morph channels, marked textUnavailable, instead of
+            // failing the whole search.
             const dropped = yield* search("text-overrun", { remainingMs: 600 });
             expect(OwnerReply.guards["memory-result"](dropped)).toBe(true);
             expect(dropped).toMatchObject({
@@ -299,7 +291,6 @@ it(
               return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
             expect(dropped.result.vectorIds.length).toBeGreaterThan(0);
             expect(dropped.result.morphIds.length).toBeGreaterThan(0);
-            expect(dropped.result.unindexed).toBe(unindexed);
           }),
         ),
       ),

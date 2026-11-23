@@ -5830,3 +5830,21 @@
   보낸 쪽이 아님), `tests/session-inbox-migration.test.ts`.
 
 구현: 계획 035.
+
+## 검색의 coverage count는 읽기와 따로 세고, 늦으면 없이 답한다 (2026-11-23)
+
+- 계기: 2026-11-23 api-iamport 세션의 find_memory가 두 번 `request-timeout`으로 실패했다. 두 번째는 읽기
+  자체가 1.0초였는데, 같은 명령 안에서 읽기 뒤에 세던 coverage count가 2.9초 걸려 owner의 reply 기한(읽기
+  예산 2초 + 2초)을 넘겼다. 같은 count는 혼자 0.2–0.3초다. 카드 run, 로컬 모델, 바쁜 디스크가 머신을 같이
+  쓰고 있었다. count는 모델에게 주는 힌트인데 검색 전체를 실패시켰다.
+- 결정: count를 owner 명령 `memory-coverage`로 읽기(`memory-search`)에서 떼어 낸다.
+  - 검색은 읽기가 끝난 뒤 count를 맡기고, 순위를 매기고 그래프를 걷는 동안 최대 2초(`coverageWait`) 기다린다.
+    읽기와 reranker가 받는 시간과 같다. 그 안에 오지 않거나 실패하면 `FindResult.coverage` 없이 답한다.
+  - count는 호출자가 떠나도 worker에서 끝까지 돈다(동기 SQLite라 멈출 수 없다). 그동안 다음 명령은 줄에서
+    기다리고, 줄에서 기다린 시간은 그 명령의 reply 기한에 들지 않는다.
+  - `memory-coverage`의 reply 기한은 15초다. 기한은 응답하지 않는 worker를 가리는 것이고, 기한을 넘긴 작업은
+    그때 기다리던 모든 호출을 `request-timeout`으로 끝내기 때문이다.
+  - 미해석 수는 허용 프로젝트 전부에서 센다. 전에는 다른 프로젝트 읽기가 실패하면 그 프로젝트를 빼고 셌다.
+- 모델이 읽는 모양: `unindexed`, `textUnindexed`, `uninterpreted`는 결과의 맨 위가 아니라 `coverage` 안에
+  있고, 세지 못했으면 `coverage`가 없다. 전에는 세지 않은 수를 0으로 채워 다 덮은 것처럼 보였다(CLI는 count가
+  실패하면 0을 돌려줬다).

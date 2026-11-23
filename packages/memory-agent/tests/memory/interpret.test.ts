@@ -116,7 +116,7 @@ testAgent({ testProvider: {} })("llm-interpret", (it) => {
         const earlier = found.matches.find((match) => match.id === decision.id);
         expect(earlier?.supersededBy).toEqual([{ id: change.id, relation: "corrects" }]);
         expect(earlier?.projectName).toBe(context.project.name);
-        expect(found.uninterpreted).toBe(0);
+        expect(found.coverage?.uninterpreted).toBe(0);
 
         const trace = yield* context.trace(decision.id);
         expect(trace.challengedBy).toEqual([
@@ -182,7 +182,7 @@ testAgent({ testProvider: {} })("llm-interpret", (it) => {
       expect(yield* context.job(broken.id)).toEqual({ status: "failed", attempts: 3 });
       const found = yield* context.find("이상한 문장");
       expect(found.matches.map((match) => match.id)).toContain(broken.id);
-      expect(found.uninterpreted).toBe(1);
+      expect(found.coverage?.uninterpreted).toBe(1);
     }),
   );
 
