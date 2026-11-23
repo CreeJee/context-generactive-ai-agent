@@ -840,6 +840,32 @@ export const orchestratorNotificationsMigration = `
     WHERE claimed_run_id IS NOT NULL;
 `;
 
+/** The step that moves the ends of background tasks into the orchestrator's notifications. */
+export const backgroundEndsNotificationsMigration = `
+  -- The end of a background task is told through the orchestrator's notifications like every
+  -- other thing the app hands a conversation's model (decisions.md "앱이 모델에게 전할 알림은
+  -- orchestrator notifications에 둔다"): one row per ended task, with the task's id. The task row
+  -- keeps its result and the delivery it was started with; whether its end was told is the
+  -- notification row's state.
+  INSERT INTO orchestrator_notifications (id, session_id, sender, delivery, payload, state, claimed_run_id,
+    claimed_at, delivered_run_id, created_at, delivered_at)
+  SELECT b.id, b.session_id, 'task', b.delivery,
+    json_object('_tag', 'BackgroundEnd', 'taskId', b.id, 'parentRunId', b.parent_run_id,
+      'kind', b.kind, 'title', b.title, 'status', b.status),
+    CASE WHEN b.delivered_at IS NULL THEN 'waiting' ELSE 'delivered' END,
+    NULL, NULL,
+    CASE WHEN b.delivered_at IS NULL THEN NULL
+      ELSE coalesce(b.delivered_to_run_id, b.parent_run_id) END,
+    strftime('%Y-%m-%dT%H:%M:%fZ', b.finished_at / 1000.0, 'unixepoch'),
+    CASE WHEN b.delivered_at IS NULL THEN NULL
+      ELSE strftime('%Y-%m-%dT%H:%M:%fZ', b.delivered_at / 1000.0, 'unixepoch') END
+  FROM background_tasks b
+  WHERE b.finished_at IS NOT NULL;
+  DROP INDEX background_tasks_untold;
+  ALTER TABLE background_tasks DROP COLUMN delivered_to_run_id;
+  ALTER TABLE background_tasks DROP COLUMN delivered_at;
+`;
+
 /**
  * The cards each workflow revision changed from the revision before it in its session, for the
  * board's history; a revision that changed no card has no row. Revisions never change, so this is
@@ -3265,6 +3291,7 @@ export const migrations: readonly string[] = [
   ALTER TABLE workflow_state_revisions DROP COLUMN mode;
   `,
   orchestratorNotificationsMigration,
+  backgroundEndsNotificationsMigration,
 ];
 
 /** One of the two startup migrations that may rebuild a referenced table with FK checks suspended;

@@ -64,7 +64,7 @@ it.effect("background work leaves Work Trace with its saved results, told alread
     expect(
       db
         .prepare(
-          `SELECT id, session_id, tool_call_id, kind, title, status, result, delivered_to_run_id
+          `SELECT id, session_id, tool_call_id, kind, title, status, result
            FROM background_tasks ORDER BY id`,
         )
         .all(),
@@ -77,7 +77,6 @@ it.effect("background work leaves Work Trace with its saved results, told alread
         title: "T agent",
         status: "interrupted",
         result: "Result unavailable. Inspect its effects before retrying.",
-        delivered_to_run_id: "run",
       },
       {
         id: "shell",
@@ -87,8 +86,18 @@ it.effect("background work leaves Work Trace with its saved results, told alread
         title: "T shell",
         status: "completed",
         result: '{"exitCode":2}',
-        delivered_to_run_id: "run",
       },
+    ]);
+    // Both ends were told before the move, so their notifications are delivered already.
+    expect(
+      db
+        .prepare(
+          "SELECT id, sender, state, delivered_run_id FROM orchestrator_notifications ORDER BY id",
+        )
+        .all(),
+    ).toEqual([
+      { id: "agent", sender: "task", state: "delivered", delivered_run_id: "run" },
+      { id: "shell", sender: "task", state: "delivered", delivered_run_id: "run" },
     ]);
     // Only the subagent stays in Work Trace, with nothing of the background work around it.
     expect(db.prepare("SELECT id FROM work_tasks").all()).toEqual([{ id: "helper" }]);

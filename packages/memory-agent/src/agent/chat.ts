@@ -80,6 +80,7 @@ import { Projects, type Project } from "../projects/projects.ts";
 import { type GateBinding, PermissionGate } from "../permissions/gate.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { SessionDispatches } from "../sessions/dispatches.ts";
+import { OrchestratorNotifications } from "../sessions/orchestrator-notifications.ts";
 import { ApprovedTools } from "../tools/approved.ts";
 import { CodeTools } from "../tools/code.ts";
 import { gatedToolNames, runCommandSpec } from "../tools/definitions.ts";
@@ -577,6 +578,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const queue = yield* MessageQueue;
   const delivery = yield* QueueDelivery;
   const sessionDispatches = yield* SessionDispatches;
+  const orchestratorNotifications = yield* OrchestratorNotifications;
   const projectCommands = yield* ProjectCommands;
   const projectTerms = yield* ProjectTerms;
   const summaries = yield* TurnSummaries;
@@ -688,7 +690,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const cancellations = yield* RunCancellations;
   const runStore = yield* RunStore;
   const crypto = yield* SecureRandom.SecureRandom;
-  const notifications = taskNotifications({ trace: workTrace, background, crypto });
+  const notifications = taskNotifications({
+    trace: workTrace,
+    notifications: orchestratorNotifications,
+    crypto,
+  });
   const toldDispatches = dispatchNotifications({ dispatches: sessionDispatches, crypto });
   const scope = yield* Effect.scope;
   // One owner-process fence for durable workflow admission: a restarted owner cannot create a

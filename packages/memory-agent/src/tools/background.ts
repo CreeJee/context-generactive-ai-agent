@@ -20,6 +20,9 @@ import { deliveryFor } from "../agent/notification-delivery.ts";
 import { BackgroundKind, RunningBackgroundTask } from "../agent/run-state.ts";
 import { AppEvents } from "../events/app-events.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
+import { MessageDelivery } from "../sessions/message-delivery.ts";
+import { OrchestratorNotifications } from "../sessions/orchestrator-notifications.ts";
+import { BackgroundEndedStatus } from "./background-end.ts";
 import { ToolFailed } from "./failure.ts";
 import { runTool, type RunTool } from "./run-tool.ts";
 import { failureAnnotations, failureTags } from "../runtime/logged-failures.ts";
@@ -65,12 +68,10 @@ const interruptIfAborted = (signal: AbortSignal) =>
     Effect.sync(() => signal.aborted),
   );
 
-/** How a background task ended. A command that exited non-zero still completed, with its output. */
-const EndedStatus = Schema.Literals(["completed", "failed", "cancelled", "interrupted"]);
 const Running = Schema.Literal("running");
 
 /** A task's saved result, once it ended. */
-const EndedTask = Schema.Struct({ status: EndedStatus, result: Schema.String });
+const EndedTask = Schema.Struct({ status: BackgroundEndedStatus, result: Schema.String });
 export type BackgroundResult = typeof EndedTask.Type;
 /** A task as its row stands: running without a result, or ended with one. */
 const TaskRow = Schema.Union([Schema.Struct({ status: Running, result: Schema.Null }), EndedTask]);
@@ -85,12 +86,15 @@ export interface BackgroundEnd {
   readonly status: BackgroundResult["status"];
 }
 
+/** An ended task as its end is told: what the notification carries, and where and how it goes. */
 const EndRow = Schema.Struct({
   id: Schema.String,
+  session_id: Schema.String,
   parent_run_id: Schema.String,
   kind: BackgroundKind,
   title: Schema.String,
-  status: EndedStatus,
+  status: BackgroundEndedStatus,
+  delivery: MessageDelivery,
 });
 const RunningRow = Schema.Struct({
   id: Schema.String,
@@ -140,6 +144,7 @@ const make = Effect.gen(function* () {
   const crypto = yield* SecureRandom.SecureRandom;
   const redactor = yield* SecretRedactor;
   const events = yield* AppEvents;
+  const notifications = yield* OrchestratorNotifications;
   const fibers = yield* FiberMap.make<string>();
   const dispatch = yield* Semaphore.make(1);
   /** Each running task's session, by task id. */
@@ -160,6 +165,55 @@ const make = Effect.gen(function* () {
         }),
       );
 
+  const selectEnd = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: EndRow,
+    execute: (taskId) =>
+      sql`SELECT id, session_id, parent_run_id, kind, title, status, delivery
+        FROM background_tasks WHERE id = ${taskId} AND finished_at IS NOT NULL`,
+  });
+  /**
+   * Puts the ended task's end in its conversation's notifications, under the task's id, and
+   * returns the task's row. The notifications keep one row per id, so the end is there once however
+   * often this is called. A task that did not end, or that went with its conversation, has no end
+   * to tell.
+   */
+  const tellEnd = (taskId: string) =>
+    Effect.tap(
+      stored("read")(selectEnd(taskId)),
+      Option.match({
+        onNone: () => Effect.void,
+        onSome: (task) =>
+          stored("write")(
+            notifications.putOnce({
+              id: task.id,
+              sessionId: task.session_id,
+              sender: "task",
+              delivery: task.delivery,
+              payload: {
+                _tag: "BackgroundEnd",
+                taskId: task.id,
+                parentRunId: task.parent_run_id,
+                kind: task.kind,
+                title: task.title,
+                status: task.status,
+              },
+            }),
+          ),
+      }),
+    );
+  /** The ended tasks whose end is not in the notifications, oldest end first. */
+  const selectEndsNotPut = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: Schema.Struct({ id: Schema.String }),
+    execute: () =>
+      sql`SELECT b.id FROM background_tasks b
+        WHERE b.finished_at IS NOT NULL AND NOT EXISTS (
+          SELECT 1 FROM orchestrator_notifications i WHERE i.id = b.id
+        )
+        ORDER BY b.finished_at, b.id`,
+  });
+
   // Tasks the previous process left running ended with it; their end is told like any other.
   yield* Effect.flatMap(
     Clock.currentTimeMillis,
@@ -168,6 +222,12 @@ const make = Effect.gen(function* () {
       SET status = 'interrupted', result = ${restartedResult}, finished_at = ${now}
       WHERE status = 'running'`,
   ).pipe(stored("write"));
+  // The end of a task is saved first and put in the notifications after, not in one transaction.
+  // The tasks interrupted just now, and those a process saved the end of and then died, get their
+  // row here.
+  yield* Effect.forEach(yield* stored("read")(selectEndsNotPut()), ({ id }) => tellEnd(id), {
+    discard: true,
+  });
 
   const selectTask = SqlSchema.findOneOption({
     Request: Schema.Struct({ sessionId: Schema.String, taskId: Schema.String }),
@@ -199,7 +259,10 @@ const make = Effect.gen(function* () {
 
   const selectPrior = SqlSchema.findOneOption({
     Request: Schema.Struct({ runId: Schema.String, toolCallId: Schema.String }),
-    Result: Schema.Struct({ taskId: Schema.String, status: Schema.Union([Running, EndedStatus]) }),
+    Result: Schema.Struct({
+      taskId: Schema.String,
+      status: Schema.Union([Running, BackgroundEndedStatus]),
+    }),
     execute: ({ runId, toolCallId }) =>
       sql`SELECT id AS taskId, status FROM background_tasks
         WHERE parent_run_id = ${runId} AND tool_call_id = ${toolCallId}`,
@@ -251,6 +314,7 @@ const make = Effect.gen(function* () {
         yield* stored("write")(sql`UPDATE background_tasks
           SET status = ${end.status}, result = ${hidden.text}, finished_at = ${now}
           WHERE id = ${taskId}`);
+        yield* tellEnd(taskId);
       });
       const job = Effect.raceFirst(operation, parentInterrupted(binding.abortSignal)).pipe(
         Effect.onExit((exit) =>
@@ -338,14 +402,6 @@ const make = Effect.gen(function* () {
       }),
   });
 
-  const selectUntold = SqlSchema.findAll({
-    Request: Schema.String,
-    Result: EndRow,
-    execute: (sessionId) =>
-      sql`SELECT id, parent_run_id, kind, title, status FROM background_tasks
-        WHERE session_id = ${sessionId} AND finished_at IS NOT NULL AND delivered_at IS NULL
-        ORDER BY finished_at, id`,
-  });
   const selectRunning = SqlSchema.findAll({
     Request: Schema.String,
     Result: RunningRow,
@@ -358,7 +414,8 @@ const make = Effect.gen(function* () {
     start,
     /**
      * The task's result once it ends, waiting at most `milliseconds`; null while it still runs. The
-     * run that waited read the result, so its end is not told again.
+     * run that waited read the result, so the end's notification is delivered to that run at once
+     * and is not told again. A task whose end could not be saved has no notification to deliver.
      */
     waitResult: Effect.fn("BackgroundTasks.waitResult")(function* (
       sessionId: string,
@@ -381,56 +438,22 @@ const make = Effect.gen(function* () {
       );
       const result = yield* milliseconds === 0 ? ended(sessionId, taskId) : waited;
       yield* Effect.when(
-        stored("write")(
-          Effect.flatMap(
-            Clock.currentTimeMillis,
-            (now) => sql`UPDATE background_tasks
-              SET delivered_to_run_id = parent_run_id, delivered_at = ${now}
-              WHERE id = ${taskId} AND delivered_at IS NULL`,
-          ),
+        // This process's `finish` may stand between saving the end and putting its notification,
+        // so the row is put here first; `finish` putting it later leaves it delivered.
+        Effect.flatMap(
+          tellEnd(taskId),
+          Option.match({
+            onNone: () => Effect.void,
+            onSome: (task) =>
+              Effect.asVoid(
+                stored("write")(notifications.deliver(sessionId, task.parent_run_id, [taskId])),
+              ),
+          }),
         ),
         Effect.succeed(Option.isSome(result)),
       );
       return Option.getOrNull(result);
     }),
-    /**
-     * Takes the session's task ends not told yet for the run `runId`, oldest first. The run gives
-     * them back with `release` when it does not finish.
-     */
-    consume: (sessionId: string, runId: string) =>
-      Effect.gen(function* () {
-        const rows = yield* selectUntold(sessionId);
-        const now = yield* Clock.currentTimeMillis;
-        yield* sql`UPDATE background_tasks SET delivered_to_run_id = ${runId}, delivered_at = ${now}
-          WHERE session_id = ${sessionId} AND finished_at IS NOT NULL AND delivered_at IS NULL`;
-        return rows.map((row): BackgroundEnd => ({
-          taskId: row.id,
-          parentRunId: row.parent_run_id,
-          kind: row.kind,
-          title: row.title,
-          status: row.status,
-        }));
-      }).pipe(sql.withTransaction, stored("write")),
-    /** Gives the ends the run `runId` took back to the session's next run. */
-    release: (sessionId: string, runId: string) =>
-      stored("write")(
-        sql`UPDATE background_tasks SET delivered_to_run_id = NULL, delivered_at = NULL
-          WHERE session_id = ${sessionId} AND delivered_to_run_id = ${runId}`,
-      ).pipe(Effect.asVoid),
-    /**
-     * Whether the session has an end that wakes it, unless the user stopped its notifications. A
-     * `next_run` end waits for a run that starts anyway.
-     */
-    wakes: (sessionId: string) =>
-      stored("read")(
-        sql`SELECT 1 FROM background_tasks b
-          WHERE b.session_id = ${sessionId} AND b.finished_at IS NOT NULL
-            AND b.delivered_at IS NULL AND b.delivery = 'wake'
-            AND NOT EXISTS (
-              SELECT 1 FROM parent_notification_holds h WHERE h.session_id = b.session_id
-            )
-          LIMIT 1`,
-      ).pipe(Effect.map((rows) => rows.length > 0)),
     /** The session's tasks still going, oldest first. */
     running: (sessionId: string) =>
       Effect.map(stored("read")(selectRunning(sessionId)), (rows) =>

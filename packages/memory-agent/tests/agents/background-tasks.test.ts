@@ -1,5 +1,6 @@
 import { Deferred, Effect, Fiber, FileSystem, Path, Ref, Schema, Stream } from "effect";
 import { expect } from "vite-plus/test";
+import { OrchestratorNotifications } from "../../src/sessions/orchestrator-notifications.ts";
 import { ApprovedTools } from "../../src/tools/approved.ts";
 import { BackgroundOperationFailed, BackgroundTasks } from "../../src/tools/background.ts";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
@@ -31,6 +32,12 @@ const readResult = Effect.fnUntraced(function* (
 ) {
   const tasks = yield* BackgroundTasks;
   return yield* callTool(tasks.toolsFor(sessionId), "get_background_result", input);
+});
+
+/** The background ends the run takes from the session's notifications, as their rows carry them. */
+const takeEnds = Effect.fnUntraced(function* (sessionId: string, runId: string) {
+  const notifications = yield* OrchestratorNotifications;
+  return (yield* notifications.claim(sessionId, runId, "task")).map((entry) => entry.payload);
 });
 
 testAgent()("background task lifecycle", (it) => {
@@ -89,6 +96,7 @@ testAgent()("background task lifecycle", (it) => {
       Effect.gen(function* () {
         const sessionId = yield* freshSession;
         const tasks = yield* BackgroundTasks;
+        const notifications = yield* OrchestratorNotifications;
         const run = yield* runOf(sessionId);
         const gate = yield* Deferred.make<void>();
         const ended = yield* Stream.take(tasks.completions, 1).pipe(
@@ -103,13 +111,14 @@ testAgent()("background task lifecycle", (it) => {
           Effect.as(Deferred.await(gate), "listing"),
         );
         expect((yield* tasks.running(sessionId)).map((task) => task.id)).toEqual([receipt.taskId]);
-        expect(yield* tasks.wakes(sessionId)).toBe(false);
+        expect(yield* notifications.wakes(sessionId)).toBe(false);
         yield* Deferred.succeed(gate, undefined);
         yield* Fiber.join(ended);
         expect(yield* tasks.running(sessionId)).toEqual([]);
-        expect(yield* tasks.wakes(sessionId)).toBe(true);
+        expect(yield* notifications.wakes(sessionId)).toBe(true);
         const told = [
           {
+            _tag: "BackgroundEnd",
             taskId: receipt.taskId,
             parentRunId: run.runId,
             kind: "shell",
@@ -117,11 +126,11 @@ testAgent()("background task lifecycle", (it) => {
             status: "completed",
           },
         ];
-        expect(yield* tasks.consume(sessionId, "later-run")).toEqual(told);
-        expect(yield* tasks.consume(sessionId, "next-run")).toEqual([]);
-        yield* tasks.release(sessionId, "later-run");
-        expect(yield* tasks.consume(sessionId, "next-run")).toEqual(told);
-        expect(yield* tasks.wakes(sessionId)).toBe(false);
+        expect(yield* takeEnds(sessionId, "later-run")).toEqual(told);
+        expect(yield* takeEnds(sessionId, "next-run")).toEqual([]);
+        yield* notifications.release(sessionId, "later-run");
+        expect(yield* takeEnds(sessionId, "next-run")).toEqual(told);
+        expect(yield* notifications.wakes(sessionId)).toBe(false);
         // A result the run waited for is its own, so its end is not told again.
         const waited = yield* tasks.start(
           run,
@@ -131,7 +140,13 @@ testAgent()("background task lifecycle", (it) => {
           Effect.succeed("/"),
         );
         yield* tasks.waitResult(sessionId, waited.taskId, 2000);
-        expect(yield* tasks.wakes(sessionId)).toBe(false);
+        expect(yield* notifications.wakes(sessionId)).toBe(false);
+        expect(
+          yield* sqlGet(
+            "SELECT state, delivered_run_id FROM orchestrator_notifications WHERE id = ?",
+            waited.taskId,
+          ),
+        ).toEqual({ state: "delivered", delivered_run_id: run.runId });
       }),
   );
 
@@ -141,6 +156,7 @@ testAgent()("background task lifecycle", (it) => {
       Effect.gen(function* () {
         const sessionId = yield* freshSession;
         const tasks = yield* BackgroundTasks;
+        const notifications = yield* OrchestratorNotifications;
         const boardRun = {
           ...(yield* runOf(sessionId)),
           runId: `kanban:${sessionId}:S1:1`,
@@ -157,11 +173,48 @@ testAgent()("background task lifecycle", (it) => {
           Effect.succeed("/"),
         );
         yield* Fiber.join(ended);
-        expect(yield* tasks.wakes(sessionId)).toBe(false);
-        expect(yield* tasks.consume(sessionId, "next-run")).toMatchObject([
+        expect(yield* notifications.wakes(sessionId)).toBe(false);
+        expect(yield* takeEnds(sessionId, "next-run")).toMatchObject([
           { taskId: receipt.taskId, parentRunId: boardRun.runId, status: "completed" },
         ]);
       }),
+  );
+
+  it.effect("a run that finishes delivers the ends it took", () =>
+    Effect.gen(function* () {
+      const sessionId = yield* freshSession;
+      const tasks = yield* BackgroundTasks;
+      const notifications = yield* OrchestratorNotifications;
+      const ended = yield* Stream.take(tasks.completions, 1).pipe(
+        Stream.runCollect,
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      const receipt = yield* tasks.start(
+        yield* runOf(sessionId),
+        `${sessionId}:call`,
+        "shell",
+        "pwd",
+        Effect.succeed("/"),
+      );
+      yield* Fiber.join(ended);
+      const stateOf = sqlGet(
+        "SELECT state, claimed_run_id, delivered_run_id FROM orchestrator_notifications WHERE id = ?",
+        receipt.taskId,
+      );
+      // While the run goes on, the end it took still waits, marked with that run.
+      yield* notifications.claim(sessionId, "run-x", "task");
+      expect(yield* stateOf).toEqual({
+        state: "waiting",
+        claimed_run_id: "run-x",
+        delivered_run_id: null,
+      });
+      yield* notifications.deliverClaimed(sessionId, "run-x");
+      expect(yield* stateOf).toEqual({
+        state: "delivered",
+        claimed_run_id: null,
+        delivered_run_id: "run-x",
+      });
+    }),
   );
 
   it.effect(
@@ -401,6 +454,8 @@ testAgent()("background cancellation across restart", (it) => {
         "UPDATE background_tasks SET status = 'running', result = NULL, finished_at = NULL WHERE id = ?",
         receipt.taskId,
       );
+      // A process that could not save the end did not put its notification either.
+      yield* sqlRun("DELETE FROM orchestrator_notifications WHERE id = ?", receipt.taskId);
       yield* env.reopen;
       expect(yield* (yield* env.use(BackgroundTasks)).hasSession(session.id)).toBe(false);
       expect(yield* env.use(readResult(session.id, { taskId: receipt.taskId }))).toMatchObject({
@@ -408,8 +463,18 @@ testAgent()("background cancellation across restart", (it) => {
       });
       // Its end is told like any other.
       expect(
-        yield* env.use(Effect.flatMap(BackgroundTasks, (tasks) => tasks.wakes(session.id))),
+        yield* env.use(
+          Effect.flatMap(OrchestratorNotifications, (notifications) =>
+            notifications.wakes(session.id),
+          ),
+        ),
       ).toBe(true);
+      expect(
+        yield* sqlGet(
+          "SELECT json_extract(payload, '$.status') AS status FROM orchestrator_notifications WHERE id = ?",
+          receipt.taskId,
+        ),
+      ).toEqual({ status: "interrupted" });
     }),
   );
 });
