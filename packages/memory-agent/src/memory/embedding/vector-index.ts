@@ -1,4 +1,4 @@
-import { Context, Effect, Schema } from "effect";
+import { Context, Effect, Match, Option, Schema } from "effect";
 import { NativeOwnerFailed } from "../native-search/worker-protocol.ts";
 import type { NativeReadInput, NativeReadOutput } from "../native-search/read-protocol.ts";
 import type { LexicalDocument } from "../native-search/worker-protocol.ts";
@@ -51,6 +51,24 @@ export interface VectorIndexApi {
   ) => Effect.Effect<A, E | E2 | VectorIndexError, R | R2>;
 }
 
+/**
+ * Reasons that leave the index as it was: the worker was only busy. Without this the model read
+ * "Vector index search failed." as a broken index and searched in circles (2026-11-23).
+ */
+const retryHint = (reason: NativeOwnerFailed["reason"]) =>
+  Match.value(reason).pipe(
+    Match.when(
+      "request-timeout",
+      () =>
+        " The search worker did not answer in time, usually because the machine was busy; the same call can run again.",
+    ),
+    Match.when(
+      "queue-full",
+      () => " Too many index requests were waiting; the same call can run again.",
+    ),
+    Match.orElse(() => ""),
+  );
+
 export class VectorIndexError extends Schema.TaggedError<
   VectorIndexError,
   { readonly brand: unique symbol }
@@ -59,15 +77,22 @@ export class VectorIndexError extends Schema.TaggedError<
   cause: Schema.Defect(),
 }) {
   /**
-   * Startup prints this when the index cannot open. It names the operation, and the writer lease
-   * held by another process, by tag; the native exception text stays in `cause`.
+   * Startup prints this when the index cannot open, and a tool the model called reads it as its
+   * failure. It names the operation and the native owner's reason, and says when the same call can
+   * simply run again; the native exception text stays in `cause`.
    */
   override get message() {
-    return this.operation === "open" &&
-      Schema.is(NativeOwnerFailed)(this.cause) &&
-      this.cause.reason === "lease-unavailable"
+    const reason = Option.map(
+      Option.liftPredicate(this.cause, Schema.is(NativeOwnerFailed)),
+      (owner) => owner.reason,
+    );
+    return this.operation === "open" && Option.contains(reason, "lease-unavailable")
       ? "The vector index is held by another process using the same storage root (is another app server running?). Stop it, then start this one again."
-      : `Vector index ${this.operation} failed.`;
+      : Option.match(reason, {
+          onNone: () => `Vector index ${this.operation} failed.`,
+          onSome: (reason) =>
+            `Vector index ${this.operation} failed (${reason}).${retryHint(reason)}`,
+        });
   }
 }
 
