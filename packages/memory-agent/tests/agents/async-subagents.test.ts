@@ -430,7 +430,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         "child approval wait",
       );
       const agent = yield* current(AgentChat);
-      yield* agent.cancel(sessionId, null);
+      yield* agent.cancel(sessionId);
       expect((yield* children.list(sessionId))[0]?.status).toBe("cancelled");
       expect((yield* trace.taskDetail(sessionId, receipt.taskId))?.attempts[0]?.status).toBe(
         "cancelled",
@@ -444,7 +444,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       ).toBe(0);
       // Follow-ups start only from notifications the session does not hold; cancel holds them.
       expect(yield* trace.wakingParentNotificationSessions).not.toContain(sessionId);
-      expect((yield* agent.status(sessionId, null)).running).toBeNull();
+      expect((yield* agent.status(sessionId)).running).toBeNull();
       expect(
         yield* count("SELECT count(*) AS count FROM chat_runs WHERE thread_id = ?", sessionId),
       ).toBe(1);

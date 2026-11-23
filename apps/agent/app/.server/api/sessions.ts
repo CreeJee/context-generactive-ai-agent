@@ -239,44 +239,42 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
           }),
         ),
       queue: ({ params: { session } }) => refusalsOnly(chat.queued(session)),
-      enqueue: ({ params: { session }, headers, payload }) =>
-        refusalsOnly(chat.enqueue(session, headers["x-session-holder"] ?? null, payload)).pipe(
+      enqueue: ({ params: { session }, payload }) =>
+        refusalsOnly(chat.enqueue(session, payload)).pipe(
           Effect.tap(() => events.publishSession(session, "queue")),
         ),
-      editQueued: ({ params: { session, message }, headers, payload }) =>
-        refusalsOnly(
-          chat.editQueued(session, headers["x-session-holder"] ?? null, message, payload),
-        ).pipe(Effect.tap(() => events.publishSession(session, "queue"))),
+      editQueued: ({ params: { session, message }, payload }) =>
+        refusalsOnly(chat.editQueued(session, message, payload)).pipe(
+          Effect.tap(() => events.publishSession(session, "queue")),
+        ),
       subagents: ({ params: { session } }) => refusalsOnly(chat.subagents(session)),
       subagentTranscript: ({ params: { session, subagent } }) =>
         refusalsOnly(chat.subagentTranscript(session, subagent)),
       approvals: ({ params: { session } }) => refusalsOnly(chat.approvals(session)),
-      answerApproval: ({ params: { session, approval }, headers, payload: { approved } }) =>
-        refusalsOnly(
-          chat.answerApproval(session, headers["x-session-holder"] ?? null, approval, approved),
-        ).pipe(Effect.tap(() => events.publishSession(session, "relayed-approvals"))),
-      status: ({ params: { session }, query: { holder } }) =>
-        refusalsOnly(chat.status(session, holder ?? null)),
-      change: ({ params: { session }, headers, payload }) =>
+      answerApproval: ({ params: { session, approval }, payload: { approved } }) =>
+        refusalsOnly(chat.answerApproval(session, approval, approved)).pipe(
+          Effect.tap(() => events.publishSession(session, "relayed-approvals")),
+        ),
+      status: ({ params: { session } }) => refusalsOnly(chat.status(session)),
+      change: ({ params: { session }, payload }) =>
         Effect.gen(function* () {
-          const holder = headers["x-session-holder"] ?? null;
           const { projectId } = yield* sessions.get(session);
           return yield* Match.valueTags(payload, {
             Archive: ({ archived, idempotencyKey }) =>
               chat
-                .archive(session, holder, archived, idempotencyKey)
+                .archive(session, archived, idempotencyKey)
                 .pipe(Effect.tap(() => events.publishProject(projectId, "sessions"))),
             Delete: ({ idempotencyKey }) =>
               chat
-                .deleteSession(session, holder, idempotencyKey)
+                .deleteSession(session, idempotencyKey)
                 .pipe(Effect.tap(() => events.publishProject(projectId, "sessions"))),
             Move: ({ move }) =>
               chat
-                .moveWorkflow(session, holder, move)
+                .moveWorkflow(session, move)
                 .pipe(Effect.tap(() => events.publishSession(session, "run-state"))),
             Control: ({ workflowAction }) =>
               chat
-                .controlWorkflow(session, holder, workflowAction)
+                .controlWorkflow(session, workflowAction)
                 .pipe(Effect.tap(() => events.publishSession(session, "run-state"))),
           });
         }).pipe(
@@ -285,18 +283,14 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
           ),
           refusalsOnly,
         ),
-      cancel: ({ params: { session }, headers }) =>
-        refusalsOnly(chat.cancel(session, headers["x-session-holder"] ?? null)).pipe(
+      cancel: ({ params: { session } }) =>
+        refusalsOnly(chat.cancel(session)).pipe(
           Effect.tap(() => events.publishSession(session, "run-state")),
         ),
-      compact: ({ params: { session }, headers }) =>
-        refusalsOnly(chat.compact(session, headers["x-session-holder"] ?? null)),
-      discardInterrupts: ({ params: { session }, headers }) =>
-        refusalsOnly(chat.discardInterrupts(session, headers["x-session-holder"] ?? null)),
-      continuePastUncertain: ({ params: { session }, headers, payload }) =>
-        refusalsOnly(
-          chat.continuePastUncertain(session, headers["x-session-holder"] ?? null, payload),
-        ),
+      compact: ({ params: { session } }) => refusalsOnly(chat.compact(session)),
+      discardInterrupts: ({ params: { session } }) => refusalsOnly(chat.discardInterrupts(session)),
+      continuePastUncertain: ({ params: { session }, payload }) =>
+        refusalsOnly(chat.continuePastUncertain(session, payload)),
       setModel: ({ params: { session }, payload: { model } }) =>
         Effect.gen(function* () {
           // A model of its own must be one its provider lists; none needs no check.
@@ -325,20 +319,15 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
             (failure) => Effect.die(failure),
           ),
         ),
-      generateImage: ({ params: { session }, headers, payload }) =>
+      generateImage: ({ params: { session }, payload }) =>
         Effect.gen(function* () {
-          const holder = headers["x-session-holder"] ?? null;
-          const initiatorChatRouteId = yield* refusalsOnly(chat.imageOrigin(session, holder));
+          const initiatorChatRouteId = yield* refusalsOnly(chat.imageOrigin(session));
           // The paid request stops when the page goes away and the handler is interrupted.
           const signal = yield* Effect.abortSignal;
           const asset = yield* workflow.generate({ ...payload, initiatorChatRouteId, signal });
-          yield* chat.recordImage(session, holder, { prompt: payload.prompt, asset });
+          yield* chat.recordImage(session, { prompt: payload.prompt, asset });
           return { ...asset, url: `/api/attachments/${encodeURIComponent(asset.attachment.id)}` };
         }).pipe(Effect.scoped, Effect.catchTags(imageGenerationRefusals)),
-      lease: ({ params: { session }, payload: { holder, action } }) =>
-        refusalsOnly(chat.lease(session, holder, action)).pipe(
-          Effect.tap(() => events.publishSession(session, "run-state")),
-        ),
     });
   }),
 );

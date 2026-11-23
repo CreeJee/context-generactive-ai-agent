@@ -28,7 +28,6 @@ export class ProjectScopeMissing extends Schema.TaggedError<
     "message_queue",
     "relayed_approval",
     "run_state",
-    "session_lease",
     "work_trace",
   ]),
 }) {}

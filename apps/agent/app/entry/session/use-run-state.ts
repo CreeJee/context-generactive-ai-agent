@@ -14,17 +14,13 @@ import {
 
 /** The authoritative durable run/workflow snapshot, refreshed by session SSE invalidations. */
 export const useRunState: {
-  (
-    holder: string,
-    generating: boolean,
-    page: PageView,
-  ): (sessionId: string) => ReturnType<typeof useRunStateBody>;
-} & typeof useRunStateBody = EffectFunction.dual(4, useRunStateBody);
-function useRunStateBody(sessionId: string, holder: string, generating: boolean, page: PageView) {
+  (generating: boolean, page: PageView): (sessionId: string) => ReturnType<typeof useRunStateBody>;
+} & typeof useRunStateBody = EffectFunction.dual(3, useRunStateBody);
+function useRunStateBody(sessionId: string, generating: boolean, page: PageView) {
   const projectId = useProjectScope("run_state");
-  const cancelMutation = useCancelRunMutation(projectId, sessionId, holder);
-  const workflowMutation = useWorkflowMutation(projectId, sessionId, holder);
-  const query = useRunStateQuery(projectId, sessionId, holder);
+  const cancelMutation = useCancelRunMutation(projectId, sessionId);
+  const workflowMutation = useWorkflowMutation(projectId, sessionId);
+  const query = useRunStateQuery(projectId, sessionId);
   const state = query.data ?? null;
   /** The run a cancel was asked for that had not stopped when the server answered. */
   const [cancelAsked, setCancelAsked] = useState<string | null>(null);

@@ -9,7 +9,6 @@ import {
   TraceTaskDetail,
   TraceTreeSnapshot,
 } from "../../work-trace/contracts.ts";
-import { sessionHolderHeaders } from "../chat-api.ts";
 import { appRefusalFields, refusalWith, SameSite } from "../refusal.ts";
 import { LifecycleBlocked } from "./sessions.ts";
 
@@ -45,20 +44,11 @@ const UnknownSession = appRefusal(404, ["session_not_found"]);
 /** The session has no such task. */
 const UnknownTask = appRefusal(404, ["trace_task_not_found"]);
 
-/** Another page holds the session. */
-const SessionInUse = appRefusal(423, ["session_in_use"]);
-
 /** The retry cannot start; `reason` says why. */
 const ResumeBlocked = ResumeTaskResult.cases.blocked.pipe(HttpApiSchema.status(409));
 
 /** Every refusal of the group, for `appRefusalStatus`. */
-export const traceRefusals = [
-  WorkTraceDisabled,
-  SettingsUnavailable,
-  UnknownSession,
-  UnknownTask,
-  SessionInUse,
-];
+export const traceRefusals = [WorkTraceDisabled, SettingsUnavailable, UnknownSession, UnknownTask];
 
 const task = { task: Schema.String };
 
@@ -103,7 +93,6 @@ export class TraceGroup extends HttpApiGroup.make("trace")
      */
     HttpApiEndpoint.post("changeTask", "/api/sessions/:session/trace/tasks/:task", {
       params: { session: Schema.String, ...task },
-      headers: sessionHolderHeaders,
       payload: TraceTaskChange,
       success: [
         LifecycleResult.cases.completed,
@@ -115,7 +104,6 @@ export class TraceGroup extends HttpApiGroup.make("trace")
         WorkTraceDisabled,
         SettingsUnavailable,
         UnknownSession,
-        SessionInUse,
         LifecycleBlocked,
         ResumeBlocked,
       ],

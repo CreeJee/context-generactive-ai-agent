@@ -9,7 +9,7 @@
 ## Interface
 
 - `App` — `index.tsx`의 루트 React 컴포넌트다. 인증·모델·프로젝트·세션 쿼리, nuqs `useQueryStates(locationParsers)`로 URL 위치(project, session, card, board, boards, boardCard)를 관리한다. 세션 보관·삭제·복원, 프로젝트 추가, 모델 선택, 설정 열기를 연결한다
-- `api` — `/api/*` 백엔드 호출을 모은 객체 리터럴(`api.ts` 639-1104행)이다. 메서드는 auth/authAction/accounts/accountAction/accountQuota, models/selectModel, projects/hiddenProjects/addProject/hideProject/restoreProject/pickFolder/moveProject/setPermissionMode/setCrossRecallExcluded, sessions/archivedSessions/createSession, board/editBoard/decisions/decisionInbox/answerDecision/projectBoards, kanban/startKanban/boardIntent/restartKanbanLoop/setGoalDependencies/moveGoal/projectKanban/setProtectedBranches, moveWorkflow/controlWorkflow, sessionRunState/cancelRun/discardInterrupts/continuePastUncertain/compactSession/leaseAction, queue/enqueue/editQueued, image·kagi·imports·embedding·conversation·recall·kanban 설정, mcpServers/mcpAction, externalAgents/trustExternalAgent/reconnectExternalAgent, skills, work trace 계열(resume/archive/deleteWorkTraceTask, workTraceStreamUrl), subagents/relayedApprovals/subagentTranscript/answerApproval, uploadAttachment(file)이다
+- `api` — `/api/*` 백엔드 호출을 모은 객체 리터럴(`api.ts` 639-1104행)이다. 메서드는 auth/authAction/accounts/accountAction/accountQuota, models/selectModel, projects/hiddenProjects/addProject/hideProject/restoreProject/pickFolder/moveProject/setPermissionMode/setCrossRecallExcluded, sessions/archivedSessions/createSession, board/editBoard/decisions/decisionInbox/answerDecision/projectBoards, kanban/startKanban/boardIntent/restartKanbanLoop/setGoalDependencies/moveGoal/projectKanban/setProtectedBranches, moveWorkflow/controlWorkflow, sessionRunState/cancelRun/discardInterrupts/continuePastUncertain/compactSession, queue/enqueue/editQueued, image·kagi·imports·embedding·conversation·recall·kanban 설정, mcpServers/mcpAction, externalAgents/trustExternalAgent/reconnectExternalAgent, skills, work trace 계열(resume/archive/deleteWorkTraceTask, workTraceStreamUrl), subagents/relayedApprovals/subagentTranscript/answerApproval, uploadAttachment(file)이다
 - `ApiError` — `Schema.TaggedError("ApiError")`이다. 코드는 `ApiErrorCode`를 따르고 `CrossProviderMediaRunApproval`을 담을 수 있다. `message` getter를 override한다
 - `ApiErrorCode` — 브라우저 API가 이해하는 모든 오류 코드다. 앱 API 계약의 거부 code(`memory-agent/app-api`의 `AppRefusalCode`)와 페이지가 스스로 정하는 code(`invalid_request`, `request_failed`, `upload_failed`, `backend_restart_*`, `attachment_rejected`)의 합이다
 - `refusalOf` / `isApiError` — 실패 값(F)에서 `ApiError | null`을 꺼내는 헬퍼와 그 판별 함수다
@@ -30,7 +30,7 @@
 - `DeliveredEvent` / `ContextEvent` / `eventDecoders` — 스트림 이벤트(대기열 전달, context) `Schema.Struct`와 그 디코더 표다
 - `ErrorBody` — 계약에 없는 상태로 거절된 응답과 첨부 업로드 거절의 본문 Schema다
 - 문구 — 쓰이는 자리에 Lingui 메시지(`<Trans>`, `` t`…` ``, `msg`)로 쓴다. `app/locales/ko.po`로 추출되고 `lint/wording`이 검사한다.
-- 재내보내기 — `memory-agent/definitions`의 값 `ApprovalRequester`, `NextDelivery`, `QueueEdit`, `QueueItemState`와, `memory-agent`·definitions의 타입(`Session`, `Project`, `ModelSelection`, `ProviderId`, `QueueSnapshot`, `SessionRunState`, `LeaseView`, `BoardView`, `McpOverview`, `SkillCatalog`, `SubagentView`, `WorkflowPhase` 등)을 `api.ts`에서 다시 내보낸다
+- 재내보내기 — `memory-agent/definitions`의 값 `ApprovalRequester`, `NextDelivery`, `QueueEdit`, `QueueItemState`와, `memory-agent`·definitions의 타입(`Session`, `Project`, `ModelSelection`, `ProviderId`, `QueueSnapshot`, `SessionRunState`, `BoardView`, `McpOverview`, `SkillCatalog`, `SubagentView`, `WorkflowPhase` 등)을 `api.ts`에서 다시 내보낸다
 - 하위 디렉터리:
   - [`chat`](./chat/README.md) — 한 세션의 대화 패널, 입력창, 메시지 렌더링, 승인 카드, 대기열·워크플로·작업 추적·보드 패널
   - [`events`](./events/README.md) — 서버 SSE 스트림(`/api/events`)을 구독해 TanStack Query 캐시를 무효화하는 계층
@@ -38,7 +38,7 @@
   - [`navigation`](./navigation/README.md) — 왼쪽 사이드바의 모델·프로젝트·세션·판단 대기함·칸반·계정 UI
   - [`queries`](./queries/README.md) — TanStack React Query 키와 범위별 `queryOptions`·훅
   - [`report`](./report/README.md) — `/report` 문제 제보 화면 모듈
-  - [`session`](./session/README.md) — 세션 lease, 메시지 큐, run·워크플로 상태, work trace 구독 훅
+  - [`session`](./session/README.md) — 메시지 큐, run·워크플로 상태, work trace 구독 훅
   - [`settings`](./settings/README.md) — 전역 설정 대화상자 진입점과 페이지 공용 컴포넌트
   - [`shared`](./shared/README.md) — API fetch 래퍼, 재시작 상태, Effect 실행 도우미, Web Crypto, 공용 UI
 
@@ -49,7 +49,6 @@
 - 세션 보드에 들어가면 프로젝트 보드(`boards`, `boardCard`)를 닫는다(`leaveProjectBoard`). 두 보드는 URL을 함께 쓰지 않는다. 프로젝트를 바꾸면 이전 프로젝트의 session, card, board를 모두 지운다(`leaveProject`)
 - URL의 project가 프로젝트 목록에 없으면 `projects[0]`로 바꾼다. 이때 project가 바뀌었으면 session을 null로 둔다. URL의 session이 활성 세션 목록에 없으면 `sessions[0]`로 바꾼다
 - 세션 보관·삭제·복원의 결과가 `completed`가 아니면 `PendingLifecycle`(waiting_for_stop / blocked, `goal_dependents` 포함)을 문구로만 보여 준다. 이때 선택 세션은 바꾸지 않는다. `completed`일 때만, 현재 세션이 대상이면 남은 첫 세션으로 옮긴다
-- 수명주기 mutation은 `pageHolder`와 함께 만든다. lease가 필요한 세션 변경 api 메서드(`moveWorkflow`, `editBoard`, `cancelRun`, `enqueue`, `answerApproval` 등)는 모두 `holder` 인자를 받는다(`sessionHolderHeader` 사용)
 - Promise 경계는 `runUiEffect`/`uiPromise`로 감싼다. 실패는 `UnknownError`를 `catchTag`로 잡고 `refusalOf(failure.cause)`로 원래 `ApiError`를 꺼내 문구로 바꾼다
 - 공급자별 모델 쿼리는 그 공급자가 `ProviderAuthState` `signed-in`일 때만 켠다
 - `SessionChange`의 `Archive`/`Delete` 본문은 `idempotencyKey`를 반드시 담는다
@@ -57,7 +56,7 @@
 ## Side Effects
 
 - 네트워크: `api`의 메서드는 `appCall`로 앱 API 계약(`memory-agent/app-api`)의 `HttpApiClient`를 `appFetch` 위에서 부른다. 거부는 `appRefusalStatus`의 상태와 함께 `ApiError`가 된다. 계약에 없는 상태의 응답은 `ErrorBody`로 디코드한다(`apiError`). 계약이 보내기 전에 거절한 값은 400 `invalid_request`, 계약에 맞지 않는 응답은 서버 잘못이라 502 `request_failed`다(client의 `transformResponse`가 응답 decode 실패를 `UnexpectedAnswer`로 가른다)
-- 네트워크: `uploadAttachment(file)`로 첨부 파일을 업로드한다. `generateSessionImage(session, holder, prompt, approved, approval?)`로 `POST /api/sessions/:session/images`에 이미지 생성을 요청한다. 서버가 그림을 대화에 적는다
+- 네트워크: `uploadAttachment(file)`로 첨부 파일을 업로드한다. `generateSessionImage(session, prompt, approved, approval?)`로 `POST /api/sessions/:session/images`에 이미지 생성을 요청한다. 서버가 그림을 대화에 적는다
 - `workTraceStreamUrl(sessionId, after)`로 work trace SSE 스트림 URL을 만든다(구독은 호출자가 맡는다)
 - `api.ts`는 `browserCrypto`(Web Crypto 기반 Effect `SecureRandom`)를 import한다
 - URL 상태: `App`이 nuqs `setLocation`으로 브라우저 쿼리스트링을 바꾼다. 프로젝트 선택·추가 때는 `history: "push"`를 쓴다

@@ -1,6 +1,4 @@
-import { isTruthy } from "../truthy.ts";
 import { Effect, Function as EffectFunction, Result, Schema } from "effect";
-import { sessionHolderHeader } from "../sessions/lease-state.ts";
 import { ApprovalRequester } from "../approvals/relayed-state.ts";
 
 /** Where the running app is, unless `CONTEXT_AGENT_URL` says otherwise. */
@@ -22,10 +20,8 @@ export const AuthSummary = Schema.TaggedUnion({
   "signed-in": {},
   error: {},
 });
-const LeaseSummary = Schema.Struct({ state: Schema.Literals(["mine", "other", "free"]) });
 const RunSummary = Schema.Struct({
   running: Schema.NullOr(Schema.Struct({ runId: Schema.String })),
-  lease: LeaseSummary,
 });
 const ErrorBody = Schema.Struct({ error: Schema.String });
 
@@ -118,11 +114,11 @@ function createAppApiBody(baseUrl: string, fetcher: typeof fetch = fetch) {
       );
     }).pipe(Effect.scoped);
 
-  const post = (body: JsonBody, holder?: string): RequestInit => {
-    const headers = new Headers({ "Content-Type": "application/json" });
-    if (isTruthy(holder)) headers.set(sessionHolderHeader, holder);
-    return { method: "POST", headers, body: JSON.stringify(body) };
-  };
+  const post = (body: JsonBody): RequestInit => ({
+    method: "POST",
+    headers: new Headers({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
 
   return {
     baseUrl,
@@ -136,25 +132,11 @@ function createAppApiBody(baseUrl: string, fetcher: typeof fetch = fetch) {
     createSession: (projectId: string, title: string) =>
       request(SessionSummary, "/api/sessions", post({ projectId, title })),
 
-    sessionState: (sessionId: string, holder: string) =>
-      request(
-        RunSummary,
-        `/api/sessions/${encodeURIComponent(sessionId)}?holder=${encodeURIComponent(holder)}`,
-      ),
+    sessionState: (sessionId: string) =>
+      request(RunSummary, `/api/sessions/${encodeURIComponent(sessionId)}`),
 
-    lease: (sessionId: string, holder: string, action: "claim" | "release") =>
-      request(
-        LeaseSummary,
-        `/api/sessions/${encodeURIComponent(sessionId)}/lease`,
-        post({ holder, action }),
-      ),
-
-    cancel: (sessionId: string, holder: string) =>
-      request(
-        Schema.Unknown,
-        `/api/sessions/${encodeURIComponent(sessionId)}/cancel`,
-        post({}, holder),
-      ),
+    cancel: (sessionId: string) =>
+      request(Schema.Unknown, `/api/sessions/${encodeURIComponent(sessionId)}/cancel`, post({})),
 
     /** Calls of subagents and external agents waiting for the user. */
     approvals: (sessionId: string) =>
@@ -170,11 +152,11 @@ function createAppApiBody(baseUrl: string, fetcher: typeof fetch = fetch) {
         `/api/sessions/${encodeURIComponent(sessionId)}/approvals`,
       ),
 
-    answerApproval: (sessionId: string, holder: string, approvalId: string, approved: boolean) =>
+    answerApproval: (sessionId: string, approvalId: string, approved: boolean) =>
       request(
         Schema.Unknown,
         `/api/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`,
-        post({ approved }, holder),
+        post({ approved }),
       ),
   };
 }

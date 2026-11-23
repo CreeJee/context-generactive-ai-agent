@@ -777,7 +777,7 @@ testAgent()("server workflow action policy", (it) => {
       const workflows = yield* Workflows;
       yield* workflows.updateGoal(id, goal);
       const state = yield* workflows.updatePlan(id, plan);
-      const actions = workflowActions(state, { running: true, lease: { state: "mine" } });
+      const actions = workflowActions(state, { running: true });
       Object.values(actions.moves).forEach((decision) =>
         expect(decision).toEqual({ allowed: false, reason: "run_in_progress" }),
       );
@@ -785,36 +785,24 @@ testAgent()("server workflow action policy", (it) => {
       expect(actions.controls.pause.allowed).toBe(true);
       expect(actions.controls.stop.allowed).toBe(true);
       expect(
-        evaluateWorkflowAction(state, WorkflowActionRequest.move({ move: "run" }), {
-          lease: { state: "free" },
-        }).allowed,
+        evaluateWorkflowAction(state, WorkflowActionRequest.move({ move: "run" }), {}).allowed,
       ).toBe(true);
     }),
   );
 
-  it.effect("GET exposes the same policy with the requesting page's lease", () =>
+  it.effect("GET exposes the same policy", () =>
     Effect.gen(function* () {
       const id = yield* freshSession;
       const workflows = yield* Workflows;
       const agent = yield* AgentChat;
       yield* workflows.updateGoal(id, goal);
       yield* workflows.updatePlan(id, plan);
-      yield* agent.lease(id, "owner", "claim");
-      yield* Effect.forEach(
-        ["owner", "observer"],
-        Effect.fnUntraced(function* (holder) {
-          const snapshot = yield* agent.status(id, holder);
-          expect(snapshot.actions).toEqual(
-            workflowActions(snapshot.workflow, {
-              lease: snapshot.lease,
-              running: snapshot.running !== null,
-            }),
-          );
-          const changed = yield* Effect.result(agent.moveWorkflow(id, holder, "run"));
-          expect(Result.isSuccess(changed)).toBe(snapshot.actions.moves.run.allowed);
-        }),
-        { discard: true },
+      const snapshot = yield* agent.status(id);
+      expect(snapshot.actions).toEqual(
+        workflowActions(snapshot.workflow, { running: snapshot.running !== null }),
       );
+      const changed = yield* Effect.result(agent.moveWorkflow(id, "run"));
+      expect(Result.isSuccess(changed)).toBe(snapshot.actions.moves.run.allowed);
     }),
   );
 });

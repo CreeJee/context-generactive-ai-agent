@@ -103,7 +103,7 @@ export const settled = (sessionId: string) =>
         ),
         Schema.decodeUnknownEffect(Busy),
       ),
-      current(Effect.flatMap(AgentChat, (agent) => agent.status(sessionId, null))),
+      current(Effect.flatMap(AgentChat, (agent) => agent.status(sessionId))),
       ({ busy }, { running }) => busy === 0 && running === null,
     ),
     "delegated work to settle",

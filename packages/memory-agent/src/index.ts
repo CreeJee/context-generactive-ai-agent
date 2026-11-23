@@ -455,7 +455,6 @@ export { Importer, ImportWorkerFailed, ImportActivity } from "./imports/importer
 export { ImportFailure, ImportOverview, UnplacedFolder } from "./imports/contracts.ts";
 export { ImportSourceName } from "./imports/items.ts";
 export { TurnSummaries } from "./agent/turn-summaries.ts";
-export { SessionLeases, defaultLeaseTtlMs, makeLeases } from "./sessions/leases.ts";
 export { MessageQueue, QueueChangeRefused } from "./queue/queue.ts";
 export { QueueDelivery, queueDeliveredEvent, type DeliveryBinding } from "./queue/delivery.ts";
 export {
@@ -465,7 +464,6 @@ export {
   type DeliveryVia,
   type QueuedMessage,
 } from "./queue/queue-state.ts";
-export { sessionHolderHeader, type ClaimResult, type LeaseView } from "./sessions/lease-state.ts";
 export {
   DispatchStoreFailed,
   maxDispatchBodyCharacters,

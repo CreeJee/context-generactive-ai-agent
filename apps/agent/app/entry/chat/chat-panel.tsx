@@ -72,7 +72,6 @@ import { approvalAnswer, toPendingApproval } from "./pending-approval";
 import { useAgentChat } from "./use-agent-chat";
 import { RunNoticeView } from "../session/run-state";
 import { sessionDrafts } from "../session/session-drafts";
-import { pageHolder } from "../session/session-lease";
 import { useWorkTrace } from "../session/work-trace";
 import { useBackendRestartRequired } from "../shared/use-backend-restart";
 import { TurnWaitsForModel } from "../shared/model-downloads";
@@ -301,13 +300,11 @@ export function SessionView({
   /** Pickers for the composer's footer. */
   composerControls?: ReactNode;
 }) {
-  const holder = pageHolder();
   const [syncRevision, setSyncRevision] = useState(0);
   return (
     <ChatPanel
       key={`sync:${syncRevision}`}
       sessionId={sessionId}
-      holder={holder}
       onResync={() => setSyncRevision((current) => current + 1)}
       imagesSupported={imagesSupported}
       slash={slash}
@@ -323,7 +320,6 @@ export function SessionView({
  */
 function ChatPanel({
   sessionId,
-  holder,
   onResync,
   imagesSupported,
   slash,
@@ -331,7 +327,6 @@ function ChatPanel({
   composerControls,
 }: {
   sessionId: string;
-  holder: string;
   onResync: () => void;
   imagesSupported: boolean;
   slash: SlashSupport;
@@ -344,10 +339,10 @@ function ChatPanel({
   const kanbanRunning = useKanbanQuery(projectId, sessionId).data?.active === true;
   // `mutateAsync` is the same function on every render, so the task actions built on it keep their
   // identity and a message renders again only for a change of its own.
-  const { mutateAsync: resumeTrace } = useResumeTraceTaskMutation(projectId, sessionId, holder);
-  const { mutateAsync: archiveTrace } = useArchiveTraceTaskMutation(projectId, sessionId, holder);
-  const { mutateAsync: deleteTrace } = useDeleteTraceTaskMutation(projectId, sessionId, holder);
-  const compactMutation = useCompactSessionMutation(projectId, sessionId, holder);
+  const { mutateAsync: resumeTrace } = useResumeTraceTaskMutation(projectId, sessionId);
+  const { mutateAsync: archiveTrace } = useArchiveTraceTaskMutation(projectId, sessionId);
+  const { mutateAsync: deleteTrace } = useDeleteTraceTaskMutation(projectId, sessionId);
+  const compactMutation = useCompactSessionMutation(projectId, sessionId);
   const backendRestartRequired = useBackendRestartRequired();
   const mutationBlocked = backendRestartRequired || !sendingEnabled;
   const workTrace = useWorkTrace(sessionId);
@@ -363,7 +358,6 @@ function ChatPanel({
   const [notice, setNotice] = useState<Notice | null>(null);
   const media = useImageGeneration({
     sessionId,
-    holder,
     onProblem: (message) => setNotice(problem(message)),
   });
   /** The prompt waiting for the user to accept a paid image generation. */
@@ -410,7 +404,6 @@ function ChatPanel({
     resolveInterrupts,
   } = useAgentChat({
     sessionId,
-    holder,
     onNotTaken: ({ input, refusal }) => {
       if (outgoing === null || input.content !== outgoing.content) return;
       setOutgoing(null);
@@ -469,7 +462,7 @@ function ChatPanel({
     messages.at(-1)?.role === "assistant" &&
     lastPart?.type === "text" &&
     lastPart.content.trim().length > 0;
-  const run = useRunState(sessionId, holder, generating, {
+  const run = useRunState(sessionId, generating, {
     waitingForApproval,
     answered: endsWithText,
   });
@@ -553,7 +546,7 @@ function ChatPanel({
   // The server's view is read again once the run stops, and from then on it is the latest.
   useEffect(() => setLiveContext(null), [run.context]);
   const context = liveContext ?? run.context;
-  const queue = useMessageQueue(sessionId, holder, generating);
+  const queue = useMessageQueue(sessionId, generating);
   const delegated = useDelegatedWork(sessionId, generating).state;
   // What Stop ends: a run, this page's or one it does not read, and work delegated from it.
   const stoppable =
@@ -1047,7 +1040,6 @@ function ChatPanel({
         <ChatApprovals
           key={approvalBatchKey}
           sessionId={sessionId}
-          holder={holder}
           approvals={approvals}
           problem={answerProblem}
           resuming={resuming}
@@ -1061,12 +1053,11 @@ function ChatPanel({
         />
         <UncertainRuns
           sessionId={sessionId}
-          holder={holder}
           runs={run.uncertainRuns}
           onContinued={() => void run.refresh()}
           onProblem={(message) => setNotice(problem(message))}
         />
-        <SubagentPanel sessionId={sessionId} holder={holder} generating={generating} />
+        <SubagentPanel sessionId={sessionId} generating={generating} />
         {submitted && (
           <Marker role="status">
             <MarkerIcon>
@@ -1131,7 +1122,6 @@ function ChatPanel({
               <WorkflowBoard
                 projectId={projectId}
                 sessionId={sessionId}
-                holder={holder}
                 disabled={backendRestartRequired}
               />
             }

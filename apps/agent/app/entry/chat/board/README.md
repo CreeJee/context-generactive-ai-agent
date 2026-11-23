@@ -6,9 +6,9 @@
 
 ## Interface
 
-- `BoardSurface` — 하나 또는 여러 Plan의 열, 카드 peek, 거절 알림, 실행 중 카드 변경 요청 프롬프트, 다른 대화로 옮기기 확인을 그리는 공용 보드 컴포넌트다. props는 projectId, holder, boards, shown, peek, onPeek, adding, onDraggingChange, className 등이다
+- `BoardSurface` — 하나 또는 여러 Plan의 열, 카드 peek, 거절 알림, 실행 중 카드 변경 요청 프롬프트, 다른 대화로 옮기기 확인을 그리는 공용 보드 컴포넌트다. props는 projectId, boards, shown, peek, onPeek, adding, onDraggingChange, className 등이다
 - `BoardFrame` — 본문 영역에 그리는 보드의 틀이다(Dialog가 아니다). 제목 줄(앞자리 `leading`, 도구 `tools`, "보드 닫기" 버튼), 그 아래의 상태 `header`, 나머지를 채우는 보드(`children`)를 그린다. 보드 안에서 Esc를 누르면 `onEscape`를 부르고, 보드를 닫을지는 보드가 정한다. 세션 보드와 프로젝트 보드가 함께 쓴다
-- `SessionBoard` — 한 대화의 보드다(`board-panel.tsx`). 보드와 판단, 칸반 루프를 스스로 읽어 `BoardFrame`에 그리므로 페이지는 대화만 넘긴다. 다른 창이 대화를 쓰는지는 알 수 없어 `disabled` 없이 그리고, 서버의 거절을 알림으로 보인다
+- `SessionBoard` — 한 대화의 보드다(`board-panel.tsx`). 보드와 판단, 칸반 루프를 스스로 읽어 `BoardFrame`에 그리므로 페이지는 대화만 넘긴다. `disabled` 없이 그리고, 서버의 거절을 알림으로 보인다
 - `SurfaceBoard` — 보드 위 한 Plan의 묶음이다(sessionId, label, view, plan, decisions, loop, rank). label과 rank는 Plan 하나만 보일 때 null이다
 - `ActiveKanban` / `BoardPlan` — `KanbanView`의 active 변형과 `BoardView["plan"]`의 non-null 타입 별칭
 - `PlannerStalledBadge` / `ReplanWaitBadge` — "자동 Plan 작성 멈춤"과 "확인 필요 카드" 배지다. 세션 보드와 프로젝트 보드가 함께 쓰므로 문구와 설명을 이 한 곳에서 정의한다

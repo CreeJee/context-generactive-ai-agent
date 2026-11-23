@@ -19,18 +19,15 @@ const problemText = <F>(failure: F) =>
       "run_in_progress",
       () => t`이 대화가 아직 답하는 중입니다. 답변이 끝난 뒤 다시 보내 주십시오.`,
     ),
-    Match.when("session_in_use", () => t`다른 탭이 이 대화를 쓰고 있습니다.`),
     Match.orElse(() => t`이미지를 생성하지 못했습니다. 설정과 계정 권한을 확인해 주십시오.`),
   );
 
 /** Image requests and consent are one user action; the settings snapshot belongs to the query cache. */
 export function useImageGeneration({
   sessionId,
-  holder,
   onProblem,
 }: {
   sessionId: string;
-  holder: string;
   onProblem: (message: string) => void;
 }) {
   const [intent, _setIntent, clearIntent, toggleIntent] = useBooleanState(false);
@@ -40,7 +37,7 @@ export function useImageGeneration({
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     mutationFn: (prompt: string) =>
       runUiEffect(
-        uiPromise(() => api.generateSessionImage(sessionId, holder, prompt, true)).pipe(
+        uiPromise(() => api.generateSessionImage(sessionId, prompt, true)).pipe(
           Effect.catchTag("UnknownError", (rejected) =>
             Effect.gen(function* () {
               const failure = rejected.cause;
@@ -56,13 +53,11 @@ export function useImageGeneration({
               return yield* ApprovalChoice.$match(choice, {
                 cancel: () => Effect.succeed(null),
                 once: ({ approval: chosen }) =>
-                  uiPromise(() =>
-                    api.generateSessionImage(sessionId, holder, prompt, true, chosen),
-                  ),
+                  uiPromise(() => api.generateSessionImage(sessionId, prompt, true, chosen)),
                 always: () =>
                   uiPromise(() => consentMutation.mutateAsync("always")).pipe(
                     Effect.andThen(
-                      uiPromise(() => api.generateSessionImage(sessionId, holder, prompt, true)),
+                      uiPromise(() => api.generateSessionImage(sessionId, prompt, true)),
                     ),
                   ),
               });

@@ -4,7 +4,7 @@ import { navigationInterrupt as interruptFor } from "../apps/agent/scripts/navig
 
 const approvals = process.env.NAV_TEST_APPROVALS === "1";
 
-// Browser-only fixtures: never send a message, change settings, or claim a server lease.
+// Browser-only fixtures: never send a message or change settings.
 const origin = process.env.NAV_TEST_ORIGIN ?? "http://localhost:5173";
 const project = process.env.NAV_TEST_PROJECT;
 const session = process.env.NAV_TEST_SESSION;
@@ -50,7 +50,6 @@ try {
       });
     }
     if (request.method() !== "GET") {
-      if (url.pathname.endsWith("/lease")) return route.fulfill({ json: { state: "mine" } });
       blockedMutations++;
       return route.fulfill({ status: 403, json: { error: "Verification blocks mutations" } });
     }
@@ -101,7 +100,6 @@ try {
             status: approvals ? "interrupted" : "failed",
             error: approvals ? null : { message: `NAV-RUN-${id}` },
           },
-          lease: { state: "mine" },
         },
       });
     }

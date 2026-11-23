@@ -85,7 +85,6 @@ const needsUser = (surface: SurfaceBoard | null, goalDecisions: number) => {
  */
 export function ProjectBoard({
   projectId,
-  holder,
   leading,
   peek,
   onPeek,
@@ -93,7 +92,6 @@ export function ProjectBoard({
   onClose,
 }: {
   readonly projectId: string;
-  readonly holder: string;
   /** Drawn before the title; see {@link BoardFrame}. */
   readonly leading?: ReactNode;
   /** The card open in the peek panel, from the `boardCard` query. */
@@ -338,7 +336,6 @@ export function ProjectBoard({
                   <ConversationRow
                     key={row.sessionId}
                     projectId={projectId}
-                    holder={holder}
                     row={row}
                     surface={surfaceOf(row.sessionId)}
                     goalDecisions={goalDecisionsOf(row.sessionId)}
@@ -389,7 +386,6 @@ export function ProjectBoard({
       {rows.length > 0 && (
         <BoardSurface
           projectId={projectId}
-          holder={holder}
           disabled={false}
           boards={surfaces}
           shown={shown}
@@ -411,7 +407,6 @@ export function ProjectBoard({
  */
 function ConversationRow({
   projectId,
-  holder,
   row,
   surface,
   goalDecisions,
@@ -422,7 +417,6 @@ function ConversationRow({
   onOpenSession,
 }: {
   readonly projectId: string;
-  readonly holder: string;
   readonly row: ProjectBoardRow;
   /** The conversation's board as the surface shows it; null until it has loaded. */
   readonly surface: SurfaceBoard | null;
@@ -439,7 +433,7 @@ function ConversationRow({
   readonly onOpenSession: () => void;
 }) {
   const { t } = useLingui();
-  const kanbanAction = useKanbanMutation(projectId, row.sessionId, holder);
+  const kanbanAction = useKanbanMutation(projectId, row.sessionId);
   const [actionError, setActionError] = useState<string | null>(null);
   const title = titleOf(row);
   const loop = surface?.loop ?? null;
@@ -541,7 +535,6 @@ function ConversationRow({
             <DecisionPrompt
               key={request.requestId}
               projectId={projectId}
-              holder={holder}
               request={request}
               disabled={false}
             />

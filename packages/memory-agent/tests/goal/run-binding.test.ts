@@ -38,7 +38,6 @@ const post = Effect.fnUntraced(function* (
   const api = yield* chatApi;
   return yield* api.run({
     params: { session },
-    headers: {},
     payload: { runId, messages: [{ id: messageId, role: "user", content }] },
   });
 });
@@ -138,7 +137,7 @@ testAgent({ testProvider: { delayedTurnGate: slowTurn.waitFor } })(
         const chat = yield* AgentChat;
         const target = yield* refusedRequest("unresolved-bound-run", yield* withGoal);
         const reserved = `${target.session}:reserved`;
-        expect(yield* chat.status(target.session, null)).toMatchObject({
+        expect(yield* chat.status(target.session)).toMatchObject({
           uncertainRuns: [{ runId: reserved, tools: [] }],
         });
         expect(yield* Effect.flip(post(target.session, target.runId))).toEqual({
@@ -146,9 +145,9 @@ testAgent({ testProvider: { delayedTurnGate: slowTurn.waitFor } })(
         });
 
         expect(
-          yield* Effect.flip(chat.continuePastUncertain(target.session, null, { runIds: [] })),
+          yield* Effect.flip(chat.continuePastUncertain(target.session, { runIds: [] })),
         ).toEqual({ error: "uncertain_runs_changed" });
-        yield* chat.continuePastUncertain(target.session, null, { runIds: [reserved] });
+        yield* chat.continuePastUncertain(target.session, { runIds: [reserved] });
         const { id } = yield* latestRevision(target.session);
         expect(
           Admission.$is("bound")(

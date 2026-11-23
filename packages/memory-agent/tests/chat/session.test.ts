@@ -45,7 +45,7 @@ testAgent({ testProvider: {} })("chat session atoms", (it) => {
 
       yield* Atom.set(atoms.open, undefined);
       yield* done(atoms.open);
-      yield* Atom.set(atoms.send, { holder: "tab-a", content: "hi" });
+      yield* Atom.set(atoms.send, { content: "hi" });
       yield* done(atoms.send);
       const answered = yield* shown;
       expect(Option.map(answered, (messages) => messages.map(({ role }) => role))).toEqual(
@@ -53,7 +53,7 @@ testAgent({ testProvider: {} })("chat session atoms", (it) => {
       );
 
       yield* Atom.mount(atoms.notTaken);
-      const again = { holder: "tab-a", content: "" };
+      const again = { content: "" };
       yield* Atom.set(atoms.send, again);
       expect(yield* Effect.flip(done(atoms.send))).toMatchObject({ error: "empty_message" });
       expect(yield* shown).toEqual(answered);
@@ -80,9 +80,9 @@ testAgent({ testProvider: {} })("chat session atoms", (it) => {
         }),
       );
 
-      yield* Atom.set(starting.send, { holder: "tab-a", content: "hi" });
+      yield* Atom.set(starting.send, { content: "hi" });
       yield* done(starting.send);
-      const started = yield* (yield* agentChat).status(session, null);
+      const started = yield* (yield* agentChat).status(session);
       yield* onReader(Atom.set(reading.latest, started.lastRun?.runId ?? null));
 
       const roles = Atom.toStream(reading.state).pipe(
@@ -133,9 +133,7 @@ testAgent({ testProvider: {} })("chat session atoms", (it) => {
         });
 
         const first = yield* openedPage;
-        yield* first.on(
-          Atom.set(first.atoms.send, { holder: "tab-a", content: "please use the shell" }),
-        );
+        yield* first.on(Atom.set(first.atoms.send, { content: "please use the shell" }));
         yield* first.on(done(first.atoms.send));
         const interrupts = Option.getOrThrow(yield* first.waiting);
         expect(interrupts.pending).toHaveLength(1);
@@ -145,7 +143,7 @@ testAgent({ testProvider: {} })("chat session atoms", (it) => {
         expect(Option.getOrThrow(yield* second.waiting).pending).toHaveLength(1);
         expect(Option.getOrThrow(yield* third.waiting).pending).toHaveLength(1);
         // Only the third page hears of the server's runs.
-        const before = yield* agent.status(session, null);
+        const before = yield* agent.status(session);
         yield* third.on(
           Effect.gen(function* () {
             yield* Atom.set(third.atoms.latest, (before.running ?? before.lastRun)?.runId ?? null);
@@ -161,13 +159,12 @@ testAgent({ testProvider: {} })("chat session atoms", (it) => {
         }));
         yield* second.on(
           Atom.set(second.atoms.answer, {
-            holder: "tab-b",
             parentRunId: interrupts.runId,
             answers,
           }),
         );
         yield* second.on(done(second.atoms.answer));
-        const answered = (yield* agent.status(session, null)).lastRun?.runId ?? null;
+        const answered = (yield* agent.status(session)).lastRun?.runId ?? null;
         const calls = invocations().length;
 
         // The third page hears of the run the answer started and reads the conversation again.
@@ -177,7 +174,6 @@ testAgent({ testProvider: {} })("chat session atoms", (it) => {
         // The first page has not heard of it; its late answer is dropped without a failure.
         yield* first.on(
           Atom.set(first.atoms.answer, {
-            holder: "tab-a",
             parentRunId: interrupts.runId,
             answers,
           }),

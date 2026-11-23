@@ -20,7 +20,6 @@ testAgent({ testProvider: {} })("chat API", (it) => {
       const events = yield* api
         .run({
           params: { session },
-          headers: {},
           payload: { runId: run, messages: [message("hi")] },
         })
         .pipe(Effect.flatMap(Stream.runCollect));
@@ -45,7 +44,6 @@ testAgent({ testProvider: {} })("chat API", (it) => {
         api
           .run({
             params: { session },
-            headers: {},
             payload: { runId, messages: [message(text, id)] },
           })
           .pipe(Effect.flatMap(Stream.runDrain));
@@ -100,7 +98,6 @@ testAgent({ testProvider: {} })("chat API view", (it) => {
       const asked = yield* read(
         yield* api.run({
           params: { session },
-          headers: {},
           payload: { runId: `${session}-1`, messages: [message("please use the shell")] },
         }),
         viewOf({
@@ -117,7 +114,6 @@ testAgent({ testProvider: {} })("chat API view", (it) => {
       const approved = yield* read(
         yield* api.run({
           params: { session },
-          headers: {},
           payload: {
             runId: `${session}-2`,
             parentRunId: `${session}-1`,

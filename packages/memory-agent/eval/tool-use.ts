@@ -424,7 +424,6 @@ const evaluate = Effect.fn("eval.toolUse")(function* () {
           const finished = yield* chat
             .run({
               params: { session: session.id },
-              headers: {},
               payload: {
                 runId: yield* crypto.uuidV4(),
                 messages: [{ id: yield* crypto.uuidV4(), role: "user", content: each.prompt }],

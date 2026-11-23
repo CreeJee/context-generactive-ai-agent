@@ -1,5 +1,4 @@
 import { Schema } from "effect";
-import { LeaseView } from "../sessions/contracts.ts";
 import {
   ProviderRetryView,
   UncertainRun,
@@ -117,8 +116,6 @@ export const SessionRunState = Schema.Struct({
       ),
     }),
   ),
-  /** Whether the asking page may change the session. */
-  lease: LeaseView,
   context: ContextView,
   /** Durable Goal/Plan phase and artifacts for this conversation. */
   workflow: WorkflowState,

@@ -14,7 +14,7 @@
 
 ## Invariants
 
-- 스크립트는 브라우저 측 fixture만 쓴다(주석 원문: "never send a message, change settings, or claim a server lease"). GET이 아닌 `/api/**` 요청은 `/lease`로 끝나는 경로(`{ state: "mine" }`로 응답)만 빼고 403으로 막고 횟수를 센다. 마지막에 `blockedMutations === 0`이어야 한다.
+- 스크립트는 브라우저 측 fixture만 쓴다(주석 원문: "never send a message or change settings"). GET이 아닌 `/api/**` 요청은 403으로 막고 횟수를 센다. 마지막에 `blockedMutations === 0`이어야 한다.
 - SSE 요청(`accept`에 `text/event-stream`)은 `route.fetch`로 넘기지 않고 빈 fixture 스트림(`: fixture\n\n`)으로 응답한다. 끝나지 않는 스트림을 피하고 실행 상태를 바꾸지 않기 위해서다.
 - `NAV_TEST_SESSION`은 `/api/sessions?project=` 목록에 실제로 있는 활성 세션이어야 한다. 그 세션 행과 `/api/sessions/<id>` 응답을 template으로 삼아 가상 세션 `navigation-fixture-b`를 만든다. 세션 B의 다른 하위 경로 요청은 세션 A 경로로 바꿔 실제 서버에 보낸다.
 - 승인 모드에서는 ChatPanel이 대기 중인 승인이 있을 때 종료된 실행 공지를 숨긴다. 그래서 `assertSessionState`는 모드에 따라 실행 오류 텍스트와 승인 텍스트 가운데 하나만 확인한다.

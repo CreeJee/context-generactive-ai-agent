@@ -8,7 +8,7 @@
 
 ## Interface
 
-- `SessionView` — 한 세션의 진입 컴포넌트다. `pageHolder()`로 이 페이지의 이름을 읽어 넘긴다. `onResync`가 불리면 revision 키로 `ChatPanel`을 다시 마운트한다. props: `sessionId`, `imagesSupported`, `slash`, `sendingEnabled`, `composerControls`(입력창 아래줄에 둘 선택기, `ChatPanel`을 거쳐 `ChatComposer`의 `controls`로 간다)
+- `SessionView` — 한 세션의 진입 컴포넌트다. `onResync`가 불리면 revision 키로 `ChatPanel`을 다시 마운트한다. props: `sessionId`, `imagesSupported`, `slash`, `sendingEnabled`, `composerControls`(입력창 아래줄에 둘 선택기, `ChatPanel`을 거쳐 `ChatComposer`의 `controls`로 간다)
 - `SlashSupport` — 슬래시 명령의 `SlashContext`와, 패널 밖에서 실행할 명령(new/agent/mode/model/effort/settings/report)을 처리하는 `run`을 묶은 인터페이스
 - `chatRuntime` — 페이지 전체가 공유하는 `Atom.runtime`이다. `ChatApiClient.layer`+`FetchHttpClient.layer`, `FetchHttpClient.Fetch`=`appFetch`, `SecureRandom.SecureRandom`=`browserCrypto`를 합친다
 - `useAgentChat` — 한 세션 대화 훅이다. 열면 최신 메시지를 읽고 진행 중 run에 다시 붙는다. 그 뒤 다른 탭이나 서버가 시작한 run도 따라 읽는다. run 상태의 최신 run id를 세션 Atom `latest`에 넘기고, 판단은 `chatSessions`의 `follow`가 한다. `onNotTaken`은 서버가 거절했거나 받지 못한 turn을 받는다. ChatPanel은 보낸 글과 이미지를 입력창에 되돌리고, `run_in_progress` 거절이면 대기열에 넣는다. 반환: `messages`, `opened`(세션을 한 번 읽었는지. `ChatHistory`는 읽기 전에는 "새 대화" 대신 로딩을 보인다), `openFailed`·`reopen`(처음 읽기가 실패했을 때 오류와 다시 시도), `hasOlderMessages`, `loadOlderMessages`, `sendMessage`, `stop`, `isLoading`, `sessionGenerating`, `resuming`, `failure`, `refusal`, `dismissRefusal`, `unsent`, `interrupts`, `answerProblem`, `resolveInterrupts`
@@ -39,7 +39,7 @@
 ## Invariants
 
 - 서버가 transcript를 소유한다. `ChatPanel`은 마운트할 때 최신 메시지와 남은 승인 대기를 함께 읽는다. 그래서 새로고침해도 같은 승인 카드가 다시 보인다.
-- turn과 승인 답에는 항상 `holder`를 넣어 보낸다. 서버는 그 값으로 요청을 거절하지 않는다. 어느 탭이든 turn과 답을 보낸다.
+- 요청은 어느 페이지가 보냈는지를 싣지 않는다. 어느 탭이든 turn과 답을 보낸다.
 - 실행 중인 보드에서 입력창의 모드 전환이나 "Plan 수정"으로 running을 떠나면 먼저 확인한다. 떠나면 보드가 새 카드를 맡기지 않기 때문이다. 직접 입력한 slash 명령은 묻지 않는다.
 - `mutationBlocked = backendRestartRequired || !sendingEnabled`이다.
 - `stop()`은 `Atom.Interrupt`로 이 페이지의 읽기만 끊는다. 서버의 run은 서버에서 취소할 때까지 계속 돈다.

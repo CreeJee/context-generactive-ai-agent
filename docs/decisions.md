@@ -5757,6 +5757,8 @@
   복원하지 않는다".
 - 남은 일: `holder` 인자, lease API, `SessionLeases`는 계획 029가 지운다. ACP 브리지는 그때까지 에디터 연결
   하나만 받는다.
+- 계획 029: `holder` 인자, `X-Session-Holder` 헤더, lease API, `SessionLeases`, run 상태의 `lease` 필드를 지웠다.
+  ACP 브리지도 lease를 잡지 않아 같은 대화에 에디터 연결을 여럿 받는다.
 - 확인: `packages/memory-agent/tests/chat/two-pages.test.ts`(두 탭이 한 대화를 조작, 늦은 답은 run 없이
   거절), `tests/chat/session.test.ts`의 "an approval another page answered closes here, and a late answer to
   it is dropped".

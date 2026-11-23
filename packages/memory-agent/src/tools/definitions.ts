@@ -38,7 +38,6 @@ export type {
   UncertainTool,
   UncertainToolState,
 } from "../workflow/uncertain-runs.ts";
-export { sessionHolderHeader, type LeaseView } from "../sessions/lease-state.ts";
 export {
   ConfigFileFailureCode,
   ExternalAgentFailureCode,

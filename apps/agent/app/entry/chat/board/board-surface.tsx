@@ -164,8 +164,6 @@ export const errorText = (code: ApiErrorCode) => {
       return t`칸반으로 실행할 때만 열을 옮길 수 있습니다.`;
     case "plan_closed":
       return t`완료했거나 닫은 Plan은 바꿀 수 없습니다.`;
-    case "session_in_use":
-      return t`다른 창에서 이 대화를 쓰고 있습니다.`;
     case "plan_not_executing":
       return t`실행 중인 Plan만 칸반으로 돌릴 수 있습니다.`;
     case "worktree_unavailable":
@@ -253,7 +251,6 @@ const refOf = (item: BoardItem): BoardCardRef => ({
  */
 export function BoardSurface({
   projectId,
-  holder,
   disabled,
   boards,
   shown,
@@ -265,7 +262,6 @@ export function BoardSurface({
   className,
 }: {
   readonly projectId: string;
-  readonly holder: string;
   readonly disabled: boolean;
   /** The Plans on the board, in the order their cards are laid out. */
   readonly boards: readonly SurfaceBoard[];
@@ -283,10 +279,10 @@ export function BoardSurface({
 }) {
   // Drops and transfers get their own mutation, so the board shows one as requested while it is on
   // the way and drops it when refused; the server's board then draws the card where it really is.
-  const request = useBoardsKanbanMutation(projectId, holder);
+  const request = useBoardsKanbanMutation(projectId);
   // The peek's own actions: their pending state disables the peek, not the board.
-  const action = useBoardsKanbanMutation(projectId, holder);
-  const edit = useBoardsEditMutation(projectId, holder);
+  const action = useBoardsKanbanMutation(projectId);
+  const edit = useBoardsEditMutation(projectId);
   const [landing, setLanding] = useState<Landing | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [editingKey, setEditingKey] = useState<string | null>(null);
@@ -469,7 +465,6 @@ export function BoardSurface({
             changePending={peek !== null && changePending(peek)}
             projectId={projectId}
             sessionId={peekSession}
-            holder={holder}
             disabled={disabled}
             closed={peekBoard === null || closedIn(peekBoard)}
             planVersion={peekBoard?.plan.version ?? 0}

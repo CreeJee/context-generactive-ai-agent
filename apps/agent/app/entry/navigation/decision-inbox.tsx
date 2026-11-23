@@ -32,12 +32,10 @@ const waitingCount = (waiting: ProjectWaiting) =>
  */
 export function DecisionInbox({
   projects,
-  holder,
   onOpenCard,
 }: {
   /** Every listed project; the inbox gathers what waits in each. */
   readonly projects: ReadonlyArray<{ readonly id: string; readonly name: string }>;
-  readonly holder: string;
   readonly onOpenCard: (projectId: string, sessionId: string, cardId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -90,7 +88,6 @@ export function DecisionInbox({
                 )}
                 <ProjectWaitingList
                   waiting={project}
-                  holder={holder}
                   onOpenCard={(sessionId, cardId) => {
                     setOpen(false);
                     onOpenCard(project.projectId, sessionId, cardId);
@@ -111,15 +108,13 @@ export function DecisionInbox({
  */
 function ProjectWaitingList({
   waiting,
-  holder,
   onOpenCard,
 }: {
   readonly waiting: ProjectWaiting;
-  readonly holder: string;
   readonly onOpenCard: (sessionId: string, cardId: string) => void;
 }) {
   const { t } = useLingui();
-  const approve = useBoardsKanbanMutation(holder)(waiting.projectId);
+  const approve = useBoardsKanbanMutation(waiting.projectId);
   const [approveError, setApproveError] = useState<string | null>(null);
   const approvals = waiting.boards.flatMap((board) =>
     board.awaitingApproval.map((card) => ({ ...card, board })),
@@ -151,12 +146,7 @@ function ProjectWaitingList({
               <Trans comment="Button that opens the decision's card on its board">카드 보기</Trans>
             </Button>
           </div>
-          <DecisionPrompt
-            projectId={waiting.projectId}
-            holder={holder}
-            request={item}
-            disabled={false}
-          />
+          <DecisionPrompt projectId={waiting.projectId} request={item} disabled={false} />
         </section>
       ))}
       {approveError !== null && (

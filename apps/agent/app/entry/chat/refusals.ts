@@ -35,7 +35,6 @@ export const refusalTexts = {
   provider_image_generation_unavailable: msg`선택한 공급자는 이미지를 만들 수 없습니다.`,
   report_image_generation_unavailable: msg`제보 대화에서는 이미지를 만들 수 없습니다.`,
   image_route_unavailable: msg`이미지를 만들 경로가 없습니다. 설정에서 이미지 생성을 확인해 주십시오.`,
-  session_in_use: msg`다른 창이 이 대화를 쓰고 있습니다.`,
   goal_ledger_unavailable: msg`Goal 기록을 읽지 못해 실행하지 않았습니다. 잠시 뒤 다시 보내 주십시오.`,
   goal_workflow_admission_failed: msg`Goal 실행을 시작하지 못했습니다. 잠시 뒤 다시 보내 주십시오.`,
   provider_auth_unavailable: msg`인증 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주십시오.`,

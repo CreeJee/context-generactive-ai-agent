@@ -110,9 +110,8 @@ UI 컴포넌트는 shadcn으로 추가합니다(`AGENT.md`).
 | `GET/POST /api/projects/:project/mcp`        | MCP 서버 목록과 상태, `{scope, name, trusted}`로 신뢰/중지                                                           |
 | `POST /api/projects/:project`                | `crossRecallExcluded`, `permissionMode`(`ask`/`auto`), `hidden`(보관과 해제) 변경                                    |
 | `GET/POST /api/sessions`                     | 프로젝트별 대화 목록(`archived=1`이면 보관함), 새 대화(`agent`로 외부 에이전트 직접, 아니면 그때 선택된 모델로 시작) |
-| `GET /api/sessions/:session?holder=`         | 진행 중인 run, 마지막 run의 끝난 방식, 이 탭의 소유 여부, 컨텍스트 사용량                                            |
+| `GET /api/sessions/:session`                 | 진행 중인 run, 마지막 run의 끝난 방식, 컨텍스트 사용량                                                               |
 | `POST /api/sessions/:session`                | 보관·복원, 삭제, workflow 단계·동작(답변 중 409)                                                                     |
-| `POST /api/sessions/:session/lease`          | 탭의 소유권 얻기, 갱신(`claim`), 놓기(`release`)                                                                     |
 | `POST /api/sessions/:session/cancel`         | 진행 중인 run 취소, 실제로 멈췄는지 응답                                                                             |
 | `POST /api/sessions/:session/model`          | 대화의 모델 바꾸기(`model: null`이면 앱의 선택된 모델을 다시 따름)                                                   |
 | `POST /api/sessions/:session/images`         | 이미지 생성(유료, 승인 필요). 그림을 사용자 프롬프트, `generate_image` 호출, 결과로 대화에 적는다(답변 중 409)       |

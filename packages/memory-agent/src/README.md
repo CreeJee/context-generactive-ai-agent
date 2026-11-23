@@ -8,7 +8,7 @@
 
 - `i18n` (`i18n.ts`, `memory-agent/i18n`로 내보냄) — 서버가 보이는 문구를 푸는 Lingui 인스턴스. 서버 코드는 빌드 없이 돌므로 문구를 `@lingui/core/runtime-macro`의 `msg`로 쓰고 `i18n._(…)`로 푼다. 설명자가 한국어 원문을 담아 카탈로그를 싣지 않고, 보일 때 메시지를 컴파일한다. `locales/ko.po`는 `lingui extract`(설정 `../lingui.config.ts`)가 만들고 `lint/wording`이 검사한다
 - `memoryAgentLayer` — `EffectFunction.dual`이며 `(storageRoot)`, `(storageRoot, options)`, `(options)(storageRoot)` 형태를 받는다. 첫 인자가 문자열(`Schema.is(Schema.String)`)이면 data-first로 판별한다. 저장 디렉터리 하나 위에 모든 memory-agent 서비스를 조립하는 composition root다
-- `MemoryAgentLayerOptions` — `memoryAgentLayer`의 선택 옵션이다. 레이어 교체용 옵션은 `compatibleSettings`, `embedder`, `providerRegistry`, `providerToolRegistry`, `modelFeatureFlags`, `crossProviderMediaConsent`, `providerToolPolicy`, `providerToolRuntime`, `routeCatalog`, `imageRouteFacts`, `imageRouter`, `imageFeature`, `directImageExecutor`, `imageMediaWorkflow`, `secrets`다. 값 옵션은 `openDatabase`, `leaseTtlMs`, `interpretAutomatically`, `summarizeAutomatically`, `kagiBaseUrl`, `skillsHome`, `skillsBuiltin`, `importsHome`, `importsWatching`, `sweepSecrets`, `kanbanWorktreesBase`다
+- `MemoryAgentLayerOptions` — `memoryAgentLayer`의 선택 옵션이다. 레이어 교체용 옵션은 `compatibleSettings`, `embedder`, `providerRegistry`, `providerToolRegistry`, `modelFeatureFlags`, `crossProviderMediaConsent`, `providerToolPolicy`, `providerToolRuntime`, `routeCatalog`, `imageRouteFacts`, `imageRouter`, `imageFeature`, `directImageExecutor`, `imageMediaWorkflow`, `secrets`다. 값 옵션은 `openDatabase`, `interpretAutomatically`, `summarizeAutomatically`, `kagiBaseUrl`, `skillsHome`, `skillsBuiltin`, `importsHome`, `importsWatching`, `sweepSecrets`, `kanbanWorktreesBase`다
 - `JsonValue` — 손실 없이 JSON으로 표현되는 값 타입이자 `Schema.Codec<JsonValue>`이다(`json.ts`). `Schema.suspend` 재귀 Union으로 String, Finite, Boolean, Null, Array, Record를 받는다. `index.ts`는 이를 `JsonValue`와 타입 별칭 `Json`으로 다시 내보낸다
 - `optionalProperty` — `EffectFunction.dual(2)`이며 `(key, value)`와 `(value)(key)`를 지원한다. value가 `undefined`가 아니면 `{ [key]: value }`를, `undefined`면 `{}`를 돌려준다(`optional-property.ts`)
 - `isTruthy` — JavaScript truthiness를 그대로 쓰면서 `Exclude<NonNullable<T>, false | 0 | 0n | "">`로 좁히는 타입 가드다(`truthy.ts`)
@@ -59,7 +59,7 @@
   - [`report`](./report/README.md) — 버그 리포트 백엔드
   - [`runtime`](./runtime/README.md) — 호스트·네이티브 경계와 공통 런타임
   - [`secrets`](./secrets/README.md) — 비밀 가리기와 sweep
-  - [`sessions`](./sessions/README.md) — 세션 레코드와 lease
+  - [`sessions`](./sessions/README.md) — 세션 레코드
   - [`shell`](./shell/README.md) — sh 스킬 스크립트를 호스트 명령으로 실행
   - [`skills`](./skills/README.md) — 에이전트 스킬 카탈로그
   - [`subagents`](./subagents/README.md) — 하위 에이전트 위임

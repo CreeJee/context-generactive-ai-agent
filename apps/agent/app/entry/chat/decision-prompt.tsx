@@ -190,8 +190,6 @@ const errorText = (code: ApiErrorCode): MessageDescriptor => {
     case "request_missing":
     case "request_mismatch":
       return msg`결정 요청을 찾을 수 없습니다.`;
-    case "session_in_use":
-      return msg`다른 창에서 이 대화를 쓰고 있습니다.`;
     case "kanban_storage_failed":
     case "workflow_storage_failed":
       return msg`답을 기록하거나 카드를 옮기지 못했습니다. 잠시 뒤 다시 시도해 주십시오.`;
@@ -203,17 +201,15 @@ const errorText = (code: ApiErrorCode): MessageDescriptor => {
 /** One card decision with its choices; the board and the project inbox both show it. */
 export function DecisionPrompt({
   projectId,
-  holder,
   request,
   disabled,
 }: {
   readonly projectId: string;
-  readonly holder: string;
   readonly request: HumanDecisionRequest;
   readonly disabled: boolean;
 }) {
   const { t } = useLingui();
-  const answer = useAnswerDecisionMutation(projectId, holder);
+  const answer = useAnswerDecisionMutation(projectId);
   const [error, setError] = useState<MessageDescriptor | null>(null);
   const description = describeDecision(request.kind);
   const title = t(description.title);

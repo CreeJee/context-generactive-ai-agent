@@ -14,32 +14,26 @@ import { sessionQueries } from "../session";
 import { projectQueries } from "../project";
 
 export const useEditBoardMutation: {
-  (
-    sessionId: string,
-    holder: string,
-  ): (projectId: string) => ReturnType<typeof useEditBoardMutationBody>;
-} & typeof useEditBoardMutationBody = EffectFunction.dual(3, useEditBoardMutationBody);
-function useEditBoardMutationBody(projectId: string, sessionId: string, holder: string) {
+  (sessionId: string): (projectId: string) => ReturnType<typeof useEditBoardMutationBody>;
+} & typeof useEditBoardMutationBody = EffectFunction.dual(2, useEditBoardMutationBody);
+function useEditBoardMutationBody(projectId: string, sessionId: string) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (edit: BoardEdit) => api.editBoard(sessionId, holder, edit),
+    mutationFn: (edit: BoardEdit) => api.editBoard(sessionId, edit),
     onSettled: () =>
       Promise.all([
         client.invalidateQueries({
           queryKey: sessionQueries.board(projectId, sessionId).queryKey,
         }),
         client.invalidateQueries({
-          queryKey: sessionQueries.runState(projectId, sessionId, holder).queryKey,
+          queryKey: sessionQueries.runState(projectId, sessionId).queryKey,
         }),
       ]),
   });
 }
 
 /** Answers a card decision of any session in the project; the board and inbox read it again. */
-export const useAnswerDecisionMutation: {
-  (holder: string): (projectId: string) => ReturnType<typeof useAnswerDecisionMutationBody>;
-} & typeof useAnswerDecisionMutationBody = EffectFunction.dual(2, useAnswerDecisionMutationBody);
-function useAnswerDecisionMutationBody(projectId: string, holder: string) {
+export function useAnswerDecisionMutation(projectId: string) {
   const client = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -51,7 +45,7 @@ function useAnswerDecisionMutationBody(projectId: string, holder: string) {
         "requestId" | "sessionId" | "goalInstanceId" | "cardId" | "factsSeq"
       >;
       answer: DecisionAnswer;
-    }) => api.answerDecision(holder, request, answer),
+    }) => api.answerDecision(request, answer),
     onSettled: (_answered, _error, { request }) =>
       Promise.all([
         client.invalidateQueries({
@@ -79,14 +73,14 @@ export type KanbanAction = Data.TaggedEnum<{
 }>;
 export const KanbanAction = Data.taggedEnum<KanbanAction>();
 
-const sendKanbanAction = (sessionId: string, holder: string, action: KanbanAction) =>
+const sendKanbanAction = (sessionId: string, action: KanbanAction) =>
   KanbanAction.$match(action, {
-    Start: () => api.startKanban(sessionId, holder),
-    RestartLoop: () => api.restartKanbanLoop(sessionId, holder),
-    RecheckOutcomes: () => api.recheckOutcomes(sessionId, holder),
-    Intent: ({ intent }) => api.boardIntent(sessionId, holder, intent),
-    SetDependencies: ({ dependsOn }) => api.setGoalDependencies(sessionId, holder, dependsOn),
-    Retarget: () => api.retargetKanban(sessionId, holder),
+    Start: () => api.startKanban(sessionId),
+    RestartLoop: () => api.restartKanbanLoop(sessionId),
+    RecheckOutcomes: () => api.recheckOutcomes(sessionId),
+    Intent: ({ intent }) => api.boardIntent(sessionId, intent),
+    SetDependencies: ({ dependsOn }) => api.setGoalDependencies(sessionId, dependsOn),
+    Retarget: () => api.retargetKanban(sessionId),
   });
 
 /** The board and loop of a conversation, read again after a kanban action. */
@@ -103,15 +97,12 @@ const transferTarget = (action: KanbanAction): string | null =>
 
 /** Starts the executing Plan as a kanban board, carries out an intent, or changes the schedule. */
 export const useKanbanMutation: {
-  (
-    sessionId: string,
-    holder: string,
-  ): (projectId: string) => ReturnType<typeof useKanbanMutationBody>;
-} & typeof useKanbanMutationBody = EffectFunction.dual(3, useKanbanMutationBody);
-function useKanbanMutationBody(projectId: string, sessionId: string, holder: string) {
+  (sessionId: string): (projectId: string) => ReturnType<typeof useKanbanMutationBody>;
+} & typeof useKanbanMutationBody = EffectFunction.dual(2, useKanbanMutationBody);
+function useKanbanMutationBody(projectId: string, sessionId: string) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (action: KanbanAction) => sendKanbanAction(sessionId, holder, action),
+    mutationFn: (action: KanbanAction) => sendKanbanAction(sessionId, action),
     onSettled: () =>
       Promise.all(
         kanbanKeys(projectId, sessionId).map((queryKey) => client.invalidateQueries({ queryKey })),
@@ -123,10 +114,7 @@ function useKanbanMutationBody(projectId: string, sessionId: string, holder: str
  * A kanban action for any conversation of the project: the board that shows several Plans names
  * the conversation per request. A transfer reads the receiving conversation's board again too.
  */
-export const useBoardsKanbanMutation: {
-  (holder: string): (projectId: string) => ReturnType<typeof useBoardsKanbanMutationBody>;
-} & typeof useBoardsKanbanMutationBody = EffectFunction.dual(2, useBoardsKanbanMutationBody);
-function useBoardsKanbanMutationBody(projectId: string, holder: string) {
+export function useBoardsKanbanMutation(projectId: string) {
   const client = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -135,7 +123,7 @@ function useBoardsKanbanMutationBody(projectId: string, holder: string) {
     }: {
       readonly sessionId: string;
       readonly action: KanbanAction;
-    }) => sendKanbanAction(sessionId, holder, action),
+    }) => sendKanbanAction(sessionId, action),
     onSettled: (_result, _error, { sessionId, action }) => {
       const target = transferTarget(action);
       const keys = [
@@ -149,19 +137,16 @@ function useBoardsKanbanMutationBody(projectId: string, holder: string) {
 }
 
 /** A board edit for any conversation of the project, as the board showing several Plans sends it. */
-export const useBoardsEditMutation: {
-  (holder: string): (projectId: string) => ReturnType<typeof useBoardsEditMutationBody>;
-} & typeof useBoardsEditMutationBody = EffectFunction.dual(2, useBoardsEditMutationBody);
-function useBoardsEditMutationBody(projectId: string, holder: string) {
+export function useBoardsEditMutation(projectId: string) {
   const client = useQueryClient();
   return useMutation({
     mutationFn: ({ sessionId, edit }: { readonly sessionId: string; readonly edit: BoardEdit }) =>
-      api.editBoard(sessionId, holder, edit),
+      api.editBoard(sessionId, edit),
     onSettled: (_result, _error, { sessionId }) =>
       Promise.all(
         [
           sessionQueries.board(projectId, sessionId).queryKey,
-          sessionQueries.runState(projectId, sessionId, holder).queryKey,
+          sessionQueries.runState(projectId, sessionId).queryKey,
           projectQueries.boards(projectId).queryKey,
         ].map((queryKey) => client.invalidateQueries({ queryKey })),
       ),
@@ -169,16 +154,13 @@ function useBoardsEditMutationBody(projectId: string, holder: string) {
 }
 
 export const useRelayedApprovalMutation: {
-  (
-    sessionId: string,
-    holder: string,
-  ): (projectId: string) => ReturnType<typeof useRelayedApprovalMutationBody>;
-} & typeof useRelayedApprovalMutationBody = EffectFunction.dual(3, useRelayedApprovalMutationBody);
-function useRelayedApprovalMutationBody(projectId: string, sessionId: string, holder: string) {
+  (sessionId: string): (projectId: string) => ReturnType<typeof useRelayedApprovalMutationBody>;
+} & typeof useRelayedApprovalMutationBody = EffectFunction.dual(2, useRelayedApprovalMutationBody);
+function useRelayedApprovalMutationBody(projectId: string, sessionId: string) {
   const client = useQueryClient();
   return useMutation({
     mutationFn: ({ approvalId, approved }: { approvalId: string; approved: boolean }) =>
-      api.answerApproval(sessionId, holder, approvalId, approved),
+      api.answerApproval(sessionId, approvalId, approved),
     // A refused answer means the list changed under the page, so it is read again either way.
     onSettled: () =>
       client.invalidateQueries({
@@ -188,12 +170,9 @@ function useRelayedApprovalMutationBody(projectId: string, sessionId: string, ho
 }
 
 export const useEnqueueMutation: {
-  (
-    sessionId: string,
-    holder: string,
-  ): (projectId: string) => ReturnType<typeof useEnqueueMutationBody>;
-} & typeof useEnqueueMutationBody = EffectFunction.dual(3, useEnqueueMutationBody);
-function useEnqueueMutationBody(projectId: string, sessionId: string, holder: string) {
+  (sessionId: string): (projectId: string) => ReturnType<typeof useEnqueueMutationBody>;
+} & typeof useEnqueueMutationBody = EffectFunction.dual(2, useEnqueueMutationBody);
+function useEnqueueMutationBody(projectId: string, sessionId: string) {
   const client = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -204,23 +183,20 @@ function useEnqueueMutationBody(projectId: string, sessionId: string, holder: st
       text: string;
       attachmentIds: readonly string[];
       mode: "queue" | "steer";
-    }) => api.enqueue(sessionId, holder, { text, attachmentIds, mode }),
+    }) => api.enqueue(sessionId, { text, attachmentIds, mode }),
     onSuccess: () =>
       client.invalidateQueries({ queryKey: sessionQueries.queue(projectId, sessionId).queryKey }),
   });
 }
 
 export const useEditQueueMutation: {
-  (
-    sessionId: string,
-    holder: string,
-  ): (projectId: string) => ReturnType<typeof useEditQueueMutationBody>;
-} & typeof useEditQueueMutationBody = EffectFunction.dual(3, useEditQueueMutationBody);
-function useEditQueueMutationBody(projectId: string, sessionId: string, holder: string) {
+  (sessionId: string): (projectId: string) => ReturnType<typeof useEditQueueMutationBody>;
+} & typeof useEditQueueMutationBody = EffectFunction.dual(2, useEditQueueMutationBody);
+function useEditQueueMutationBody(projectId: string, sessionId: string) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, edit }: { id: string; edit: Parameters<typeof api.editQueued>[3] }) =>
-      api.editQueued(sessionId, holder, id, edit),
+    mutationFn: ({ id, edit }: { id: string; edit: Parameters<typeof api.editQueued>[2] }) =>
+      api.editQueued(sessionId, id, edit),
     onSuccess: () =>
       client.invalidateQueries({ queryKey: sessionQueries.queue(projectId, sessionId).queryKey }),
   });
@@ -233,12 +209,9 @@ function useTraceInvalidation(projectId: string, sessionId: string) {
 }
 
 export const useResumeTraceTaskMutation: {
-  (
-    sessionId: string,
-    holder: string,
-  ): (projectId: string) => ReturnType<typeof useResumeTraceTaskMutationBody>;
-} & typeof useResumeTraceTaskMutationBody = EffectFunction.dual(3, useResumeTraceTaskMutationBody);
-function useResumeTraceTaskMutationBody(projectId: string, sessionId: string, holder: string) {
+  (sessionId: string): (projectId: string) => ReturnType<typeof useResumeTraceTaskMutationBody>;
+} & typeof useResumeTraceTaskMutationBody = EffectFunction.dual(2, useResumeTraceTaskMutationBody);
+function useResumeTraceTaskMutationBody(projectId: string, sessionId: string) {
   const invalidate = useTraceInvalidation(projectId, sessionId);
   return useMutation({
     mutationFn: ({
@@ -249,93 +222,78 @@ function useResumeTraceTaskMutationBody(projectId: string, sessionId: string, ho
       taskId: string;
       attemptId: string;
       confirmUncertain: boolean;
-    }) => api.resumeWorkTraceTask(sessionId, holder, taskId, attemptId, confirmUncertain),
+    }) => api.resumeWorkTraceTask(sessionId, taskId, attemptId, confirmUncertain),
     onSuccess: invalidate,
   });
 }
 
 export const useArchiveTraceTaskMutation: {
-  (
-    sessionId: string,
-    holder: string,
-  ): (projectId: string) => ReturnType<typeof useArchiveTraceTaskMutationBody>;
+  (sessionId: string): (projectId: string) => ReturnType<typeof useArchiveTraceTaskMutationBody>;
 } & typeof useArchiveTraceTaskMutationBody = EffectFunction.dual(
-  3,
+  2,
   useArchiveTraceTaskMutationBody,
 );
-function useArchiveTraceTaskMutationBody(projectId: string, sessionId: string, holder: string) {
+function useArchiveTraceTaskMutationBody(projectId: string, sessionId: string) {
   const invalidate = useTraceInvalidation(projectId, sessionId);
   return useMutation({
-    mutationFn: (taskId: string) => api.archiveWorkTraceTask(sessionId, holder, taskId),
+    mutationFn: (taskId: string) => api.archiveWorkTraceTask(sessionId, taskId),
     onSuccess: invalidate,
   });
 }
 
 export const useDeleteTraceTaskMutation: {
-  (
-    sessionId: string,
-    holder: string,
-  ): (projectId: string) => ReturnType<typeof useDeleteTraceTaskMutationBody>;
-} & typeof useDeleteTraceTaskMutationBody = EffectFunction.dual(3, useDeleteTraceTaskMutationBody);
-function useDeleteTraceTaskMutationBody(projectId: string, sessionId: string, holder: string) {
+  (sessionId: string): (projectId: string) => ReturnType<typeof useDeleteTraceTaskMutationBody>;
+} & typeof useDeleteTraceTaskMutationBody = EffectFunction.dual(2, useDeleteTraceTaskMutationBody);
+function useDeleteTraceTaskMutationBody(projectId: string, sessionId: string) {
   const invalidate = useTraceInvalidation(projectId, sessionId);
   return useMutation({
-    mutationFn: (taskId: string) => api.deleteWorkTraceTask(sessionId, holder, taskId),
+    mutationFn: (taskId: string) => api.deleteWorkTraceTask(sessionId, taskId),
     onSuccess: invalidate,
   });
 }
 
 export const useCompactSessionMutation: {
-  (
-    sessionId: string,
-    holder: string,
-  ): (projectId: string) => ReturnType<typeof useCompactSessionMutationBody>;
-} & typeof useCompactSessionMutationBody = EffectFunction.dual(3, useCompactSessionMutationBody);
-function useCompactSessionMutationBody(projectId: string, sessionId: string, holder: string) {
+  (sessionId: string): (projectId: string) => ReturnType<typeof useCompactSessionMutationBody>;
+} & typeof useCompactSessionMutationBody = EffectFunction.dual(2, useCompactSessionMutationBody);
+function useCompactSessionMutationBody(projectId: string, sessionId: string) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: () => api.compactSession(sessionId, holder),
+    mutationFn: () => api.compactSession(sessionId),
     onSuccess: () =>
       client.invalidateQueries({
-        queryKey: sessionQueries.runState(projectId, sessionId, holder).queryKey,
+        queryKey: sessionQueries.runState(projectId, sessionId).queryKey,
       }),
   });
 }
 
 /** Saves the model one conversation runs on; null makes it follow the app's selected model. */
 export const useSessionModelMutation: {
-  (
-    sessionId: string,
-    holder: string,
-  ): (projectId: string) => ReturnType<typeof useSessionModelMutationBody>;
-} & typeof useSessionModelMutationBody = EffectFunction.dual(3, useSessionModelMutationBody);
-function useSessionModelMutationBody(projectId: string, sessionId: string, holder: string) {
+  (sessionId: string): (projectId: string) => ReturnType<typeof useSessionModelMutationBody>;
+} & typeof useSessionModelMutationBody = EffectFunction.dual(2, useSessionModelMutationBody);
+function useSessionModelMutationBody(projectId: string, sessionId: string) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (model: ModelSelection | null) => api.setSessionModel(sessionId, holder, model),
+    mutationFn: (model: ModelSelection | null) => api.setSessionModel(sessionId, model),
     onSuccess: () =>
       Promise.all([
         client.invalidateQueries({ queryKey: projectQueries.sessions(projectId).queryKey }),
         client.invalidateQueries({
-          queryKey: sessionQueries.runState(projectId, sessionId, holder).queryKey,
+          queryKey: sessionQueries.runState(projectId, sessionId).queryKey,
         }),
       ]),
   });
 }
 
 export const useCancelRunMutation: {
-  (
-    sessionId: string,
-    holder: string,
-  ): (projectId: string) => ReturnType<typeof useCancelRunMutationBody>;
-} & typeof useCancelRunMutationBody = EffectFunction.dual(3, useCancelRunMutationBody);
-function useCancelRunMutationBody(projectId: string, sessionId: string, holder: string) {
+  (sessionId: string): (projectId: string) => ReturnType<typeof useCancelRunMutationBody>;
+} & typeof useCancelRunMutationBody = EffectFunction.dual(2, useCancelRunMutationBody);
+function useCancelRunMutationBody(projectId: string, sessionId: string) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: () => api.cancelRun(sessionId, holder),
+    mutationFn: () => api.cancelRun(sessionId),
     onSuccess: () =>
       client.invalidateQueries({
-        queryKey: sessionQueries.runState(projectId, sessionId, holder).queryKey,
+        queryKey: sessionQueries.runState(projectId, sessionId).queryKey,
       }),
   });
 }
@@ -347,26 +305,23 @@ export type WorkflowChange = Data.TaggedEnum<{
 export const WorkflowChange = Data.taggedEnum<WorkflowChange>();
 
 export const useWorkflowMutation: {
-  (
-    sessionId: string,
-    holder: string,
-  ): (projectId: string) => ReturnType<typeof useWorkflowMutationBody>;
-} & typeof useWorkflowMutationBody = EffectFunction.dual(3, useWorkflowMutationBody);
-function useWorkflowMutationBody(projectId: string, sessionId: string, holder: string) {
+  (sessionId: string): (projectId: string) => ReturnType<typeof useWorkflowMutationBody>;
+} & typeof useWorkflowMutationBody = EffectFunction.dual(2, useWorkflowMutationBody);
+function useWorkflowMutationBody(projectId: string, sessionId: string) {
   const client = useQueryClient();
   return useMutation({
     mutationFn: WorkflowChange.$match({
-      move: ({ move }) => api.moveWorkflow(sessionId, holder, move),
-      control: ({ action }) => api.controlWorkflow(sessionId, holder, action),
+      move: ({ move }) => api.moveWorkflow(sessionId, move),
+      control: ({ action }) => api.controlWorkflow(sessionId, action),
     }),
     onSuccess: () =>
       client.invalidateQueries({
-        queryKey: sessionQueries.runState(projectId, sessionId, holder).queryKey,
+        queryKey: sessionQueries.runState(projectId, sessionId).queryKey,
       }),
     // A rejected action can mean the permissions snapshot changed while the page was open.
     onError: () =>
       client.invalidateQueries({
-        queryKey: sessionQueries.runState(projectId, sessionId, holder).queryKey,
+        queryKey: sessionQueries.runState(projectId, sessionId).queryKey,
       }),
   });
 }

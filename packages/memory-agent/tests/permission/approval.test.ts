@@ -111,9 +111,9 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
     Effect.gen(function* () {
       const { sessionId } = yield* pendingApproval();
       const agent = yield* AgentChat;
-      expect(yield* agent.discardInterrupts(sessionId, null)).toEqual({ discarded: 1 });
+      expect(yield* agent.discardInterrupts(sessionId)).toEqual({ discarded: 1 });
       expect(yield* (yield* RunStore).pendingInterrupts(sessionId)).toEqual([]);
-      expect(yield* agent.status(sessionId, null)).toMatchObject({
+      expect(yield* agent.status(sessionId)).toMatchObject({
         running: null,
         lastRun: { status: "failed", error: { code: "interrupt_continuation_lost" } },
       });
@@ -136,7 +136,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })(
         expect(restarted.view().messages.length).toBeGreaterThan(0);
         expect(restarted.pending()).toEqual([]);
         const status = yield* env.use(
-          Effect.flatMap(AgentChat, (agent) => agent.status(sessionId, null)),
+          Effect.flatMap(AgentChat, (agent) => agent.status(sessionId)),
         );
         expect(status).toMatchObject({
           running: null,

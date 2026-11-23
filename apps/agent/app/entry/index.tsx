@@ -81,7 +81,6 @@ import { SessionModelPicker } from "./chat/model-picker";
 import { SessionView, type SlashSupport } from "./chat/chat-panel";
 import { AppEventsProvider, SessionEventsProvider } from "./events/providers";
 import { ThemeSync } from "./shared/theme";
-import { pageHolder } from "./session/session-lease";
 import { sourceOf } from "./settings/model-selection-field";
 import { openSettingsOverlay } from "./settings/open-settings";
 import { PermissionModeSelect } from "./settings/permission-mode-select";
@@ -215,7 +214,7 @@ export function App() {
   const permissionMutation = usePermissionModeMutation(projectId ?? "");
   const restoreProjectMutation = useRestoreProjectMutation();
   const createSessionMutation = useCreateSessionMutation();
-  const lifecycleMutation = useSessionLifecycleMutation(pageHolder);
+  const lifecycleMutation = useSessionLifecycleMutation();
   const sessionsQuery = useProjectSessionsQuery(projectId);
   const sessions = sessionsQuery.data?.active ?? [];
   /** One group per listed project: its conversations, read with each project's own query key. */
@@ -235,11 +234,7 @@ export function App() {
     sessionSelection === null ? null : sourceOf(sessionSelection),
   );
   const sessionModels = sessionCatalog.data?.models ?? [];
-  const sessionModelMutation = useSessionModelMutation(
-    projectId ?? "",
-    sessionId ?? "",
-    pageHolder(),
-  );
+  const sessionModelMutation = useSessionModelMutation(projectId ?? "", sessionId ?? "");
   /**
    * Conversations at work now, per project: the groups lead with them and badge their count.
    * Every listed project is read, not only the selected one, so a group answers from its own read.
@@ -641,7 +636,6 @@ export function App() {
                     <SessionModelPicker
                       projectId={openProjectId}
                       sessionId={id}
-                      holder={pageHolder()}
                       model={sessionSelection}
                       disabled={false}
                     />
@@ -782,7 +776,6 @@ export function App() {
               <SidebarMenu>
                 <DecisionInbox
                   projects={projects.map((project) => ({ id: project.id, name: project.name }))}
-                  holder={pageHolder()}
                   onOpenCard={(project, session, card) =>
                     void setLocation(
                       { ...leaveProject, project, session, card },
@@ -900,12 +893,11 @@ export function App() {
           </Sheet>
           <SidebarInset className="min-w-0">
             <SidebarReopen />
-            {/* The conversation stays mounted under an open board, so its lease, run and draft go on. */}
+            {/* The conversation stays mounted under an open board, so its run and draft go on. */}
             <div className={boardCoversChat ? "hidden" : "contents"}>{main}</div>
             {projectId && projectBoardShown && (
               <ProjectBoard
                 projectId={projectId}
-                holder={pageHolder()}
                 leading={<ReopenRoom />}
                 peek={boardCardKeyParam === null ? null : parseBoardCardKey(boardCardKeyParam)}
                 onPeek={(card) =>
@@ -928,7 +920,6 @@ export function App() {
                 key={sessionId}
                 projectId={projectId}
                 sessionId={sessionId}
-                holder={pageHolder()}
                 leading={<ReopenRoom />}
                 peekCardId={cardParam}
                 onPeek={(card) => void setLocation({ ...leaveProjectBoard, board: true, card })}

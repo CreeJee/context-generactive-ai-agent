@@ -121,7 +121,7 @@ export const SessionLifecycleChange = Data.taggedEnum<SessionLifecycleChange>();
  * One mutation for every project's conversations: the project comes with each change, not with
  * the hook, because a hook can only be called while the page renders.
  */
-export function useSessionLifecycleMutation(holder: () => string) {
+export function useSessionLifecycleMutation() {
   const client = useQueryClient();
   return useMutation<
     Awaited<ReturnType<typeof api.setArchived>> | Awaited<ReturnType<typeof api.deleteSession>>,
@@ -130,9 +130,9 @@ export function useSessionLifecycleMutation(holder: () => string) {
   >({
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     mutationFn: SessionLifecycleChange.$match({
-      archive: ({ sessionId }) => api.setArchived(sessionId, holder(), true),
-      restore: ({ sessionId }) => api.setArchived(sessionId, holder(), false),
-      delete: ({ sessionId }) => api.deleteSession(sessionId, holder()),
+      archive: ({ sessionId }) => api.setArchived(sessionId, true),
+      restore: ({ sessionId }) => api.setArchived(sessionId, false),
+      delete: ({ sessionId }) => api.deleteSession(sessionId),
     }),
     onSuccess: (_result, { projectId }) =>
       client.invalidateQueries({ queryKey: projectQueries.sessions(projectId).queryKey }),

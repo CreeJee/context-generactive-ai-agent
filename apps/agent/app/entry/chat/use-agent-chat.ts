@@ -53,13 +53,10 @@ export const AnswerProblem = Data.taggedEnum<AnswerProblem>();
  */
 export function useAgentChat({
   sessionId,
-  holder,
   onCustomEvent,
   onNotTaken,
 }: {
   readonly sessionId: string;
-  /** This page's name, sent with its turns and answers. */
-  readonly holder: string;
   readonly onCustomEvent: (event: CustomEvent) => void;
   readonly onNotTaken: (turn: NotTaken) => void;
 }) {
@@ -79,7 +76,7 @@ export function useAgentChat({
   const follow = useAtomSet(atoms.follow);
   useEffect(() => follow(undefined), [follow]);
   const setLatest = useAtomSet(atoms.latest);
-  const runs = useRunStateQuery(useProjectScope("chat"), sessionId, holder).data;
+  const runs = useRunStateQuery(useProjectScope("chat"), sessionId).data;
   const latest = runs === undefined ? undefined : ((runs.running ?? runs.lastRun)?.runId ?? null);
   useEffect(() => setLatest(latest), [setLatest, latest]);
 
@@ -100,7 +97,7 @@ export function useAgentChat({
     hasOlderMessages: Option.exists(view, ({ older }) => older !== null),
     loadOlderMessages: () => loadOlder(undefined),
     sendMessage: (content: Send["content"], forwardedProps?: Send["forwardedProps"]) =>
-      send({ holder, content, forwardedProps }),
+      send({ content, forwardedProps }),
     /** Stops reading the run here; the server's run goes on until it is cancelled there. */
     stop: () => {
       send(Atom.Interrupt);
@@ -134,7 +131,7 @@ export function useAgentChat({
           : null,
     }),
     resolveInterrupts: (answers: ReadonlyArray<ResumeEntry>) => {
-      if (interrupts !== null) answer({ holder, parentRunId: interrupts.runId, answers });
+      if (interrupts !== null) answer({ parentRunId: interrupts.runId, answers });
     },
   };
 }

@@ -131,9 +131,7 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
       const env = yield* TestEnv;
       const session = yield* planned([]);
       expect(yield* session.board).toBe(false);
-      yield* env.use(
-        Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, null, "run")),
-      );
+      yield* env.use(Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, "run")));
       yield* waitForBoard(session.board);
       // The board executes it; no model turn ran for the approval.
       expect(session.invocations()).toHaveLength(0);
@@ -221,9 +219,7 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
       );
       expect([state.phase, state.plan?.status]).toEqual(["shaping", "ready"]);
       expect(yield* session.board).toBe(false);
-      yield* env.use(
-        Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, null, "run")),
-      );
+      yield* env.use(Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, "run")));
       yield* waitForBoard(session.board);
     }),
   );
@@ -263,9 +259,7 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
           ),
         ),
       );
-      yield* env.use(
-        Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, null, "run")),
-      );
+      yield* env.use(Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, "run")));
       yield* waitForBoard(session.board);
       yield* runTurn(session.id, `${session.id}-turn`, "How is the board going?");
       const tools = session.invocations()[0]?.toolNames ?? [];
@@ -288,9 +282,7 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
           ),
         ),
       );
-      yield* env.use(
-        Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, null, "run")),
-      );
+      yield* env.use(Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, "run")));
       yield* waitForBoard(session.board);
       // A revised Plan waits to be confirmed in shaping while its board stays active.
       const state = yield* env.use(
@@ -322,9 +314,7 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
           ),
         ),
       );
-      yield* env.use(
-        Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, null, "run")),
-      );
+      yield* env.use(Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, "run")));
       yield* waitForBoard(session.board);
       // Back in shaping the board stays active while the planner writes the next Plan.
       yield* env.use(Effect.flatMap(Workflows, (workflows) => workflows.move(session.id, "goal")));
@@ -360,9 +350,7 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
           ),
         ),
       );
-      yield* env.use(
-        Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, null, "run")),
-      );
+      yield* env.use(Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, "run")));
       yield* waitForBoard(session.board);
       yield* env.use(Effect.flatMap(Workflows, (workflows) => workflows.move(session.id, "goal")));
       yield* runTurn(session.id, `${session.id}-turn`, "Plan the rest");
@@ -372,7 +360,7 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
       );
       expect([waiting.phase, waiting.plan?.status]).toEqual(["shaping", "ready"]);
       const approved = yield* env.use(
-        Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, null, "run")),
+        Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, "run")),
       );
       expect([approved.phase, approved.plan?.status]).toEqual(["running", "executing"]);
       expect(yield* session.board).toBe(true);

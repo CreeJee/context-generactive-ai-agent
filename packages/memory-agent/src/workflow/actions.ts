@@ -1,5 +1,4 @@
 import { Data, Function as EffectFunction, Match, Predicate, Schema } from "effect";
-import type { LeaseView } from "../sessions/lease-state.ts";
 import {
   GoalEvent,
   goalStateOf,
@@ -20,7 +19,6 @@ export const WorkflowActionRequest = Data.taggedEnum<WorkflowActionRequest>();
 
 export interface WorkflowActionContext {
   readonly running?: boolean;
-  readonly lease?: LeaseView;
 }
 
 /** Shared by snapshots and serialized mutations against the latest durable state. */
