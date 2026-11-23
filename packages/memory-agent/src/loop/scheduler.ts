@@ -15,7 +15,7 @@ import { failureResult, ToolFailed } from "../tools/failure.ts";
 export interface StepCall {
   readonly id: string;
   readonly name: string;
-  /** The arguments the call runs with: as the model sent them, or as the user edited them. */
+  /** The arguments the call runs with, as the model sent them. */
   readonly params: JsonValue;
 }
 

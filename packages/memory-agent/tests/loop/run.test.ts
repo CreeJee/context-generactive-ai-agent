@@ -274,6 +274,22 @@ describe("run loop", () => {
             timestamp: 0,
           },
         ]);
+        expect(
+          yield* refused([
+            {
+              interruptId: "approval_w1",
+              status: "resolved",
+              payload: { approved: true, editedArgs: { path: "other" } },
+            },
+          ]),
+        ).toEqual([
+          {
+            type: "RUN_ERROR",
+            code: "invalid-payload",
+            message: expect.stringContaining("Approval approval_w1 envelope is invalid"),
+            timestamp: 0,
+          },
+        ]);
         expect(yield* ran).toEqual([]);
         expect(yield* runs).toEqual([{ run_id: "run-1", status: "interrupted", error: null }]);
       }),

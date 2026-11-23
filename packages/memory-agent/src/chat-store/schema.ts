@@ -165,13 +165,10 @@ export const StoredInterruptPayload = Schema.Union([
 export type StoredInterruptPayload = typeof StoredInterruptPayload.Type;
 
 /**
- * `chat_interrupts.response`. Its own interrupt's `responseSchema` checks it further, as an
- * approval may carry edited arguments of that tool.
+ * `chat_interrupts.response`: whether the user approved. Its own interrupt's `responseSchema` checks
+ * it first.
  */
 export const StoredInterruptResponse = Schema.Union([
-  Schema.Struct({
-    approved: Schema.Literal(true),
-    editedArgs: Schema.optionalKey(Schema.Record(Schema.String, JsonValue)),
-  }),
+  Schema.Struct({ approved: Schema.Literal(true) }),
   Schema.Struct({ approved: Schema.Literal(false) }),
 ]);

@@ -198,12 +198,8 @@ export interface RunInput {
 
 /** The user's decision on a call that needed approval. */
 type Approval = Data.TaggedEnum<{
-  /**
-   * `approvedArgs`: the arguments the approval showed, or the user's edits of them. The call runs
-   * only with exactly these.
-   */
+  /** `approvedArgs`: the arguments the approval showed. The call runs only with exactly these. */
   Approved: {
-    readonly editedArgs: Option.Option<JsonValue>;
     readonly approvedArgs: JsonValue;
   };
   Declined: {};
@@ -215,12 +211,7 @@ const Approval = Data.taggedEnum<Approval>();
 const approvalOf = (shown: JsonValue) =>
   InterruptAnswer.$match({
     Resolved: ({ response }) =>
-      response.approved
-        ? Approval.Approved({
-            editedArgs: Option.fromNullishOr(response.editedArgs),
-            approvedArgs: response.editedArgs ?? shown,
-          })
-        : Approval.Declined(),
+      response.approved ? Approval.Approved({ approvedArgs: shown }) : Approval.Declined(),
     Cancelled: () => Approval.Cancelled(),
   });
 
@@ -310,15 +301,12 @@ interface OfferedCall {
   /** The arguments as the model wrote them. */
   readonly written: string;
   readonly sent: SentArguments;
-  /** The user's approval changed the arguments. */
-  readonly edited: boolean;
 }
 
 const decodeJson = Schema.decodeOption(Schema.fromJsonString(JsonValue));
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(JsonValue));
 const encodeParams = Schema.encodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 const decodePartOptions = Schema.decodeUnknownOption(PartOptions);
-const asJson = Schema.decodeUnknownEffect(JsonValue);
 
 /** At most this many problems of a call's arguments are listed. */
 const listedIssues = 10;
@@ -330,11 +318,7 @@ const issueList = (issues: ReadonlyArray<string>) =>
   ].join(", ");
 
 /** What the model reads for arguments its tool refused, as TanStack wrote it. */
-const invalidInput = (
-  tool: RunTool,
-  { call, sent, edited }: OfferedCall,
-  error: Schema.SchemaError,
-) =>
+const invalidInput = (tool: RunTool, { call, sent }: OfferedCall, error: Schema.SchemaError) =>
   [
     `Input validation failed for tool ${call.name}: ${issueList(
       Option.getOrElse(
@@ -343,38 +327,32 @@ const invalidInput = (
       ),
     )}`,
     `Received arguments: ${sent.text}`,
-    ...(edited
-      ? [
-          "An approval edit or middleware changed these arguments before the check. The changed input failed the check.",
-        ]
-      : []),
   ].join("\n");
 
 /** The interrupt that asks the user to approve a call of a tool that needs it. */
-const approvalRequest = (call: StepCall, tool: RunTool) =>
-  Effect.map(asJson(toolParameters(tool.tool)), (editedArgs): StoredInterruptPayload => ({
-    id: `approval_${call.id}`,
-    reason: "tool_call",
-    message: `Approval required to run ${call.name}`,
-    toolCallId: call.id,
-    responseSchema: {
-      oneOf: [
-        {
-          type: "object",
-          properties: { approved: { const: true }, editedArgs },
-          required: ["approved"],
-          additionalProperties: false,
-        },
-        {
-          type: "object",
-          properties: { approved: { const: false } },
-          required: ["approved"],
-          additionalProperties: false,
-        },
-      ],
-    },
-    metadata: { kind: "approval", toolName: call.name, input: call.params },
-  }));
+const approvalRequest = (call: StepCall): StoredInterruptPayload => ({
+  id: `approval_${call.id}`,
+  reason: "tool_call",
+  message: `Approval required to run ${call.name}`,
+  toolCallId: call.id,
+  responseSchema: {
+    oneOf: [
+      {
+        type: "object",
+        properties: { approved: { const: true } },
+        required: ["approved"],
+        additionalProperties: false,
+      },
+      {
+        type: "object",
+        properties: { approved: { const: false } },
+        required: ["approved"],
+        additionalProperties: false,
+      },
+    ],
+  },
+  metadata: { kind: "approval", toolName: call.name, input: call.params },
+});
 
 /** A result as a tool message carries it: text as it is, anything else as JSON. */
 const contentOf = (result: JsonValue) =>
@@ -639,27 +617,18 @@ const runAccepted = Effect.fnUntraced(function* <R>(
       { discard: true },
     );
 
-  /** The call the model made, with the arguments the user's approval edited, if it did. */
+  /** The call the model made, with its arguments as a JSON value. */
   const offeredCall = (id: string, name: string, written: string): OfferedCall => {
     const text = written.trim() || "{}";
     const parsed = decodeJson(text);
-    const edits = Option.flatMap(
-      HashMap.get(approvals, id),
-      Approval.$match({
-        Approved: ({ editedArgs }) => editedArgs,
-        Declined: Option.none<JsonValue>,
-        Cancelled: Option.none<JsonValue>,
-      }),
-    );
     const sentParams = Option.match(parsed, {
       onNone: (): JsonValue => ({}),
       onSome: (params) => (Predicate.isObject(params) ? params : {}),
     });
     return {
-      call: { id, name, params: Option.getOrElse(edits, () => sentParams) },
+      call: { id, name, params: sentParams },
       written,
       sent: { text, parsed: Option.isSome(parsed) },
-      edited: Option.isSome(edits),
     };
   };
 
@@ -740,9 +709,7 @@ const runAccepted = Effect.fnUntraced(function* <R>(
         ),
       );
       yield* Effect.when(
-        Effect.flatMap(approvalRequest(planned.call, tool), (request) =>
-          decided(CallResult.Waiting({ request })),
-        ),
+        decided(CallResult.Waiting({ request: approvalRequest(planned.call) })),
         Effect.succeed(
           tool.tool.needsApproval === true && planned.gated && Option.isNone(approval),
         ),
