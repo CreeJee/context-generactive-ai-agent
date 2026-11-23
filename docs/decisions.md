@@ -5780,3 +5780,53 @@
   서버는 그 값을 읽지 않고 보여 준 인자로 돌린다.
 
 구현: 계획 034.
+
+## 앱이 모델에게 전할 알림은 orchestrator notifications에 둔다 (2026-11-23)
+
+- 결정(사용자, 2026-11-23): 표 `session_inbox`의 이름을 `orchestrator_notifications`로 바꾼다.
+- 까닭: `session_inbox`는 사용자의 알림함처럼 읽혔다. 이 표는 사용자가 보는 알림이 아니다. 앱이 사용자 대신
+  모델에게 전할 것(끝난 작업, 다른 대화가 남긴 메시지, 보드의 호출)을 두는 서버의 표다. 코드는 그렇게 넣은
+  메시지를 이미 orchestrator가 보낸 메시지라고 부른다(`chat-store/schema.ts`의 `OrchestratorNote`).
+- 모델은 이 표를 도구로 열지 않는다. 서버가 모델을 부르기 전에 꺼내 모델 입력에 넣는다. 까닭: 모델이 도구를
+  부르지 않으면 알림이 전해지지 않고, 쉬는 대화를 깨우는 일은 서버만 할 수 있다. 모델이 먼저 읽는 길(끝난
+  백그라운드 작업의 결과를 기다리는 도구)은 그대로 있다.
+- 사용자가 답 도중에 보낸 메시지는 `queued_messages`에 남는다. 쓴 쪽이 사람이라 규칙이 다르다: 고치고 지울 수
+  있고, 멈춘 뒤에는 본인이 확인해야 나가고, 순서 번호와 첨부가 있고, 사용자 turn으로 들어간다. 그래서 이 표의
+  보낸 쪽(`sender`)에서 `user`를 뺐다. 남은 값은 `task`, `conversation`, `board`다.
+- "언제 전하나"의 값(`interrupt`, `wake`, `next_run`)은 타입 하나(`MessageDelivery`,
+  `packages/memory-agent/src/sessions/message-delivery.ts`)로 알림과 사용자 메시지가 같이 쓴다. 사용자 메시지의
+  `steer`는 `interrupt`, `queue`는 `wake`와 같은 뜻이다. 사용자 메시지 큐가 이 타입을 쓰게 하는 것은 뒤의
+  일이다.
+- 바뀐 이름:
+
+  | 지금까지                                               | 바꾼 뒤                                                                        |
+  | ------------------------------------------------------ | ------------------------------------------------------------------------------ |
+  | 표 `session_inbox`                                     | `orchestrator_notifications`                                                   |
+  | 인덱스 `session_inbox_waiting`                         | `orchestrator_notifications_waiting`                                           |
+  | 인덱스 `session_inbox_claimed`                         | `orchestrator_notifications_claimed`                                           |
+  | 파일 `src/sessions/inbox.ts`                           | `src/sessions/orchestrator-notifications.ts`                                   |
+  | 서비스 `SessionInbox`                                  | `OrchestratorNotifications`                                                    |
+  | 서비스 키 `"memory-agent/sessions/inbox/SessionInbox"` | `"memory-agent/sessions/orchestrator-notifications/OrchestratorNotifications"` |
+  | `InboxSender`                                          | `NotificationSender`                                                           |
+  | `InboxDelivery`                                        | `MessageDelivery` (`src/sessions/message-delivery.ts`)                         |
+  | `InboxState`                                           | `NotificationState`                                                            |
+  | `inboxPayloads`                                        | `notificationPayloads`                                                         |
+  | `NewInboxEntry`, `InboxEntry`                          | `NewNotificationEntry`, `NotificationEntry`                                    |
+  | `InboxStoreFailed`                                     | `NotificationStoreFailed`                                                      |
+
+  메서드 이름(`put`, `pending`, `claim`, `release`, `deliverClaimed`, `deliver`)과 열 이름은 그대로다.
+
+- 옛 행은 migration 한 단계(`orchestratorNotificationsMigration`)가 새 표로 옮기고 옛 표를 지운다. 행과 claim
+  열은 그대로 옮긴다. `sender`의 CHECK가 바뀌므로 표의 이름만 바꾸지 않고 다시 만든다.
+- 동작은 바뀌지 않는다.
+- 대체하는 결정: "대화에 들어오는 메시지는 세션 inbox 하나에 둔다 (2026-11-22)"의 표·서비스 이름과, 보낸 쪽에
+  사용자가 있다고 한 부분. 그 밖은 그대로다.
+- 고려하고 택하지 않은 것:
+  - 이름 `model_inbox`, `session_notices`, `pending_inputs`, `pending_orchestrator_jobs`.
+  - 모델이 여는 도구로 알림을 읽게 하기.
+  - 사용자 메시지까지 한 표에 두기.
+- 확인: `packages/memory-agent/tests/sessions/orchestrator-notifications.test.ts`(claim, 돌려주기, 전달, 알림
+  멈춤, 재시작 정리), `tests/orchestrator-notifications-migration.test.ts`(행과 claim이 그대로 옮겨짐, `user`는
+  보낸 쪽이 아님), `tests/session-inbox-migration.test.ts`.
+
+구현: 계획 035.
