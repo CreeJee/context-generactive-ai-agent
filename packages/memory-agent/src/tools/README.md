@@ -27,7 +27,8 @@
 - `save_project_commands` — 프로젝트 명령 목록에 줄을 넣고 빼는 도구(`projects/commands.ts`의 `ProjectCommands.toolFor`). 승인 없이 실행된다. 목록은 메모이고, 거기 있는 명령도 `run_command`로 실행한다. 채팅 run과 그 서브에이전트, 카드 에이전트가 받고 검증자는 받지 않는다. 프로그램(`run_code`, ts 스킬)은 부르지 못한다
 - `save_project_terms` — 프로젝트 용어 목록에 낱말의 뜻을 넣고 빼는 도구(`projects/terms.ts`의 `ProjectTerms.toolFor`). 승인 없이 실행된다. 채팅 run만 받는다. 카드 에이전트와 검증자는 목록을 읽기만 한다. 프로그램(`run_code`, ts 스킬)은 부르지 못한다
 - `RunCommandInput` / `runCommandSpec` — `run_command`의 입력(`script`, `access`: `read`|`write`, `network`, `workdir`, `timeoutSeconds`, `yieldMs`, `reason`)과 이름·설명. `definitions.ts`에 있어 승인 카드가 함께 쓴다
-- `BackgroundTasks` / `BackgroundBinding` / `BackgroundResult` / `BackgroundEnd` / `BackgroundOperationFailed` / `BackgroundStoreFailed` / `BackgroundTaskNotFound` — 백그라운드 작업(sh 스킬 실행, 외부 에이전트 턴) 서비스와 그 바인딩(`sessionId`, `runId`, `abortSignal`), 끝난 작업의 결과, 세션에 아직 알리지 않은 끝, 오류. 서비스는 작업 시작·결과 대기(`start`, `waitResult`), 끝 알림의 소비·반환(`consume`, `release`, `wakes`: `delivery`가 `wake`인 끝만 대화를 깨운다), 실행 중 목록(`running`)을 맡는다
+- `BackgroundTasks` / `BackgroundBinding` / `BackgroundResult` / `BackgroundEnd` / `BackgroundOperationFailed` / `BackgroundStoreFailed` / `BackgroundTaskNotFound` — 백그라운드 작업(sh 스킬 실행, 외부 에이전트 턴) 서비스와 그 바인딩(`sessionId`, `runId`, `abortSignal`), 끝난 작업의 결과, 세션에 아직 알리지 않은 끝, 오류. 서비스는 작업 시작·결과 대기(`start`, `waitResult`)와 실행 중 목록(`running`)을 맡고, 작업이 끝나면 그 끝을 orchestrator notifications(`sessions/orchestrator-notifications.ts`의 `OrchestratorNotifications`)에 넣는다. 끝을 run이 잡고, 돌려주고, 대화를 깨우는 일은 `OrchestratorNotifications`가 한다(`delivery`가 `wake`인 끝만 대화를 깨운다). `BackgroundTasks.layer`는 `OrchestratorNotifications`를 요구한다
+- `BackgroundEndedStatus` / `BackgroundTaskEnd` (`background-end.ts`) — 백그라운드 작업이 끝난 상태(completed·failed·cancelled·interrupted)와, orchestrator notifications의 행이 담는 끝난 작업의 모양(`_tag`가 `BackgroundEnd`)이다. 알림 저장소와 `background.ts`가 둘 다 import한다
 - `FileTools` / `fileToolNames` / `listPageSize` — 프로젝트 파일 도구 서비스(`SecretRedactor.layer` 제공), 목록 페이지 크기 500
 - `OutsideTools` / `outsideReadToolNames` — 프로젝트 밖 파일 읽기 전용 도구(자격 증명 제외). 프로젝트 안 경로는 `FileTools`의 호출로 돈다
 - `byPathPlace` — 밖 파일 도구의 경로가 프로젝트 안이면 파일 도구의 호출을 돌리고 결과에 `insideProject` 문장을 붙인다. 밖이면 밖 파일 도구의 일을 한다
@@ -65,7 +66,7 @@
 - 칸반 카드에서 사용자 프로젝트 폴더 아래 절대 경로는 카드 worktree의 같은 자리로 읽고, 결과에 `pathMapped` 문장을 붙인다. `read_file`(과 그리로 도는 `read_outside_file`, 파일 하나의 `search_outside_file`)은 사용자 폴더에는 있고 카드 worktree에는 없는 파일(git이 추적하지 않는 `.env`·`node_modules` 같은 것)을 사용자 폴더에서 읽고, `pathMapped`가 그렇게 했다고 적는다. credential 거부는 그대로라 `.env`는 어느 쪽에서도 읽지 않는다. 쓰기는 늘 카드 worktree로 간다.
 - 카드에서 sh 스킬의 스크립트가 사용자 프로젝트 폴더를 적고 있으면(`folderMentions`가 찾는 표기), 승인된 텍스트에서 그 경로만 카드 worktree 경로로 바꿔 실행하고 `pathMapped`에 그렇게 했다고 적는다. 파일 도구가 같은 경로를 카드 worktree로 읽는 것과 같다. 경로마다 따로 정해, 사용자 폴더에는 있고 카드 worktree에는 없는 경로는 바꾸지 않아 사용자 폴더에서 읽고 `pathMapped`에 그 경로를 적는다(`mapUserFolderMentions`). 경로는 패턴(`*`·`?`·`[`)이나 변수(`$`)가 든 첫 마디 앞까지만 본다. 샌드박스 쓰기 목록은 그대로라 그 경로에는 쓰지 못한다. 카드 worktree 경로가 스크립트에 그대로 들어갈 수 없으면(`isPlainPath`가 아니면) 승인된 텍스트 그대로 실행하고 `pathWarning`을 붙인다.
 - 백그라운드 작업의 상태는 결과의 상태다. 0이 아닌 코드로 끝난 명령이나 답 없이 끝난 외부 에이전트도 보고서를 남겼으면 `completed`이고, 보고서 안의 `status`가 그 끝을 말한다. 작업 자체가 실패하면 `failed`, 멈추면 `cancelled`, 프로세스가 재시작되면 `interrupted`다.
-- 백그라운드 작업은 Work Trace task가 아니다(`docs/decisions.md` "백그라운드 작업은 Work Trace에 남기지 않는다"). 끝은 `background_tasks` 행의 `delivered_*`로 세션에 한 번 알리고, 알리지 않은 run이 끝나지 못하면 `release`로 돌려준다. `waitResult`로 결과를 받은 run은 그 끝을 이미 안 것으로 친다.
+- 백그라운드 작업은 Work Trace task가 아니다(`docs/decisions.md` "백그라운드 작업은 Work Trace에 남기지 않는다"). 끝은 orchestrator notifications의 행 하나로 세션에 알린다(`docs/decisions.md` "알림은 규칙 하나로 전하고, 끝난 백그라운드 작업이 그것을 따른다"). 그 행의 `sender`는 task, id는 작업 id, `delivery`는 작업을 시작할 때 정한 값이다. 끝을 적는 `UPDATE`와 알림 넣기는 한 transaction이 아니다. 끝을 적은 뒤 `putOnce`로 넣고, 서비스를 시작할 때 끝났는데 알림 행이 없는 작업마다 행을 채운다. `waitResult`로 결과를 받은 run은 그 끝을 이미 안 것이므로 그 행을 바로 delivered로 바꾼다. 끝을 저장하지 못한 작업은 알림 행이 없고, 재시작 뒤 `interrupted`로 한 번 알린다.
 - 데이터베이스에는 실행 중인데 이 프로세스에서 돌지 않는 작업은 끝을 저장하지 못한 것이므로 `failed`로 읽는다.
 - `reportRunToolsForSession`의 trace 콜백은 소스 세션으로 이미 범위가 정해져 있어야 한다. 세션 id를 콜백에 넘기지 않는다.
 
@@ -75,7 +76,7 @@
 - 파일 시스템: `write_outside_file`/`delete_outside_file`이 프로젝트 밖 텍스트 파일을 생성·교체·삭제한다(`createTextFileEffect`, `replaceTextFileEffect`, `deleteTextFileEffect`). 작업 디렉터리 해석 때 `/tmp`와 호스트 임시 디렉터리의 canonical 경로를 읽는다(`temporaryRoots`).
 - SQLite: `save_code_skill`이 `CodeSkills.save`로 스킬(SKILL.md, scripts/run.ts 또는 run.sh)을 그 대화의 후보로 `skill_candidates`에 저장한다. 사용자 폴더의 `.agents/skills`에는 쓰지 않는다.
 - 프로젝트 파일 도구(`FileTools`)가 `write_file`/`edit_file`/`delete_file`로 프로젝트 파일을 바꾼다. 목록·검색은 파일 시스템 페이징/스냅샷 캐시만 쓴다(`effects.ts` 주석 근거).
-- 백그라운드 작업: `BackgroundTasks.start`가 작업 한 개당 `background_tasks` 한 행을 만들고, 끝나면 마스킹한 결과로 그 행을 바꾼다. 시작할 때 앞 프로세스가 남긴 실행 중 행을 `interrupted`로 바꾼다. 시작과 끝에 세션의 `run-state` 이벤트를 발행한다.
+- 백그라운드 작업: `BackgroundTasks.start`가 작업 한 개당 `background_tasks` 한 행을 만들고, 끝나면 마스킹한 결과로 그 행을 바꾼다. 시작할 때 앞 프로세스가 남긴 실행 중 행을 `interrupted`로 바꾼다. 끝난 작업마다 `orchestrator_notifications`에 한 행을 넣는다(`OrchestratorNotifications.putOnce`: 작업이 끝날 때, 시작할 때 빠진 행, `waitResult`). `waitResult`는 그 행을 delivered로 바꾼다(`deliver`). 시작과 끝에 세션의 `run-state` 이벤트를 발행한다.
 - 메모리 도구와 리포트 증거 도구는 범위가 정해진 SELECT만 하고 아무것도 기록하지 않는다(`effects.ts` 주석 근거).
 - 네트워크: `kagi_search`/`kagi_extract`가 원격 Kagi API를 호출한다. 응답이 실패해도 요금이 나올 수 있다(`effects.ts` 주석 근거).
 - 상태: `repeatGuardHook`이 반복 호출 감지 상태를 `Ref`로 보관한다.

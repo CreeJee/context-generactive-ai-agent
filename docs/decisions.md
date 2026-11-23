@@ -5861,3 +5861,62 @@
   - find_memory, 턴의 기억 보충, 해석 후보 검색이 모두 이 길을 지난다.
 - 버린 안: 임베딩에 쓴 시간을 읽기 예산에서 빼기. 머신이 바쁠수록 읽기가 `budget-exceeded`로 끝나 아무것도
   못 찾는다. 벡터 채널만 빠지는 편이 낫다.
+
+## 알림은 규칙 하나로 전하고, 끝난 백그라운드 작업이 그것을 따른다 (2026-11-23)
+
+- 결정(사용자, 2026-11-23): 앱이 모델에게 전할 알림은 종류와 관계없이 규칙 하나를 따른다.
+  1. run이 알림을 잡는다(claim). 그 run이 정상으로 끝나거나 승인을 기다리며 멈추면(`completed`,
+     `interrupted`) 전한 것으로 적는다. 실패하거나 취소되면 claim을 지워 다음 run이 다시 받게 한다.
+  2. 앱을 다시 시작할 때도 같은 기준으로 정리한다. 도중에 죽은 run이 잡았던 알림은 다음 run이 다시 받는다.
+  3. 사용자가 멈춘 대화는 사용자의 다음 메시지가 올 때까지 알림을 잡지 않는다.
+- 까닭: 지금까지는 종류마다 달랐다. 끝난 백그라운드 작업은 run 도중에 앱이 죽으면 알림을 잃었다. 끝난 하위
+  작업은 승인을 기다리던 run을 재시작 때 못 들은 것으로 봐서 알림이 두 번 갔다. 다른 대화가 남긴 메시지는
+  이미 이 규칙대로 돈다(`OrchestratorNotifications`의 `claim`, `release`, `deliverClaimed`, 시작할 때의 claim
+  정리).
+- 이 규칙을 따르는 것: 다른 대화가 남긴 메시지(계획 030), 끝난 백그라운드 작업(이 항목). 아직 따르지 않는
+  것: 끝난 하위 작업(`parent_notifications`), 보드의 호출. 뒤에 옮긴다.
+- 끝난 백그라운드 작업의 알림이 `orchestrator_notifications` 표로 왔다. 작업 하나에 행 하나다. 행의 id는 작업
+  id, `sender`는 task, `delivery`는 작업을 시작할 때 정한 값(wake나 next_run)이다. payload는 끝난 작업의
+  모양이다(`packages/memory-agent/src/tools/background-end.ts`의 `BackgroundTaskEnd`).
+- `background_tasks`의 `delivered_to_run_id`·`delivered_at` 열과 인덱스 `background_tasks_untold`를 지웠다.
+  옛 행은 migration 한 단계(`backgroundEndsNotificationsMigration`)가 옮긴다. 이미 알린 끝도 delivered 행으로
+  옮긴다. 어느 run이 그 끝을 들었는지가 지워지는 열에만 있었기 때문이다. `background_tasks.delivery` 열은
+  남는다.
+- 알림 저장소가 바뀐 것:
+  - `claim(sessionId, runId, sender)`이 보낸 쪽을 받아 그 보낸 쪽의 행만 잡는다. run의 hook이 보낸 쪽마다
+    따로 있어서다.
+  - `wakes(sessionId)`가 쉬는 대화를 깨울 행(기다리고, claim되지 않았고, `delivery`가 wake)이 있는지 답한다.
+    보낸 쪽을 가리지 않는다. 사용자가 알림을 멈춘 대화에는 없다고 답한다.
+  - `putOnce(entry)`는 보낸 쪽이 정한 id로 행을 넣고, 그 id의 행이 이미 있으면 그대로 둔다.
+- 끝을 적는 `UPDATE`와 알림 넣기는 한 transaction이 아니다. 끝을 적은 뒤에 `putOnce`로 넣는다. 그 사이에
+  프로세스가 죽으면 다음 시작 때, 끝났는데 알림 행이 없는 작업마다 행을 채운다. 묶지 않은 까닭: 묶으면 끝을
+  저장하지 못했을 때 rollback이 그 시도가 남긴 것까지 지워, 끝을 한 번만 적으려 했는지를 보는 테스트
+  (`tests/agents/background-tasks.test.ts`의 "an end that cannot be saved …")가 셀 것이 없어진다.
+- `BackgroundTasks`의 `consume`, `release`, `wakes`를 지웠다. run의 hook(`agent/task-notifications.ts`)이 알림
+  저장소에서 잡고, run이 끝났으면 delivered로 바꾸고(`deliverClaimed`), 끝나지 못했으면 돌려준다.
+  `waitResult`로 결과를 읽은 run은 그 끝을 이미 안 것이므로 그 행을 바로 delivered로 바꾼다.
+- 달라진 동작 다섯:
+  1. 멈춘 대화의 run은 끝난 백그라운드 작업도 듣지 않는다. 지금까지는 다른 대화의 메시지만 그랬다. 사용자가
+     멈춘 대화에서 사용자의 메시지 없이 도는 run(예: 승인에 답해 이어지는 run)이 끝난 작업을 들었다. 이제는
+     사용자의 다음 메시지가 멈춤을 풀 때까지 기다린다. 규칙의 3번이다.
+  2. 끝을 듣던 run이 끝나기 전에 앱이 죽으면, 그 끝을 다음 run이 다시 듣는다. 지금까지는 run이 잡는 순간
+     `delivered_at`을 적고 재시작 때 되돌리지 않아, 듣지 못한 채 알린 것으로 남았다.
+  3. 끝난 run이 들은 끝은 run이 끝날 때 delivered가 된다. 지금까지는 잡는 순간 적었다. run이 도는 동안 그
+     행은 `waiting`이고 `claimed_run_id`가 그 run이다.
+  4. 자동으로 시작하려던 run이 끝을 잡은 뒤 시작을 거절당하면, 그 끝은 재시작 뒤에 다시 알려진다.
+     지금까지는 알린 것으로 남아 전해지지 않았다. 이제는 claim이 재시작까지 남고(그동안 `wakes`는 false다)
+     재시작 때 풀린다. 끝난 하위 작업의 알림이 지금 그렇게 돈다. 거절하는 자리에서 claim을 바로 돌려주는
+     것은 따로 할 일이다.
+  5. 끝을 저장하지 못한 작업을 기다려 읽은 run이 있어도, 재시작 뒤 그 작업의 끝(`interrupted`)을 한 번
+     알린다. 지금까지는 `waitResult`가 실행 중으로 남은 행에도 `delivered_at`을 적어 다시 알리지 않았다.
+- 덧붙임: 끝난 하위 작업의 알림을 옮길 때까지, 멈춘 대화의 run 하나가 끝난 하위 작업은 듣고 끝난 백그라운드
+  작업은 듣지 않는다.
+- 모델이 읽는 글(`agent/orchestrator-message.ts`)은 바뀌지 않는다.
+- 대체하는 결정: "백그라운드 작업은 Work Trace에 남기지 않는다 (2026-11-12)"의 "이 행이 끝 알림도 맡는다.
+  `delivered_to_run_id`·`delivered_at`이 비어 있으면 아직 알리지 않은 끝이다" 부분. 그 밖은 그대로다.
+- 확인: `packages/memory-agent/tests/sessions/orchestrator-notifications.test.ts`(보낸 쪽을 가려 잡기, 깨울
+  행, id가 같으면 한 번만 넣기), `tests/agents/background-tasks.test.ts`(끝을 잡고 돌려주기, 끝난 run의 전달,
+  기다려 읽은 끝, 재시작 뒤의 끝), `tests/background-ends-notifications-migration.test.ts`(옛 행이 옮겨짐),
+  `tests/background-tasks-migration.test.ts`.
+
+구현: 계획 033.
