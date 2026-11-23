@@ -82,7 +82,10 @@ testAgent()(function (it) {
       // The recorded result carries the stored dispatch, and the row waits.
       expect(result?.text).toContain(other.id);
       expect(
-        yield* sqlGet("SELECT state FROM session_inbox WHERE session_id = ?", other.id),
+        yield* sqlGet(
+          "SELECT state FROM orchestrator_notifications WHERE session_id = ?",
+          other.id,
+        ),
       ).toEqual({ state: "waiting" });
     }),
   );
@@ -129,7 +132,7 @@ testAgent()(function (it) {
       });
       expect(
         yield* sqlGet(
-          "SELECT count(*) AS rows FROM session_inbox WHERE session_id = ?",
+          "SELECT count(*) AS rows FROM orchestrator_notifications WHERE session_id = ?",
           "no-such-session",
         ),
       ).toEqual({ rows: 0 });

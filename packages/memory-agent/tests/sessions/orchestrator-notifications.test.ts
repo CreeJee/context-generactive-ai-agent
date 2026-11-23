@@ -1,13 +1,13 @@
 import { Effect } from "effect";
 import { expect } from "vite-plus/test";
-import { SessionInbox, Sessions } from "memory-agent";
+import { OrchestratorNotifications, Sessions } from "memory-agent";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
 import { sqlGet, sqlRun } from "../support/sql.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 
 /**
  * A new conversation of the test project and what puts one message of another conversation in its
- * inbox. Tests in a block share the agent, so every test takes its own target.
+ * notifications. Tests in a block share the agent, so every test takes its own target.
  */
 const target = Effect.gen(function* () {
   const env = yield* TestEnv;
@@ -15,8 +15,8 @@ const target = Effect.gen(function* () {
   const to = yield* env.use(Effect.flatMap(Sessions, (sessions) => sessions.create(project.id)));
   const put = (body: string) =>
     env.use(
-      Effect.flatMap(SessionInbox, (inbox) =>
-        inbox.put({
+      Effect.flatMap(OrchestratorNotifications, (notifications) =>
+        notifications.put({
           sessionId: to.id,
           sender: "conversation",
           delivery: "next_run",
@@ -28,10 +28,13 @@ const target = Effect.gen(function* () {
 });
 
 const stateOf = (id: string) =>
-  sqlGet("SELECT state, claimed_run_id, delivered_run_id FROM session_inbox WHERE id = ?", id);
+  sqlGet(
+    "SELECT state, claimed_run_id, delivered_run_id FROM orchestrator_notifications WHERE id = ?",
+    id,
+  );
 
 testAgent()(function (it) {
-  it.effect("rows put in an inbox wait there, oldest first", () =>
+  it.effect("notifications put for a conversation wait there, oldest first", () =>
     Effect.gen(function* () {
       const { env, to, put } = yield* target;
       const first = yield* put("one");
@@ -52,9 +55,13 @@ testAgent()(function (it) {
         createdAt: expect.any(String),
         deliveredAt: null,
       });
-      expect(yield* env.use(Effect.flatMap(SessionInbox, (inbox) => inbox.pending(to.id)))).toEqual(
-        [first, second],
-      );
+      expect(
+        yield* env.use(
+          Effect.flatMap(OrchestratorNotifications, (notifications) =>
+            notifications.pending(to.id),
+          ),
+        ),
+      ).toEqual([first, second]);
     }),
   );
 
@@ -63,11 +70,11 @@ testAgent()(function (it) {
       const { env, to, put } = yield* target;
       const first = yield* put("one");
       const second = yield* put("two");
-      const inbox = yield* env.use(SessionInbox);
-      expect(yield* env.use(inbox.claim(to.id, "run-a"))).toEqual([first, second]);
+      const notifications = yield* env.use(OrchestratorNotifications);
+      expect(yield* env.use(notifications.claim(to.id, "run-a"))).toEqual([first, second]);
       // The same run gets nothing the second time, and another run gets nothing either.
-      expect(yield* env.use(inbox.claim(to.id, "run-a"))).toEqual([]);
-      expect(yield* env.use(inbox.claim(to.id, "run-b"))).toEqual([]);
+      expect(yield* env.use(notifications.claim(to.id, "run-a"))).toEqual([]);
+      expect(yield* env.use(notifications.claim(to.id, "run-b"))).toEqual([]);
     }),
   );
 
@@ -75,10 +82,10 @@ testAgent()(function (it) {
     Effect.gen(function* () {
       const { env, to, put } = yield* target;
       const row = yield* put("retry");
-      const inbox = yield* env.use(SessionInbox);
-      expect(yield* env.use(inbox.claim(to.id, "run-a"))).toHaveLength(1);
-      yield* env.use(inbox.release(to.id, "run-a"));
-      expect(yield* env.use(inbox.claim(to.id, "run-b"))).toEqual([row]);
+      const notifications = yield* env.use(OrchestratorNotifications);
+      expect(yield* env.use(notifications.claim(to.id, "run-a"))).toHaveLength(1);
+      yield* env.use(notifications.release(to.id, "run-a"));
+      expect(yield* env.use(notifications.claim(to.id, "run-b"))).toEqual([row]);
     }),
   );
 
@@ -86,10 +93,10 @@ testAgent()(function (it) {
     Effect.gen(function* () {
       const { env, to, put } = yield* target;
       const row = yield* put("done");
-      const inbox = yield* env.use(SessionInbox);
-      yield* env.use(inbox.claim(to.id, "run-a"));
-      expect(yield* env.use(inbox.deliverClaimed(to.id, "run-a"))).toEqual([row.id]);
-      expect(yield* env.use(inbox.pending(to.id))).toEqual([]);
+      const notifications = yield* env.use(OrchestratorNotifications);
+      yield* env.use(notifications.claim(to.id, "run-a"));
+      expect(yield* env.use(notifications.deliverClaimed(to.id, "run-a"))).toEqual([row.id]);
+      expect(yield* env.use(notifications.pending(to.id))).toEqual([]);
       expect(yield* stateOf(row.id)).toEqual({
         state: "delivered",
         claimed_run_id: null,
@@ -102,12 +109,12 @@ testAgent()(function (it) {
     Effect.gen(function* () {
       const { env, to, put } = yield* target;
       const row = yield* put("wait out");
-      const inbox = yield* env.use(SessionInbox);
+      const notifications = yield* env.use(OrchestratorNotifications);
       yield* env.use(
         Effect.flatMap(WorkTraceStore, (trace) => trace.holdParentNotifications(to.id)),
       );
-      expect(yield* env.use(inbox.claim(to.id, "run-a"))).toEqual([]);
-      expect(yield* env.use(inbox.pending(to.id))).toEqual([row]);
+      expect(yield* env.use(notifications.claim(to.id, "run-a"))).toEqual([]);
+      expect(yield* env.use(notifications.pending(to.id))).toEqual([row]);
     }),
   );
 
@@ -116,20 +123,24 @@ testAgent()(function (it) {
       const { env, to, put } = yield* target;
       const row = yield* put("persist");
       yield* env.reopen;
-      expect(yield* env.use(Effect.flatMap(SessionInbox, (inbox) => inbox.pending(to.id)))).toEqual(
-        [row],
-      );
+      expect(
+        yield* env.use(
+          Effect.flatMap(OrchestratorNotifications, (notifications) =>
+            notifications.pending(to.id),
+          ),
+        ),
+      ).toEqual([row]);
     }),
   );
 
   it.effect("opening settles the claims a dead process left", () =>
     Effect.gen(function* () {
       const { env, to, put } = yield* target;
-      const inbox = yield* env.use(SessionInbox);
+      const notifications = yield* env.use(OrchestratorNotifications);
       const told = yield* put("told");
-      yield* env.use(inbox.claim(to.id, "inbox-run-finished"));
+      yield* env.use(notifications.claim(to.id, "inbox-run-finished"));
       const untold = yield* put("untold");
-      yield* env.use(inbox.claim(to.id, "inbox-run-died"));
+      yield* env.use(notifications.claim(to.id, "inbox-run-died"));
       yield* sqlRun(
         "INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES ('inbox-run-finished', ?, 'completed', 1)",
         to.id,
@@ -142,9 +153,13 @@ testAgent()(function (it) {
         claimed_run_id: null,
         delivered_run_id: "inbox-run-finished",
       });
-      expect(yield* env.use(Effect.flatMap(SessionInbox, (inbox) => inbox.pending(to.id)))).toEqual(
-        [untold],
-      );
+      expect(
+        yield* env.use(
+          Effect.flatMap(OrchestratorNotifications, (notifications) =>
+            notifications.pending(to.id),
+          ),
+        ),
+      ).toEqual([untold]);
     }),
   );
 });

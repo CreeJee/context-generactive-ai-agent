@@ -2,14 +2,18 @@ import { Context, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { ToolFailed } from "../tools/failure.ts";
 import { runTool, type RunTool } from "../tools/run-tool.ts";
-import { SessionInbox, type InboxEntry, type InboxStoreFailed } from "./inbox.ts";
+import {
+  OrchestratorNotifications,
+  type NotificationEntry,
+  type NotificationStoreFailed,
+} from "./orchestrator-notifications.ts";
 
 /**
  * Persistent messages one conversation leaves another conversation of the same project
  * (docs/decisions.md "세션 dispatch는 표에 영속으로 저장한다"). A row waits until the target
  * conversation's next run delivers it; the app restarts never lose one. The rows live in the
- * session inbox (`SessionInbox`, sender `conversation`); this service checks the target and binds
- * the `notify_session` tool.
+ * orchestrator's notifications (`OrchestratorNotifications`, sender `conversation`); this service
+ * checks the target and binds the `notify_session` tool.
  */
 
 export const SessionDispatchState = Schema.Literals(["waiting", "delivered"]);
@@ -67,9 +71,9 @@ const stored = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, DispatchStoreFailed, R> =>
   Effect.mapError(effect, (cause) => DispatchStoreFailed.make({ cause }));
-/** What the inbox could not store or read, as the dispatch store's own failure. */
-const fromInbox = <A, R>(
-  effect: Effect.Effect<A, InboxStoreFailed, R>,
+/** What the notifications could not store or read, as the dispatch store's own failure. */
+const fromNotifications = <A, R>(
+  effect: Effect.Effect<A, NotificationStoreFailed, R>,
 ): Effect.Effect<A, DispatchStoreFailed, R> =>
   Effect.mapError(effect, ({ cause }) => DispatchStoreFailed.make({ cause }));
 
@@ -94,7 +98,7 @@ const notifySessionSpec = {
   parameters: NotifySessionInput,
 } as const;
 
-type ConversationEntry = Extract<InboxEntry, { readonly sender: "conversation" }>;
+type ConversationEntry = Extract<NotificationEntry, { readonly sender: "conversation" }>;
 
 const toDispatch = (entry: ConversationEntry): SessionDispatch => ({
   id: entry.id,
@@ -108,13 +112,13 @@ const toDispatch = (entry: ConversationEntry): SessionDispatch => ({
   createdAt: entry.createdAt,
   deliveredAt: entry.deliveredAt,
 });
-/** The inbox rows another conversation left, as dispatches. */
-const toDispatches = (entries: ReadonlyArray<InboxEntry>) =>
+/** The notifications another conversation left, as dispatches. */
+const toDispatches = (entries: ReadonlyArray<NotificationEntry>) =>
   entries.filter((entry) => entry.sender === "conversation").map(toDispatch);
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const inbox = yield* SessionInbox;
+  const notifications = yield* OrchestratorNotifications;
   /**
    * One chat conversation of a project: a row of `sessions` that is not a report conversation
    * (`report_sessions`). A run's subagent threads are not `sessions` rows either.
@@ -154,8 +158,8 @@ const make = Effect.gen(function* () {
           );
         if (toSessionId === fromSessionId) return yield* rejectTarget("self_target", toSessionId);
         if (report !== 0) return yield* rejectTarget("report_target", toSessionId);
-        const entry = yield* fromInbox(
-          inbox.put({
+        const entry = yield* fromNotifications(
+          notifications.put({
             sessionId: toSessionId,
             sender: "conversation",
             delivery: "next_run",
@@ -170,14 +174,14 @@ const make = Effect.gen(function* () {
 
     /** The dispatches of a conversation that still wait, oldest first. */
     pending: (toSessionId: string) =>
-      Effect.map(fromInbox(inbox.pending(toSessionId)), toDispatches),
+      Effect.map(fromNotifications(notifications.pending(toSessionId)), toDispatches),
 
     /**
      * Marks the listed dispatches of the conversation that delivered them; rows another call
      * already delivered stay delivered. Returns the ids it actually marked.
      */
     deliver: (toSessionId: string, deliveredRunId: string, ids: readonly string[]) =>
-      fromInbox(inbox.deliver(toSessionId, deliveredRunId, ids)),
+      fromNotifications(notifications.deliver(toSessionId, deliveredRunId, ids)),
 
     /**
      * Takes the conversation's waiting dispatches for the run `runId`, oldest first, each marked
@@ -188,17 +192,18 @@ const make = Effect.gen(function* () {
      * 다음 run에 전달한다") takes nothing: its rows keep waiting for a later run.
      */
     consume: (toSessionId: string, runId: string) =>
-      Effect.map(fromInbox(inbox.claim(toSessionId, runId)), toDispatches),
+      Effect.map(fromNotifications(notifications.claim(toSessionId, runId)), toDispatches),
 
     /** Gives back the dispatches the run `runId` claimed; the rows wait for the next run again. */
-    release: (toSessionId: string, runId: string) => fromInbox(inbox.release(toSessionId, runId)),
+    release: (toSessionId: string, runId: string) =>
+      fromNotifications(notifications.release(toSessionId, runId)),
 
     /**
      * Marks the dispatches the run `runId` claimed of the conversation delivered, as `deliver`
      * does, and lets go of the claims. A row another call already delivered stays delivered.
      */
     deliverClaimed: (toSessionId: string, runId: string) =>
-      fromInbox(inbox.deliverClaimed(toSessionId, runId)),
+      fromNotifications(notifications.deliverClaimed(toSessionId, runId)),
 
     /**
      * The run's `notify_session` tool, bound to the conversation and run whose model calls it.
@@ -247,7 +252,7 @@ const make = Effect.gen(function* () {
 
 /**
  * The session dispatches of every conversation: the target check and the `notify_session` tool
- * over the rows the session inbox keeps.
+ * over the rows the orchestrator's notifications keep.
  */
 export class SessionDispatches extends Context.Service<
   SessionDispatches,

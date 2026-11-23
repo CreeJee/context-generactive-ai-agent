@@ -2,26 +2,22 @@ import { Clock, Context, DateTime, Effect, HashSet, Iterable, Layer, Option, Sch
 import { SecureRandom } from "effect/crypto";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { NodeCrypto } from "@effect/platform-node";
+import { MessageDelivery } from "./message-delivery.ts";
 
 /**
- * The messages that enter a conversation without the user typing them now, one table for every
- * sender (docs/decisions.md "대화에 들어오는 메시지는 세션 inbox 하나에 둔다"). A row waits until a
- * run of its conversation hands it to the model; the app restarts never lose one.
+ * What the app's orchestrator hands a conversation's model without the user typing it: the end of a
+ * task, a message another conversation left, the board's call. One table for every sender
+ * (docs/decisions.md "앱이 모델에게 전할 알림은 orchestrator notifications에 둔다"). A row waits until
+ * a run of its conversation hands it to the model; the app restarts never lose one. The user's own
+ * waiting messages are not here: they stay in `queued_messages`.
  */
 
 /** Who sent the message. */
-export const InboxSender = Schema.Literals(["user", "task", "conversation", "board"]);
-export type InboxSender = typeof InboxSender.Type;
+export const NotificationSender = Schema.Literals(["task", "conversation", "board"]);
+export type NotificationSender = typeof NotificationSender.Type;
 
-/**
- * When the message is handed to the conversation: `interrupt` cuts into the run in progress,
- * `wake` starts a run when the conversation is idle, `next_run` waits for a run that starts anyway.
- */
-export const InboxDelivery = Schema.Literals(["interrupt", "wake", "next_run"]);
-export type InboxDelivery = typeof InboxDelivery.Type;
-
-export const InboxState = Schema.Literals(["waiting", "delivered"]);
-export type InboxState = typeof InboxState.Type;
+export const NotificationState = Schema.Literals(["waiting", "delivered"]);
+export type NotificationState = typeof NotificationState.Type;
 
 /** What another conversation of the same project left for this one. */
 export const ConversationMessage = Schema.Struct({
@@ -34,61 +30,63 @@ export type ConversationMessage = typeof ConversationMessage.Type;
 
 /**
  * What each sender's message carries. Only the senders listed here are stored and read; a sender
- * that moves to the inbox adds its key.
+ * that moves to the table adds its key.
  */
-export const inboxPayloads = {
+export const notificationPayloads = {
   conversation: ConversationMessage,
 } as const;
-type StoredSender = keyof typeof inboxPayloads;
-type PayloadOf<Sender extends StoredSender> = (typeof inboxPayloads)[Sender]["Type"];
+type StoredSender = keyof typeof notificationPayloads;
+type PayloadOf<Sender extends StoredSender> = (typeof notificationPayloads)[Sender]["Type"];
 
-/** One message to put in a conversation's inbox. */
-export type NewInboxEntry = {
+/** One message to put in a conversation's notifications. */
+export type NewNotificationEntry = {
   readonly [Sender in StoredSender]: {
     readonly sessionId: string;
     readonly sender: Sender;
-    readonly delivery: InboxDelivery;
+    readonly delivery: MessageDelivery;
     readonly payload: PayloadOf<Sender>;
   };
 }[StoredSender];
 
-/** One inbox row as a run or a test reads it. `sender` tells which payload it carries. */
-export type InboxEntry = {
+/** One notifications row as a run or a test reads it. `sender` tells which payload it carries. */
+export type NotificationEntry = {
   readonly [Sender in StoredSender]: {
     readonly id: string;
     readonly sessionId: string;
     readonly sender: Sender;
-    readonly delivery: InboxDelivery;
+    readonly delivery: MessageDelivery;
     readonly payload: PayloadOf<Sender>;
-    readonly state: InboxState;
+    readonly state: NotificationState;
     readonly deliveredRunId: string | null;
     readonly createdAt: string;
     readonly deliveredAt: string | null;
   };
 }[StoredSender];
 
-export class InboxStoreFailed extends Schema.TaggedError<
-  InboxStoreFailed,
+export class NotificationStoreFailed extends Schema.TaggedError<
+  NotificationStoreFailed,
   { readonly brand: unique symbol }
->()("InboxStoreFailed", { cause: Schema.Defect() }) {}
-/** Reads the store's own table through the owner's connection as `InboxStoreFailed`. */
-const stored = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, InboxStoreFailed, R> =>
-  Effect.mapError(effect, (cause) => InboxStoreFailed.make({ cause }));
+>()("NotificationStoreFailed", { cause: Schema.Defect() }) {}
+/** Reads the store's own table through the owner's connection as `NotificationStoreFailed`. */
+const stored = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, NotificationStoreFailed, R> =>
+  Effect.mapError(effect, (cause) => NotificationStoreFailed.make({ cause }));
 
 const rowOf = <Sender extends StoredSender>(sender: Sender) =>
   Schema.Struct({
     id: Schema.String,
     session_id: Schema.String,
     sender: Schema.Literal(sender),
-    delivery: InboxDelivery,
-    payload: Schema.fromJsonString(inboxPayloads[sender]),
-    state: InboxState,
+    delivery: MessageDelivery,
+    payload: Schema.fromJsonString(notificationPayloads[sender]),
+    state: NotificationState,
     delivered_run_id: Schema.NullOr(Schema.String),
     created_at: Schema.String,
     delivered_at: Schema.NullOr(Schema.String),
   });
-const InboxRow = Schema.Union([rowOf("conversation")]);
-type InboxRow = typeof InboxRow.Type;
+const NotificationRow = Schema.Union([rowOf("conversation")]);
+type NotificationRow = typeof NotificationRow.Type;
 
 const toEntry = ({
   session_id,
@@ -96,7 +94,7 @@ const toEntry = ({
   created_at,
   delivered_at,
   ...sent
-}: InboxRow): InboxEntry => ({
+}: NotificationRow): NotificationEntry => ({
   ...sent,
   sessionId: session_id,
   deliveredRunId: delivered_run_id,
@@ -108,10 +106,10 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const crypto = yield* SecureRandom.SecureRandom;
   const insert = SqlSchema.findOne({
-    Request: InboxRow,
-    Result: InboxRow,
+    Request: NotificationRow,
+    Result: NotificationRow,
     execute: (row) => sql`
-      INSERT INTO session_inbox (id, session_id, sender, delivery, payload, state,
+      INSERT INTO orchestrator_notifications (id, session_id, sender, delivery, payload, state,
         delivered_run_id, created_at, delivered_at)
       VALUES (${row.id}, ${row.session_id}, ${row.sender}, ${row.delivery}, ${row.payload},
         ${row.state}, ${row.delivered_run_id}, ${row.created_at}, ${row.delivered_at})
@@ -120,9 +118,9 @@ const make = Effect.gen(function* () {
   /** The rows of a conversation that wait and that no run holds, oldest first. */
   const waiting = SqlSchema.findAll({
     Request: Schema.String,
-    Result: InboxRow,
+    Result: NotificationRow,
     execute: (sessionId) => sql`
-      SELECT * FROM session_inbox
+      SELECT * FROM orchestrator_notifications
       WHERE session_id = ${sessionId} AND state = 'waiting' AND claimed_run_id IS NULL
       ORDER BY created_at, id`,
   });
@@ -136,7 +134,7 @@ const make = Effect.gen(function* () {
     }),
     Result: Schema.Struct({ id: Schema.String }),
     execute: ({ sessionId, ids, runId, now }) => sql`
-      UPDATE session_inbox SET claimed_run_id = ${runId}, claimed_at = ${now}
+      UPDATE orchestrator_notifications SET claimed_run_id = ${runId}, claimed_at = ${now}
       WHERE session_id = ${sessionId} AND state = 'waiting' AND claimed_run_id IS NULL
         AND id IN ${sql.in(ids)}
       RETURNING id`,
@@ -145,7 +143,7 @@ const make = Effect.gen(function* () {
     Request: Schema.Struct({ sessionId: Schema.String, runId: Schema.String }),
     Result: Schema.Struct({ id: Schema.String }),
     execute: ({ sessionId, runId }) => sql`
-      UPDATE session_inbox SET claimed_run_id = NULL, claimed_at = NULL
+      UPDATE orchestrator_notifications SET claimed_run_id = NULL, claimed_at = NULL
       WHERE session_id = ${sessionId} AND claimed_run_id = ${runId}
       RETURNING id`,
   });
@@ -158,7 +156,8 @@ const make = Effect.gen(function* () {
     }),
     Result: Schema.Struct({ id: Schema.String }),
     execute: ({ sessionId, ids, deliveredRunId, deliveredAt }) => sql`
-      UPDATE session_inbox SET state = 'delivered', delivered_run_id = ${deliveredRunId},
+      UPDATE orchestrator_notifications
+      SET state = 'delivered', delivered_run_id = ${deliveredRunId},
         delivered_at = ${deliveredAt}, claimed_run_id = NULL, claimed_at = NULL
       WHERE session_id = ${sessionId} AND state = 'waiting' AND id IN ${sql.in(ids)}
       RETURNING id`,
@@ -171,7 +170,7 @@ const make = Effect.gen(function* () {
     }),
     Result: Schema.Struct({ id: Schema.String }),
     execute: ({ sessionId, runId, deliveredAt }) => sql`
-      UPDATE session_inbox SET state = 'delivered', delivered_run_id = ${runId},
+      UPDATE orchestrator_notifications SET state = 'delivered', delivered_run_id = ${runId},
         delivered_at = ${deliveredAt}, claimed_run_id = NULL, claimed_at = NULL
       WHERE session_id = ${sessionId} AND state = 'waiting' AND claimed_run_id = ${runId}
       RETURNING id`,
@@ -194,12 +193,13 @@ const make = Effect.gen(function* () {
   const settleAbandonedClaims = Effect.gen(function* () {
     const now = yield* isoNow;
     yield* Effect.asVoid(sql`
-      UPDATE session_inbox SET state = 'delivered', delivered_run_id = claimed_run_id,
+      UPDATE orchestrator_notifications
+      SET state = 'delivered', delivered_run_id = claimed_run_id,
         delivered_at = ${now}, claimed_run_id = NULL, claimed_at = NULL
       WHERE state = 'waiting' AND claimed_run_id IN (
         SELECT run_id FROM chat_runs WHERE status IN ('completed', 'interrupted'))`);
     yield* Effect.asVoid(sql`
-      UPDATE session_inbox SET claimed_run_id = NULL, claimed_at = NULL
+      UPDATE orchestrator_notifications SET claimed_run_id = NULL, claimed_at = NULL
       WHERE claimed_run_id IS NOT NULL`);
   });
 
@@ -207,7 +207,7 @@ const make = Effect.gen(function* () {
 
   return {
     /** Stores one waiting message for the conversation and returns the row it stored. */
-    put: ({ sessionId, ...sent }: NewInboxEntry) =>
+    put: ({ sessionId, ...sent }: NewNotificationEntry) =>
       Effect.gen(function* () {
         const id = yield* crypto.uuidV7();
         const row = yield* insert({
@@ -287,11 +287,14 @@ const make = Effect.gen(function* () {
 });
 
 /**
- * The persistent inbox of every conversation. Reads and writes go through the owner's own
- * `SqlClient`, so a row written survives the process and the writer's scope.
+ * The persistent orchestrator notifications of every conversation. Reads and writes go through the
+ * owner's own `SqlClient`, so a row written survives the process and the writer's scope.
  */
-export class SessionInbox extends Context.Service<SessionInbox, Effect.Success<typeof make>>()(
-  "memory-agent/sessions/inbox/SessionInbox",
-) {
-  static readonly layer = Layer.effect(SessionInbox, make).pipe(Layer.provide(NodeCrypto.layer));
+export class OrchestratorNotifications extends Context.Service<
+  OrchestratorNotifications,
+  Effect.Success<typeof make>
+>()("memory-agent/sessions/orchestrator-notifications/OrchestratorNotifications") {
+  static readonly layer = Layer.effect(OrchestratorNotifications, make).pipe(
+    Layer.provide(NodeCrypto.layer),
+  );
 }

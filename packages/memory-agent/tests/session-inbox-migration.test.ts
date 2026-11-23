@@ -17,19 +17,21 @@ const twoConversations = `
 `;
 
 describe("session inbox table", () => {
-  it.effect("the newest schema has the inbox and not the dispatch tables", () =>
-    Effect.gen(function* () {
-      const db = yield* database;
-      // The whole array, as a fresh app applies it.
-      migrations.forEach((step) => db.exec(step));
-      expect(
-        db
-          .prepare(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('session_inbox', 'session_dispatches', 'session_dispatch_claims')",
-          )
-          .all(),
-      ).toEqual([{ name: "session_inbox" }]);
-    }),
+  it.effect(
+    "the newest schema has neither the inbox nor the dispatch tables, only the orchestrator's notifications",
+    () =>
+      Effect.gen(function* () {
+        const db = yield* database;
+        // The whole array, as a fresh app applies it.
+        migrations.forEach((step) => db.exec(step));
+        expect(
+          db
+            .prepare(
+              "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('orchestrator_notifications', 'session_inbox', 'session_dispatches', 'session_dispatch_claims')",
+            )
+            .all(),
+        ).toEqual([{ name: "orchestrator_notifications" }]);
+      }),
   );
 
   it.effect("its step moves the stored dispatches and their claims into the inbox", () =>
@@ -106,7 +108,7 @@ describe("session inbox table", () => {
       const insert = (state: string, deliveredRunId: string | null, deliveredAt: string | null) =>
         db
           .prepare(
-            "INSERT INTO session_inbox (id, session_id, sender, delivery, payload, state, delivered_run_id, created_at, delivered_at) VALUES (?, 'to', 'conversation', 'next_run', '{}', ?, ?, '2026-01-01', ?)",
+            "INSERT INTO orchestrator_notifications (id, session_id, sender, delivery, payload, state, delivered_run_id, created_at, delivered_at) VALUES (?, 'to', 'conversation', 'next_run', '{}', ?, ?, '2026-01-01', ?)",
           )
           .run(`${state}-${deliveredRunId}`, state, deliveredRunId, deliveredAt);
       expect(() => insert("delivered", null, "2026-01-02")).toThrow();

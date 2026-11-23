@@ -474,17 +474,17 @@ export {
   SessionDispatches,
   SessionDispatchState,
 } from "./sessions/dispatches.ts";
+export { MessageDelivery } from "./sessions/message-delivery.ts";
 export {
   ConversationMessage,
-  InboxDelivery,
-  InboxSender,
-  InboxState,
-  InboxStoreFailed,
-  inboxPayloads,
-  SessionInbox,
-  type InboxEntry,
-  type NewInboxEntry,
-} from "./sessions/inbox.ts";
+  NotificationSender,
+  NotificationState,
+  NotificationStoreFailed,
+  notificationPayloads,
+  OrchestratorNotifications,
+  type NewNotificationEntry,
+  type NotificationEntry,
+} from "./sessions/orchestrator-notifications.ts";
 
 export { Edge, EdgeKind, edgeWeights, type NodeLink } from "./memory/edges.ts";
 export {

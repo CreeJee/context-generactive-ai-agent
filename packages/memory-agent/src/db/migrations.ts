@@ -806,6 +806,40 @@ export const sessionInboxMigration = `
   DROP TABLE session_dispatches;
 `;
 
+/** The step that moves the session inbox into the orchestrator's notifications table. */
+export const orchestratorNotificationsMigration = `
+  -- What the app's orchestrator hands a conversation's model without the user typing it
+  -- (decisions.md "앱이 모델에게 전할 알림은 orchestrator notifications에 둔다"): the session inbox
+  -- under the name that says whose it is. A message the user sent stays in queued_messages, so
+  -- 'user' is no sender here. Rows and their claims move as they are.
+  CREATE TABLE orchestrator_notifications (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    sender TEXT NOT NULL CHECK (sender IN ('task', 'conversation', 'board')),
+    delivery TEXT NOT NULL CHECK (delivery IN ('interrupt', 'wake', 'next_run')),
+    payload TEXT NOT NULL CHECK (json_valid(payload)),
+    state TEXT NOT NULL CHECK (state IN ('waiting', 'delivered')),
+    claimed_run_id TEXT,
+    claimed_at TEXT,
+    delivered_run_id TEXT,
+    created_at TEXT NOT NULL,
+    delivered_at TEXT,
+    CHECK ((claimed_run_id IS NULL) = (claimed_at IS NULL)),
+    CHECK ((state = 'delivered') = (delivered_run_id IS NOT NULL)),
+    CHECK ((state = 'delivered') = (delivered_at IS NOT NULL))
+  );
+  INSERT INTO orchestrator_notifications (id, session_id, sender, delivery, payload, state,
+    claimed_run_id, claimed_at, delivered_run_id, created_at, delivered_at)
+  SELECT id, session_id, sender, delivery, payload, state, claimed_run_id, claimed_at,
+    delivered_run_id, created_at, delivered_at
+  FROM session_inbox;
+  DROP TABLE session_inbox;
+  CREATE INDEX orchestrator_notifications_waiting
+    ON orchestrator_notifications(session_id, state, created_at);
+  CREATE INDEX orchestrator_notifications_claimed ON orchestrator_notifications(claimed_run_id)
+    WHERE claimed_run_id IS NOT NULL;
+`;
+
 /**
  * The cards each workflow revision changed from the revision before it in its session, for the
  * board's history; a revision that changed no card has no row. Revisions never change, so this is
@@ -3230,6 +3264,7 @@ export const migrations: readonly string[] = [
   -- 승인자는 프로젝트 권한 모드가 정한다 (2026-11-22)"), so a revision no longer records a mode.
   ALTER TABLE workflow_state_revisions DROP COLUMN mode;
   `,
+  orchestratorNotificationsMigration,
 ];
 
 /** One of the two startup migrations that may rebuild a referenced table with FK checks suspended;

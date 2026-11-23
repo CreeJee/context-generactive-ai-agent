@@ -111,7 +111,7 @@ import { ImageRouteFacts, ImageRouter } from "./providers/image-router.ts";
 import { QueueDelivery } from "./queue/delivery.ts";
 import { MessageQueue } from "./queue/queue.ts";
 import { SessionDispatches } from "./sessions/dispatches.ts";
-import { SessionInbox } from "./sessions/inbox.ts";
+import { OrchestratorNotifications } from "./sessions/orchestrator-notifications.ts";
 import { Sessions } from "./sessions/sessions.ts";
 import { ApprovedTools } from "./tools/approved.ts";
 import { CodeSkills } from "./skills/code-skills.ts";
@@ -315,8 +315,8 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     FreePages.layer,
     PlannerStatistics.layer,
     MessageQueue.layer,
-    SessionDispatches.layer.pipe(Layer.provide(SessionInbox.layer)),
-    SessionInbox.layer,
+    SessionDispatches.layer.pipe(Layer.provide(OrchestratorNotifications.layer)),
+    OrchestratorNotifications.layer,
     Interpretations.layer,
     RelayedApprovals.layer,
     BulkNodes.layer,

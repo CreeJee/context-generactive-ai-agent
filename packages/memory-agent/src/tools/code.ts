@@ -83,7 +83,7 @@ const programCallable = {
   edit_kanban_board: false,
   record_card_verdict: false,
   run_code: false,
-  // Leaves a message in the other conversation's `session_inbox`; it does not steer the run.
+  // Leaves a message in the other conversation's `orchestrator_notifications`; it does not steer the run.
   notify_session: true,
   // A note for later runs: what is worth keeping is the model's own call, not a program's.
   save_project_commands: false,
