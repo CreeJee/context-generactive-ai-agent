@@ -158,15 +158,17 @@ const make = Effect.gen(function* () {
           );
         if (toSessionId === fromSessionId) return yield* rejectTarget("self_target", toSessionId);
         if (report !== 0) return yield* rejectTarget("report_target", toSessionId);
+        const payload = { projectId, fromSessionId, fromRunId, body };
         const entry = yield* fromNotifications(
           notifications.put({
             sessionId: toSessionId,
             sender: "conversation",
             delivery: "next_run",
-            payload: { projectId, fromSessionId, fromRunId, body },
+            payload,
           }),
         );
-        return toDispatch(entry);
+        // `put` returns a row of any sender; this one carries what was just put.
+        return toDispatch({ ...entry, sender: "conversation", payload });
       });
 
   return {
@@ -192,7 +194,10 @@ const make = Effect.gen(function* () {
      * 다음 run에 전달한다") takes nothing: its rows keep waiting for a later run.
      */
     consume: (toSessionId: string, runId: string) =>
-      Effect.map(fromNotifications(notifications.claim(toSessionId, runId)), toDispatches),
+      Effect.map(
+        fromNotifications(notifications.claim(toSessionId, runId, "conversation")),
+        toDispatches,
+      ),
 
     /** Gives back the dispatches the run `runId` claimed; the rows wait for the next run again. */
     release: (toSessionId: string, runId: string) =>

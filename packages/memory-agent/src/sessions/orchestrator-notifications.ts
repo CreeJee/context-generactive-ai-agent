@@ -1,7 +1,20 @@
-import { Clock, Context, DateTime, Effect, HashSet, Iterable, Layer, Option, Schema } from "effect";
+import {
+  Array as Arr,
+  Clock,
+  Context,
+  DateTime,
+  Effect,
+  HashSet,
+  Iterable,
+  Layer,
+  Option,
+  Result,
+  Schema,
+} from "effect";
 import { SecureRandom } from "effect/crypto";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { NodeCrypto } from "@effect/platform-node";
+import { BackgroundTaskEnd } from "../tools/background-end.ts";
 import { MessageDelivery } from "./message-delivery.ts";
 
 /**
@@ -30,10 +43,12 @@ export type ConversationMessage = typeof ConversationMessage.Type;
 
 /**
  * What each sender's message carries. Only the senders listed here are stored and read; a sender
- * that moves to the table adds its key.
+ * that moves to the table adds its key. `task` carries the end of a background task; its payload
+ * is tagged because the ends of other kinds of task join the same sender later.
  */
 export const notificationPayloads = {
   conversation: ConversationMessage,
+  task: BackgroundTaskEnd,
 } as const;
 type StoredSender = keyof typeof notificationPayloads;
 type PayloadOf<Sender extends StoredSender> = (typeof notificationPayloads)[Sender]["Type"];
@@ -85,7 +100,7 @@ const rowOf = <Sender extends StoredSender>(sender: Sender) =>
     created_at: Schema.String,
     delivered_at: Schema.NullOr(Schema.String),
   });
-const NotificationRow = Schema.Union([rowOf("conversation")]);
+const NotificationRow = Schema.Union([rowOf("conversation"), rowOf("task")]);
 type NotificationRow = typeof NotificationRow.Type;
 
 const toEntry = ({
@@ -115,6 +130,16 @@ const make = Effect.gen(function* () {
         ${row.state}, ${row.delivered_run_id}, ${row.created_at}, ${row.delivered_at})
       RETURNING *`,
   });
+  /** Stores the row unless a row with its id is there already; that row stays as it is. */
+  const insertOnce = SqlSchema.void({
+    Request: NotificationRow,
+    execute: (row) => sql`
+      INSERT INTO orchestrator_notifications (id, session_id, sender, delivery, payload, state,
+        delivered_run_id, created_at, delivered_at)
+      VALUES (${row.id}, ${row.session_id}, ${row.sender}, ${row.delivery}, ${row.payload},
+        ${row.state}, ${row.delivered_run_id}, ${row.created_at}, ${row.delivered_at})
+      ON CONFLICT(id) DO NOTHING`,
+  });
   /** The rows of a conversation that wait and that no run holds, oldest first. */
   const waiting = SqlSchema.findAll({
     Request: Schema.String,
@@ -123,6 +148,29 @@ const make = Effect.gen(function* () {
       SELECT * FROM orchestrator_notifications
       WHERE session_id = ${sessionId} AND state = 'waiting' AND claimed_run_id IS NULL
       ORDER BY created_at, id`,
+  });
+  /** The rows of one sender that wait in a conversation and that no run holds, oldest first. */
+  const waitingFrom = SqlSchema.findAll({
+    Request: Schema.Struct({ sessionId: Schema.String, sender: NotificationSender }),
+    Result: NotificationRow,
+    execute: ({ sessionId, sender }) => sql`
+      SELECT * FROM orchestrator_notifications
+      WHERE session_id = ${sessionId} AND sender = ${sender} AND state = 'waiting'
+        AND claimed_run_id IS NULL
+      ORDER BY created_at, id`,
+  });
+  /** A waiting row no run holds that wakes its conversation, unless the user stopped its notifications. */
+  const wakingRow = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ waking: Schema.Finite }),
+    execute: (sessionId) => sql`
+      SELECT 1 AS waking FROM orchestrator_notifications n
+      WHERE n.session_id = ${sessionId} AND n.state = 'waiting' AND n.claimed_run_id IS NULL
+        AND n.delivery = 'wake'
+        AND NOT EXISTS (
+          SELECT 1 FROM parent_notification_holds h WHERE h.session_id = n.session_id
+        )
+      LIMIT 1`,
   });
   /** One run's claim on waiting rows: the mark that says which run is delivering them. */
   const claimRows = SqlSchema.findAll({
@@ -222,23 +270,48 @@ const make = Effect.gen(function* () {
         return toEntry(row);
       }).pipe(stored),
 
+    /**
+     * Stores one waiting message under the id its sender gives it, unless a row with that id is
+     * there already: that row stays as it is, waiting or delivered. A sender that keeps its own
+     * record of what it tells calls this with the record's id, so one record has one row however
+     * often it is put.
+     */
+    putOnce: ({ sessionId, ...sent }: NewNotificationEntry & { readonly id: string }) =>
+      Effect.gen(function* () {
+        yield* insertOnce({
+          ...sent,
+          session_id: sessionId,
+          state: "waiting",
+          delivered_run_id: null,
+          created_at: yield* isoNow,
+          delivered_at: null,
+        });
+      }).pipe(stored),
+
     /** The rows of a conversation that still wait and that no run holds, oldest first. */
     pending: (sessionId: string) =>
       Effect.map(waiting(sessionId), (rows) => rows.map(toEntry)).pipe(stored),
 
     /**
-     * Takes the conversation's waiting rows for the run `runId`, oldest first, each marked with
-     * the run that delivers it. The mark keeps every run, including `runId` again, from taking the
+     * Whether the conversation has a waiting row no run holds that wakes it (`wake` delivery),
+     * whoever sent it. A conversation whose user stopped the notifications is not woken.
+     */
+    wakes: (sessionId: string) => Effect.map(wakingRow(sessionId), Option.isSome).pipe(stored),
+
+    /**
+     * Takes the conversation's waiting rows of the sender `sender` for the run `runId`, oldest
+     * first, each marked with the run that delivers it; the rows of other senders stay for the
+     * hook that tells them. The mark keeps every run, including `runId` again, from taking the
      * same row twice; a run that does not finish gives its takes back with `release`, and a run
      * that finishes completes their delivery with `deliverClaimed`. A session whose user stopped
      * the notifications (parent_notification_holds, decisions.md "대상 세션의 다음 run에
      * 전달한다") takes nothing: its rows keep waiting for a later run.
      */
-    claim: (sessionId: string, runId: string) =>
+    claim: <Sender extends StoredSender>(sessionId: string, runId: string, sender: Sender) =>
       Effect.gen(function* () {
         const held = yield* notificationsHeld(sessionId);
         if (Option.isSome(held)) return [];
-        const rows = yield* waiting(sessionId);
+        const rows = yield* waitingFrom({ sessionId, sender });
         if (rows.length === 0) return [];
         const taken = yield* claimRows({
           sessionId,
@@ -247,7 +320,17 @@ const make = Effect.gen(function* () {
           now: yield* isoNow,
         });
         const takenIds = HashSet.fromIterable(Iterable.map(taken, (row) => row.id));
-        return rows.filter((row) => HashSet.has(takenIds, row.id)).map(toEntry);
+        // The rows read are this sender's already; the guard gives them that sender's type.
+        const fromSender = (
+          entry: NotificationEntry,
+        ): entry is Extract<NotificationEntry, { readonly sender: Sender }> =>
+          entry.sender === sender;
+        return Arr.filterMap(rows, (row) => {
+          const entry = toEntry(row);
+          return HashSet.has(takenIds, row.id) && fromSender(entry)
+            ? Result.succeed(entry)
+            : Result.failVoid;
+        });
       }).pipe(sql.withTransaction, stored),
 
     /** Gives back the rows the run `runId` claimed; they wait for the next run again. */
