@@ -22,7 +22,6 @@ import { isPending } from "../session/message-queue";
 /** How a delivered message reached the agent. */
 const deliveryLabels = {
   tool_boundary: msg`도구 호출 뒤 전달됨`,
-  steer: msg`스티어링으로 전달됨`,
   next_turn: msg`다음 턴으로 전달됨`,
 } satisfies Record<DeliveryVia, MessageDescriptor>;
 

@@ -3549,10 +3549,6 @@ msgstr "순서는 같은 열 안에서만 바꿀 수 있습니다."
 msgid "스킬"
 msgstr "스킬"
 
-#: app/entry/chat/queue-panel.tsx
-msgid "스티어링으로 전달됨"
-msgstr "스티어링으로 전달됨"
-
 #. Button in the card panel that approves the card to run
 #. Button that approves a card the planner added
 #. Button that approves the tool call
