@@ -429,6 +429,42 @@ describe("request history", () => {
       }),
   );
 
+  // A run whose model call failed leaves its notification in the conversation unanswered. Until the
+  // model answers, the request is the only place it reads the notification.
+  it.effect("never leaves out the orchestrator's messages the model has not answered", () =>
+    Effect.gen(function* () {
+      const long = "배포 절차를 설명해요. ".repeat(100);
+      const earlier: StoredMessage[] = Array.from({ length: 6 }, (_, index) => [
+        { role: "user" as const, content: `질문 ${index}: ${long}` },
+        { role: "assistant" as const, content: `답 ${index}: ${long}` },
+      ]).flat();
+      const notice = (text: string): StoredMessage => ({
+        role: "user",
+        content: `<orchestrator>\n${text}\n</orchestrator>`,
+        orchestrator: { next: "run", ended: { background: 1, subagent: 0 } },
+      });
+      const answered = notice("Background shell task b-1 completed");
+      const unanswered = notice("Background shell task b-2 completed");
+      const messages: StoredMessage[] = [
+        ...earlier.slice(0, 2),
+        answered,
+        ...earlier.slice(2),
+        { role: "user", content: "이어서 진행해줘" },
+        unanswered,
+        // The answer the failed run was writing; no request sends it again.
+        { role: "assistant", content: "쓰다가", stopReason: "error" },
+        // Long enough that everything before it that may be left out is.
+        { role: "user", content: `다시 해 줘. ${long.repeat(3)}` },
+      ];
+      const sent = yield* firstSent(messages, noSources, {
+        leaveOutAt: 3_000,
+        inputCeiling: noLimit,
+      });
+      expect(sent).toContainEqual(unanswered);
+      expect(sent).not.toContainEqual(answered);
+    }),
+  );
+
   it.effect("lets a long run's older reasoning go when nothing of it can be left out", () =>
     Effect.gen(function* () {
       const reasoning = [{ content: "추론 ".repeat(300) }];

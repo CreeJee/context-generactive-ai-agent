@@ -74,6 +74,8 @@ export interface ConversationMessage {
   readonly thinking?: ReadonlyArray<{ readonly content: string }> | undefined;
   /** Present when the orchestrator sent the user message; it is no user turn and has no user node. */
   readonly orchestrator?: OrchestratorNote | undefined;
+  /** Present on an assistant message whose run failed or was cancelled; no request sends it again. */
+  readonly stopReason?: string | undefined;
 }
 
 /**
@@ -621,13 +623,35 @@ const recentStepsStart = (messages: ReadonlyArray<ConversationMessage>) => {
 };
 
 /**
+ * Where the orchestrator's messages the model has not answered are: those after its latest answer
+ * that did not fail. Until the model answers, the request is the only place it reads them.
+ */
+const unanswered = (messages: ReadonlyArray<ConversationMessage>) => {
+  const lastAnswer = Option.getOrElse(
+    EffectArray.findLastIndex(
+      messages,
+      (message) => message.role === "assistant" && message.stopReason === undefined,
+    ),
+    () => -1,
+  );
+  return messages.flatMap((message, index) =>
+    index > lastAnswer && message.role === "user" && message.orchestrator !== undefined
+      ? [index]
+      : [],
+  );
+};
+
+/**
  * Messages sent as they are wherever the conversation is cut: the one that started the run in
- * progress, and the latest user turns.
+ * progress, the latest user turns, and the orchestrator's messages the model has not answered.
  */
 const alwaysSent = (messages: ReadonlyArray<ConversationMessage>) =>
-  HashSet.add(
-    HashSet.fromIterable(userTurns(messages).slice(-recentRawUserTurns)),
-    runStart(messages),
+  HashSet.union(
+    HashSet.add(
+      HashSet.fromIterable(userTurns(messages).slice(-recentRawUserTurns)),
+      runStart(messages),
+    ),
+    HashSet.fromIterable(unanswered(messages)),
   );
 
 /** What giving a message way does: a tool output becomes its pointer, a step's reasoning goes. */
@@ -1116,8 +1140,9 @@ const withAppendix = <M extends ConversationMessage>(
  * the session's summary stands in for what it covers, whatever the size. Past `leaveOutAt` it is
  * brought down to the latest half, by one rule whatever the run boundary: tool outputs before the
  * run's latest steps give way to their pointers first, oldest first; then the oldest messages
- * are left out, except the one that started the run in progress, the latest user turns and the
- * run's latest steps; then the latest steps' outputs give way, all but the last step's. What is
+ * are left out, except the one that started the run in progress, the latest user turns, the
+ * orchestrator's messages the model has not answered and the run's latest steps; then the latest
+ * steps' outputs give way, all but the last step's. What is
  * left out is summarized into the session's summary as it goes (`writer`), and a note stands in for
  * what could not be: how many messages, and where their tool outputs are read again. The user's
  * words in what is left out are sent as memory recorded them. An output not recorded yet is never
