@@ -46,7 +46,7 @@ ChatGPT 또는 Claude 계정을 연결해 사용할 수 있습니다. 앱과 기
 설정 파일 위치: `~/.context-generactive-agent`
 
 - [apps/agent](apps/agent/README.md): 웹 앱(UI, API 라우트), 실행 방법
-- [packages/memory-agent](packages/memory-agent/README.md): 기억, 도구, 권한, codex 연결
+- [packages/memory-agent](packages/memory-agent/README.md): 기억, 도구, 권한, 모델 공급자 연결
 - [docs/decisions.md](docs/decisions.md): 확정한 제품과 설계 결정
 - [docs/building.md](docs/building.md): 플랫폼별 빌드와 릴리스 가이드 (macOS와 Windows 릴리스, Linux 로컬 빌드)
 
@@ -91,7 +91,7 @@ flowchart TB
     Importer --> ImportW
   end
 
-  Codex["codex app-server<br/>ChatGPT 계정"]
+  Providers["모델 공급자 API<br/>ChatGPT · Claude 구독 · OpenAI 호환"]
   External["MCP 서버 · 외부 ACP 에이전트 · Kagi"]
   Transcripts["~/.claude · ~/.codex 기록"]
 
@@ -101,8 +101,8 @@ flowchart TB
     Models[("임베딩 모델")]
   end
 
-  Chat <--> Codex
-  Interp <--> Codex
+  Chat <--> Providers
+  Interp <--> Providers
   Tools --> External
   ImportW --> Transcripts
   MW --> DB
@@ -122,7 +122,7 @@ sequenceDiagram
   actor User as 사용자
   participant UI as 브라우저
   participant Chat as AgentChat
-  participant Codex as codex app-server
+  participant Model as 모델 공급자 API
   participant Tools as 도구
   participant Mem as 기억(SQLite + turbovec)
   participant BG as 뒤에서 도는 일
@@ -130,15 +130,15 @@ sequenceDiagram
   User->>UI: 질문
   UI->>Chat: POST /api/chat
   Chat->>Mem: 사용자 노드 저장
-  Chat->>Codex: 턴 시작(도구 정의 및 지침)
-  Codex-->>Chat: 도구 호출 find_memory
+  Chat->>Model: 요청(대화 · 도구 정의 · 지침)
+  Model-->>Chat: 도구 호출 find_memory
   Chat->>Tools: 권한 확인 뒤 실행
   Tools->>Mem: 벡터 / 글자 / 형태소 순위 → RRF → 그래프 확장
   Mem-->>Tools: 근거 노드 / 정정한 발언
   Tools-->>Chat: 결과(비밀 가림)
   Chat->>Mem: 도구 호출 / 결과 노드 저장
-  Chat->>Codex: 결과 전달
-  Codex-->>Chat: 답변 스트림
+  Chat->>Model: 결과를 붙여 다시 요청
+  Model-->>Chat: 답변 스트림
   Chat-->>UI: SSE(끊겨도 이어 받기)
   Chat->>Mem: 답변 노드 저장
   Chat-)BG: 인덱싱(embed-worker / native-search-worker)

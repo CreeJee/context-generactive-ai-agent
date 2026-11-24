@@ -32,7 +32,7 @@ vp install
 
 cd apps/agent
 vp run package         # turbovec(cargo) → memory-agent → 앱 빌드 → 실행 파일
-vp run smoke-package   # 저장소 밖에서 실행해 확인(처음 한 번 codex 116 MB를 받음)
+vp run smoke-package   # 저장소 밖에서 실행해 확인
 ```
 
 - 결과물: `apps/agent/dist/context-agent-<플랫폼>-<아키텍처>/context-agent`(Windows는 `.exe`)와 `.sha256`.
@@ -47,7 +47,7 @@ vp run smoke-package   # 저장소 밖에서 실행해 확인(처음 한 번 cod
 ./context-agent [폴더] [--port 5173] [--no-open] [--storage <폴더>]
 ```
 
-- 데이터와 첫 실행 때 풀리는 파일은 `~/.context-generactive-agent`에 둡니다. 임베딩 모델과 codex는 처음 필요할 때 받습니다.
+- 데이터와 첫 실행 때 풀리는 파일은 `~/.context-generactive-agent`에 둡니다. 임베딩 모델은 처음 필요할 때 받습니다.
 - macOS 서명은 아래 "macOS 서명과 공증"을 보세요. 인증서 없이 만든 실행 파일은 ad-hoc 서명을 사용하므로 빌드한 기기에서만 경고 없이 실행됩니다.
   - 받는 쪽에서 "Mac에 손상을 입히거나 … 악성 코드가 없음을 확인할 수 없습니다"가 뜨면 공증되지 않은 파일입니다. 임시로는 Finder에서 우클릭 → 열기, 또는 `xattr -d com.apple.quarantine ./context-agent`.
   - Windows는 SmartScreen이 "추가 정보 → 실행"을 요구할 수 있습니다.
@@ -81,8 +81,8 @@ vp run notarize          # dist/context-agent-darwin-arm64.dmg (+ .sha256)
 
 알아둘 점:
 
-- 하드닝 런타임이 필수입니다(공증 조건). `apps/agent/entitlements.plist`에는 실행에 필요한 예외만 지정합니다: V8의 JIT 두 개, 자식 프로세스로 뜨는 codex를 위한 dyld 환경 변수, 그리고 라이브러리 검증 해제.
-- 라이브러리 검증: 실행 파일은 turbovec, onnxruntime, sharp, keyring 애드온을 처음 시작할 때 `<저장 루트>/runtime`에 풀어서 불러옵니다. 이 파일들은 우리 Team ID로 서명돼 있지 않아서 `com.apple.security.cs.disable-library-validation`이 없으면 로드가 막힙니다. ad-hoc 서명에서는 이 검증이 실제로 걸리지 않으므로, Developer ID로 처음 서명한 빌드는 반드시 `vp run smoke-package`를 다시 돌려 애드온 로드와 codex 실행을 확인하세요.
+- 하드닝 런타임이 필수입니다(공증 조건). `apps/agent/entitlements.plist`에는 실행에 필요한 예외만 지정합니다: V8의 JIT 두 개와 라이브러리 검증 해제.
+- 라이브러리 검증: 실행 파일은 turbovec, onnxruntime, sharp, keyring 애드온을 처음 시작할 때 `<저장 루트>/runtime`에 풀어서 불러옵니다. 이 파일들은 우리 Team ID로 서명돼 있지 않아서 `com.apple.security.cs.disable-library-validation`이 없으면 로드가 막힙니다. ad-hoc 서명에서는 이 검증이 실제로 걸리지 않으므로, Developer ID로 처음 서명한 빌드는 반드시 `vp run smoke-package`를 다시 돌려 애드온 로드를 확인하세요.
 - `.dmg`인 이유: Mach-O 실행 파일 자체에는 공증 티켓을 붙일(staple) 수 없습니다. 티켓을 붙여야 인터넷이 없는 Mac에서도 경고 없이 열립니다. `.zip`을 공증하는 방법도 되지만 첫 실행마다 Apple 서버를 확인해야 합니다.
 - `postject`가 SEA 블롭을 넣으면서 Mach-O를 고치기 때문에 Node가 달고 온 서명이 깨집니다. 그래서 서명은 항상 `vp pack` 뒤에 합니다(`scripts/package.ts`).
 
@@ -112,7 +112,7 @@ vp run notarize          # dist/context-agent-darwin-arm64.dmg (+ .sha256)
 Linux는 로컬 빌드만 지원하며, 명령은 위 "빌드" 절과 같습니다. 릴리스에서 제외한 이유와 실행 조건은 다음과 같습니다:
 
 - glibc: 실행 파일은 빌드한 기기의 glibc보다 오래된 시스템에서 돌지 않습니다(turbovec `.so`가 그 기기 glibc에 묶임). 여러 배포판에 나눠 줄 것이라면 오래된 배포판(예: Ubuntu 22.04, glibc 2.35)에서 빌드합니다. Alpine(musl)은 onnxruntime-node에 musl 빌드가 없어 지원하지 않습니다.
-- 키체인: codex 로그인 토큰과 Kagi 키는 OS 키체인에만 저장합니다. Linux에서는 Secret Service(D-Bus + gnome-keyring 또는 KWallet)가 필요합니다. GNOME, KDE 데스크톱에서는 되지만, SSH 서버, 헤드리스, WSL처럼 Secret Service가 없는 곳에서는 ChatGPT 로그인이 실패합니다.
+- 키체인: 구독 계정 로그인 토큰과 Kagi 키는 OS 키체인에만 저장합니다. Linux에서는 Secret Service(D-Bus + gnome-keyring 또는 KWallet)가 필요합니다. GNOME, KDE 데스크톱에서는 되지만, SSH 서버, 헤드리스, WSL처럼 Secret Service가 없는 곳에서는 구독 계정 로그인이 실패합니다.
   - 헤드리스에서 스모크 테스트를 돌리려면 세션 버스와 키링을 띄웁니다: `dbus-run-session -- sh -c 'echo -n "" | gnome-keyring-daemon --unlock && vp run smoke-package'`.
 - 브라우저: `xdg-open`으로 엽니다. 없으면 터미널에 나온 주소를 직접 엽니다.
 - 원격 접속: 서버는 `127.0.0.1`에만 열립니다. SSH로 쓰려면 `ssh -L 5173:127.0.0.1:5173 <호스트>`로 포트를 넘깁니다.
@@ -126,6 +126,5 @@ Linux는 로컬 빌드만 지원하며, 명령은 위 "빌드" 절과 같습니�
 | `Failed to download dictionary assets` (turbovec 빌드 중)        | lindera가 한국어 사전을 내려받지 못함(프록시·오프라인). 미리 받아 심는다: `curl -L -o <캐시>/6.2.0-fmt2/mecab-ko-dic-2.1.1-20180720.tar.gz https://lindera.dev/mecab-ko-dic-2.1.1-20180720.tar.gz`로 받아 md5가 `b996764e91c96bc89dc32ea208514a96`인지 확인한 뒤 `LINDERA_BUILD_DICTIONARY_CACHE_DIR=<캐시> vp run turbovec#build` |
 | `sharp/onnxruntime-node/@napi-rs/keyring has no binary for …`    | 이 기기에서 `vp install`을 다시 실행(다른 기기의 `node_modules`를 복사해 오면 생김)                                                                                                                                                                                                                                                |
 | 실행 파일 첫 실행에서 `Cannot find module …memory-turbovec.node` | turbovec 없이 만든 예전 실행 파일. 다시 `vp run package`                                                                                                                                                                                                                                                                           |
-| 사이드바에 "codex를 받거나 설치하지 못했어요"                    | 실행한 창의 `codex install failed (<이유>): <상세>` 로그 확인(네트워크, 프록시, 인증서, 압축 풀기)                                                                                                                                                                                                                                 |
 | 받는 쪽 Mac에서 "악성 코드가 없음을 확인할 수 없습니다"          | 공증되지 않은 파일. 위 "macOS 서명과 공증"의 `.dmg`를 주거나, 임시로 우클릭 → 열기                                                                                                                                                                                                                                                 |
 | `vp run notarize`가 "signed ad-hoc"로 멈춤                       | `CONTEXT_AGENT_SIGN_IDENTITY`를 주고 `vp run package`를 다시 실행                                                                                                                                                                                                                                                                  |
