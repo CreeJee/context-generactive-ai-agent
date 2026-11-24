@@ -76,7 +76,7 @@
 - `shownRunErrors`는 `RUN_ERROR` 메시지를 페이지·에디터·durable 로그가 읽기 전에 자르고 비밀을 가린다.
 - `createLiveRuns` 레지스트리는 `AgentChat` 서비스당 하나다. `makeAgentChatImplementation`은 생성할 때마다 중앙 서비스를 새로 획득한다.
 - run 밖에서 대화에 메시지를 덧붙이는 코드는 `liveRuns.writing` 안에서만 쓴다. run은 step이 끝날 때마다 대화 전체를 다시 저장하므로, 그 옆에서 덧붙인 메시지는 다음 저장이 지운다. `writing`이 쥐는 동안 `claim`은 실패하고, run이 있는 동안 `writing`은 쥘 수 없다.
-- 자동 follow-up은 기다리는 이유(`AutomaticRun`: 보드 attention `board`, 대화가 띄운 작업의 끝 `notifications`) 가운데 하나만 실행한다. 보드 attention이 먼저다. 두 이유는 받는 쪽이 달라 한 run으로 합치지 않고, run이 끝나 세션이 다시 깨면 남은 쪽이 시작한다. 보드가 돌고 있어도 `delivery`가 `wake`인 끝은 대화를 깨운다(`docs/decisions.md` "작업의 끝은 띄운 쪽이 정한 방식으로 알린다").
+- 자동 follow-up은 기다리는 이유(`AutomaticRun`: 보드 attention `board`, 대화가 띄운 작업의 끝 `notifications`) 가운데 하나만 실행한다. 보드 attention이 먼저다. 두 이유는 받는 쪽이 달라 한 run으로 합치지 않고, run이 끝나 세션이 다시 깨면 남은 쪽이 시작한다. 보드가 돌고 있어도 `delivery`가 `wake`인 끝은 대화를 깨운다(`docs/decisions.md` "작업의 끝은 띄운 쪽이 정한 방식으로 알린다"). 자동 run은 시작을 준비하며 알림을 잡으므로, 시작하지 못한 run(거절, 실패, 중단)은 `start`가 끝날 때 잡은 알림을 돌려준다(`docs/decisions.md` "시작하지 못한 자동 run은 잡은 알림을 돌려준다").
 - `start`는 호출자가 아니라 서비스 scope에서 돈다. user turn을 메모리 node로 먼저 쓰고 run을 그 뒤에 만들므로, 요청이 그 사이에 끊겨도 run 시작까지 마친다. 서비스가 닫힐 때만 중단된다.
 - workspace 지침상 앱 저장소 폴더(`places.storageRoot`)는 파일 도구와 sh skill 스크립트가 열지 않는다. 자격 증명 파일과 .git 내부는 승인과 관계없이 파일 도구 접근이 금지된다.
 
