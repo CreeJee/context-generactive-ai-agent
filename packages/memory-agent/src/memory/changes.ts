@@ -26,10 +26,28 @@ function changeAuthoritySqlBody(source: string, target: string) {
  * or attach that hidden ancestor's corrections to the visible source.
  */
 export const scopedChain: {
-  (allowed: HashSet.HashSet<string>): (trace: Provenance | null) => Node[];
+  (visible: MemoryScope): (trace: Provenance | null) => Node[];
 } & typeof scopedChainBody = EffectFunction.dual(2, scopedChainBody);
-function scopedChainBody(trace: Provenance | null, allowed: HashSet.HashSet<string>): Node[] {
-  return EffectArray.takeWhile(trace?.chain ?? [], (cause) =>
-    HashSet.has(allowed, cause.projectId),
+function scopedChainBody(trace: Provenance | null, visible: MemoryScope): Node[] {
+  return EffectArray.takeWhile(trace?.chain ?? [], inScope(visible));
+}
+
+/**
+ * What a memory read may show: the nodes of `projects`, and the nodes of `sessions`, the
+ * conversations the user linked from projects the read does not otherwise reach.
+ */
+export interface MemoryScope {
+  readonly projects: HashSet.HashSet<string>;
+  readonly sessions: HashSet.HashSet<string>;
+}
+
+/** Whether `node` is in the scope. */
+export const inScope: {
+  (scope: MemoryScope): (node: Node) => boolean;
+} & typeof inScopeBody = EffectFunction.dual(2, inScopeBody);
+function inScopeBody(node: Node, scope: MemoryScope) {
+  return (
+    HashSet.has(scope.projects, node.projectId) ||
+    (node.sessionId !== null && HashSet.has(scope.sessions, node.sessionId))
   );
 }

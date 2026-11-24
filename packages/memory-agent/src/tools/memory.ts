@@ -95,8 +95,19 @@ const memoryServices = (env: MemoryToolEnvironment): Context.Context<MemoryServi
     Context.add(Interpretations, env.interpretations),
   );
 
+/**
+ * The conversations the user linked in the run's conversation, which read_evidence and
+ * trace_evidence also read (`LinkedSessions`). find_memory does not search them.
+ */
+export type LinkedSessionIds = Effect.Effect<ReadonlyArray<string>>;
+const noLinkedSessions: LinkedSessionIds = Effect.succeed([]);
+
 /** What the read-only memory tools do for one project. */
-const memoryReads = (projectId: string, scope: MemoryToolScope | undefined) => {
+const memoryReads = (
+  projectId: string,
+  scope: MemoryToolScope | undefined,
+  linked: LinkedSessionIds,
+) => {
   // Without a scope the tools read every project cross recall allows.
   const crossProject = scope !== "project";
   return {
@@ -106,12 +117,16 @@ const memoryReads = (projectId: string, scope: MemoryToolScope | undefined) => {
       ),
     readEvidence: ({ id, offset }: typeof readEvidenceInput.Type) =>
       Effect.map(
-        readStructuredEvidence(id, offset ?? 0, projectId, crossProject),
+        Effect.flatMap(linked, (sessions) =>
+          readStructuredEvidence(id, offset ?? 0, projectId, crossProject, sessions),
+        ),
         (evidence) => evidence ?? notFound(id),
       ),
     traceEvidence: ({ id }: typeof traceEvidenceInput.Type) =>
       Effect.map(
-        traceStructuredEvidence(id, projectId, crossProject),
+        Effect.flatMap(linked, (sessions) =>
+          traceStructuredEvidence(id, projectId, crossProject, sessions),
+        ),
         (trace) => trace ?? notFound(id),
       ),
   };
@@ -142,7 +157,8 @@ export const memoryReadRunTools = ({
   readonly env: MemoryToolEnvironment;
   readonly projectId: string;
   readonly scope?: MemoryToolScope;
-}) => readRunTools(memoryReads(projectId, scope), providedBy(memoryServices(env)));
+}) =>
+  readRunTools(memoryReads(projectId, scope, noLinkedSessions), providedBy(memoryServices(env)));
 
 /**
  * The memory tools of one chat run, which also read the conversation's saved tool results. The
@@ -152,10 +168,12 @@ export const memoryRunTools = ({
   env,
   binding,
   scope,
+  linked = noLinkedSessions,
 }: {
   readonly env: MemoryToolEnvironment;
   readonly binding: MemoryToolRunBinding;
   readonly scope?: MemoryToolScope;
+  readonly linked?: LinkedSessionIds;
 }) => {
   const provided = providedBy(memoryServices(env));
   const readToolResultPage = ({ id, offset }: typeof readToolResultInput.Type) =>
@@ -163,7 +181,7 @@ export const memoryRunTools = ({
       nodes.readToolResultPage(id, binding.projectId, binding.sessionId, offset),
     ).pipe(Effect.map((page) => page ?? notFound(id)));
   return [
-    ...readRunTools(memoryReads(binding.projectId, scope), provided),
+    ...readRunTools(memoryReads(binding.projectId, scope, linked), provided),
     runTool({ ...readToolResult, handler: provided(readToolResultPage) }),
   ];
 };
@@ -177,8 +195,13 @@ const make = Effect.gen(function* () {
   };
   return {
     /** {@link memoryRunTools} over the agent's own memory. */
-    toolsFor: (binding: MemoryToolRunBinding, scope?: MemoryToolScope) =>
-      memoryRunTools({ env, binding, ...optionalProperty("scope", scope) }),
+    toolsFor: (binding: MemoryToolRunBinding, scope?: MemoryToolScope, linked?: LinkedSessionIds) =>
+      memoryRunTools({
+        env,
+        binding,
+        ...optionalProperty("scope", scope),
+        ...optionalProperty("linked", linked),
+      }),
   };
 });
 

@@ -1,5 +1,5 @@
 import { Array as EffectArray, Effect, HashSet, Match, Schema } from "effect";
-import { isChangeAuthority, scopedChain } from "./changes.ts";
+import { inScope, isChangeAuthority, type MemoryScope, scopedChain } from "./changes.ts";
 import { Graph, type Provenance } from "./graph.ts";
 import { Interpretations, type Interpretation } from "./interpretations.ts";
 import { Nodes, textWindow, type EvidencePage, type Node, type NodeStoreFailed } from "./nodes.ts";
@@ -60,17 +60,24 @@ const provenanceLimit = 4;
 const storageRead = <A, E>(stage: ReadStage, read: Effect.Effect<A, E>) =>
   Effect.mapError(read, () => EvidenceReadFailed.make({ reason: StorageRead.make({ stage }) }));
 
-/** Projects whose memory this read may show. */
-const visibleProjects = Effect.fnUntraced(function* (projectId: string, crossProject: boolean) {
+/** What this read may show: the projects recall allows, and the conversations the user linked. */
+const visibleScope = Effect.fnUntraced(function* (
+  projectId: string,
+  crossProject: boolean,
+  linkedSessions: ReadonlyArray<string>,
+) {
   const search = yield* MemorySearch;
   return yield* storageRead(
     "scope",
-    Effect.map(search.allowedProjects(projectId, crossProject), HashSet.fromIterable),
+    Effect.map(search.allowedProjects(projectId, crossProject), (projects): MemoryScope => ({
+      projects: HashSet.fromIterable(projects),
+      sessions: HashSet.fromIterable(linkedSessions),
+    })),
   );
 });
 
 /** The visible chain of a node; an unknown or out-of-scope node fails with NoSuchElementError. */
-const visibleTrace = Effect.fnUntraced(function* (id: string, allowed: HashSet.HashSet<string>) {
+const visibleTrace = Effect.fnUntraced(function* (id: string, allowed: MemoryScope) {
   const graph = yield* Graph;
   const trace = yield* storageRead("trace", graph.trace(id));
   const chain = yield* Effect.succeed(scopedChain(trace, allowed)).pipe(
@@ -270,12 +277,18 @@ function summarizeTrace(
  * A missing or out-of-scope source succeeds with null.
  */
 export const readStructuredEvidence = Effect.fn("Memory.readStructuredEvidence")(
-  function* (id: string, offset: number, projectId: string, crossProject: boolean) {
+  function* (
+    id: string,
+    offset: number,
+    projectId: string,
+    crossProject: boolean,
+    linkedSessions: ReadonlyArray<string> = [],
+  ) {
     const nodes = yield* Nodes;
-    const allowed = yield* visibleProjects(projectId, crossProject);
+    const allowed = yield* visibleScope(projectId, crossProject, linkedSessions);
     const node = yield* storageRead("source", nodes.get(id)).pipe(
       Effect.flatMap(Effect.fromNullishOr),
-      Effect.filterOrFail((source) => HashSet.has(allowed, source.projectId)),
+      Effect.filterOrFail(inScope(allowed)),
     );
     const page = yield* nodes.page(node, offset);
     // A visible source whose provenance cannot be traced is still evidence, reported as untraced.
@@ -295,9 +308,14 @@ export const readStructuredEvidence = Effect.fn("Memory.readStructuredEvidence")
  * A missing or out-of-scope node succeeds with null.
  */
 export const traceStructuredEvidence = Effect.fn("Memory.traceStructuredEvidence")(
-  function* (id: string, projectId: string, crossProject: boolean) {
+  function* (
+    id: string,
+    projectId: string,
+    crossProject: boolean,
+    linkedSessions: ReadonlyArray<string> = [],
+  ) {
     const interpretations = yield* Interpretations;
-    const allowed = yield* visibleProjects(projectId, crossProject);
+    const allowed = yield* visibleScope(projectId, crossProject, linkedSessions);
     const { trace, chain } = yield* visibleTrace(id, allowed);
     const [pending, reasons] = yield* Effect.all([
       pendingChanges(chain),

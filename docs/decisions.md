@@ -5920,3 +5920,27 @@
   `tests/background-tasks-migration.test.ts`.
 
 구현: 계획 033.
+
+## 사용자가 붙인 대화 링크는 그 대화 하나만 연다 (2026-11-24)
+
+- 계기: 2026-11-23 api-iamport 세션에 사용자가 pay-iamport 대화의 앱 링크(`?project=…&session=…`)를 붙였다.
+  모델은 링크를 Figma URL로 읽어 Figma 도구에 프로젝트 id와 세션 id를 넣었다. 기억 도구에는 세션이나 프로젝트를
+  id로 읽는 길이 없었다.
+- 결정(사용자, 2026-11-24): 사용자가 메시지에 붙인 대화 링크만 그 대화 하나를 연다(`memory/linked-sessions.ts`의
+  `LinkedSessions`).
+  - 대화의 사용자 메시지에서 링크를 찾아, 세션이 링크의 프로젝트에 있는지 확인한다. 대화 하나가 따르는 링크는
+    처음 4개다.
+  - run의 system 프롬프트 끝에 링크된 대화를 알린다. 링크가 앱의 대화라는 것, 그 대화의 최근 user·assistant
+    메시지 24개(node id와 앞 200자), 전체 수다. 없는 대화와 닫힌 대화도 그렇다고 적는다.
+  - 그 run의 read_evidence와 trace_evidence는 링크된 대화의 node도 읽는다. 다른 프로젝트 기억 설정
+    (`crossProjectRecall`)이 꺼져 있어도 그렇다. 사용자가 링크를 붙인 것이 그 대화 하나에 대한 동의다. 모델이
+    id를 지어내도 열린 대화가 아니면 읽지 못한다.
+  - find_memory는 링크된 대화를 검색하지 않는다.
+  - 다른 프로젝트 기억에서 빠진 프로젝트(`cross_recall_excluded`)의 대화는 링크가 있어도 닫혀 있다. 모델에게는
+    사용자에게 알리라고 적는다.
+  - 외부 agent run, 리포트 세션, 하위 에이전트와 카드 run에는 적용하지 않는다.
+- 버린 안:
+  - `list_outside_files`처럼 프로젝트 밖 기억을 읽는 도구. 기억의 경계는 이미 `crossProjectRecall`이 정한다.
+    설정이 꺼져 있을 때 그 도구만 열리면 설정을 우회한다.
+  - find_memory가 프로젝트 id를 받기. 모델이 아무 id로 다른 프로젝트를 검색할 수 있게 된다. 링크를 받은
+    경우에는 프로젝트 전체가 아니라 그 대화 하나면 된다.

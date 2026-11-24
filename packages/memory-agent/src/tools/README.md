@@ -33,7 +33,7 @@
 - `OutsideTools` / `outsideReadToolNames` — 프로젝트 밖 파일 읽기 전용 도구(자격 증명 제외). 프로젝트 안 경로는 `FileTools`의 호출로 돈다
 - `byPathPlace` — 밖 파일 도구의 경로가 프로젝트 안이면 파일 도구의 호출을 돌리고 결과에 `insideProject` 문장을 붙인다. 밖이면 밖 파일 도구의 일을 한다
 - `CodeTools` — 모델이 쓴 프로그램이 run의 도구를 코드 샌드박스에서 호출하게 하는 서비스(`CodeSandbox.layer` 제공)
-- `MemoryTools` / `memoryRunTools` / `memoryReadRunTools` / `memoryToolNames` / `MemoryToolEnvironment` / `MemoryToolRunBinding` / `MemoryToolScope` — 읽기 전용 메모리 도구와, run이 속한 대화의 저장된 도구 결과를 읽는 `read_tool_result`
+- `MemoryTools` / `memoryRunTools` / `memoryReadRunTools` / `memoryToolNames` / `MemoryToolEnvironment` / `MemoryToolRunBinding` / `MemoryToolScope` / `LinkedSessionIds` — 읽기 전용 메모리 도구와, run이 속한 대화의 저장된 도구 결과를 읽는 `read_tool_result`. `toolsFor(binding, scope, linked)`의 `linked`는 사용자가 링크한 대화의 id다. read_evidence와 trace_evidence가 그 대화의 node도 읽는다
 - `KagiTools` / `kagiToolNames` / `kagiInstructions` / `maxPageCharacters` — Kagi 웹 검색(`kagi_search`, `kagi_extract`), 페이지 최대 40,000자
 - `DelegateTools` / `delegateToolName` / `delegateInstructions` / `DelegateToolset` / `DelegateBinding` 및 `SkillTools` / `skillsInstructions` / `SkillToolset` — 다른 에이전트 위임(`delegate_to_agent`)과 스킬 도구. `find_skill`은 skill router 모델(`ActiveProvider.chosenFor("skillRouter")`)이 없으면 검색 상위 8개를, 있으면 검색 상위 20개 중 router가 고른 것(0~8개)을 준다. router가 실패하면 검색 상위 8개와 맞지 않을 수 있다는 `note`를 준다. layer는 `SkillSearch`와 `SkillRouter`를 함께 준다
 - `lazyToolsFor` / `discoveryToolName` / `isDiscoveryCall` / `ToolLookup` 및 `repeatGuardHook` / `RepeatedToolCall` / `repeatedToolCallCode` — history 기반 lazy 도구 발견, 같은 호출 반복과 인자만 바꾼 같은 실패 반복을 막는 `RunHook`

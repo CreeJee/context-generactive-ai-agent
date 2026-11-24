@@ -23,7 +23,8 @@
 - `searchTerms` / `namesSomethingExactly` / `searchTuning` / `SearchTuning` — 검색어 분리(3자 이상은 lexical 색인의 trigram 구절, 두 글자는 그 글자로 시작하거나 끝나는 gram), 정확한 이름(에러 코드·경로·식별자·버전·해시·포트)이 든 질의인지 판별, 검색 튜닝 값
 - `readStructuredEvidence` — `Effect.fn("Memory.readStructuredEvidence")`. 노드 원문 페이지에 출처·변경·판정(`evidenceContext`)을 붙여 돌려준다. 노드가 없거나 범위 밖이면 null
 - `traceStructuredEvidence` / `EvidenceReadFailed` — 같은 범위·권한 규칙으로 출처 사슬, 적용된 변경(사유 포함), 미확정 변경을 요약한다. 저장소 읽기 실패는 stage만 담은 `EvidenceReadFailed`가 된다
-- `isChangeAuthority` / `changeAuthoritySql` / `scopedChain` — 정정·철회 권한 규칙(dual 함수)과 그 SQL 버전, 허용 프로젝트 경계에서 멈추는 출처 사슬
+- `isChangeAuthority` / `changeAuthoritySql` / `scopedChain` / `MemoryScope` / `inScope` — 정정·철회 권한 규칙(dual 함수)과 그 SQL 버전, 읽기 범위(허용 프로젝트와 사용자가 링크한 대화) 경계에서 멈추는 출처 사슬, 그 범위와 node가 범위 안인지 보는 dual 함수
+- `LinkedSessions` / `LinkedSession` / `SessionLink` / `sessionLinksIn` / `readableSessions` / `linkedSessionsText` (`linked-sessions.ts`) — 사용자가 대화에 붙인 앱 대화 링크(`?project=…&session=…`)를 찾아 그 대화 하나를 여는 서비스(`LinkedSessions.layer`, `SqlClient` 필요). `linked(projectId, sessionId)`는 대화의 사용자 메시지에서 링크를 처음 4개까지 찾아 Open(최근 user·assistant 메시지 24개와 전체 수), Closed(다른 프로젝트 기억에서 빠진 프로젝트), Unknown(링크의 프로젝트에 없는 대화)으로 돌려준다. `hookFor(linked)`는 그 목록을 system 프롬프트 끝에 붙이는 `request` hook이다. Open인 대화는 그 run의 read_evidence·trace_evidence가 `crossProjectRecall`과 관계없이 읽는다. find_memory는 검색하지 않는다 (docs/decisions.md 2026-11-24)
 - `Interpretations` / `Interpretation` / `InterpretedKind` / `InterpretationStoreFailed` — LLM 해석 결론 저장소(`record`, `targeting(targetIds, status)`). 상태는 applied·unconfirmed
 - `Interpreter` / `InterpretationFailed` — llm-interpret 서비스(`Interpreter.layer(automatic = true)`). 저장된 발화를 topic·correction·relation edge로 바꾼다. 실패 reason은 `model_call_failed` 또는 `unreadable_answer`
 - `interpretInstructions` / `normalizeTopic` — 해석 모델의 시스템 지시문, topic 라벨 정규화(한 줄, 앞뒤 공백 제거, 최대 60자)
@@ -44,7 +45,7 @@
 ## Invariants
 
 - 정정·철회 권한은 같은 프로젝트의 더 뒤(`seq`가 큰) user 노드에만 있다. find_memory, trace_evidence, read_evidence, 그리고 compaction이 빠진 턴의 사용자 말을 고르는 `Nodes.userMessages`가 모두 이 한 규칙을 쓰므로 `isChangeAuthority`와 `changeAuthoritySql`은 같은 조건을 유지해야 한다
-- `scopedChain`은 허용되지 않은 프로젝트를 만나는 첫 지점에서 멈춘다(takeWhile). 중간 원인을 거르면서 그 뒤의 조상을 드러내거나, 숨은 조상의 정정을 보이는 출처에 붙이면 안 된다
+- `scopedChain`은 읽기 범위 밖의 node를 만나는 첫 지점에서 멈춘다(takeWhile). 범위는 허용 프로젝트의 node와 사용자가 링크한 대화의 node다. 중간 원인을 거르면서 그 뒤의 조상을 드러내거나, 숨은 조상의 정정을 보이는 출처에 붙이면 안 된다
 - 증거 읽기의 저장소 실패는 stage만 담은 `EvidenceReadFailed`로 바꾼다. cause에는 개인 경로나 행 내용이 있을 수 있기 때문이다. 실패한 읽기를 '정정 없음'으로 돌려주면 안 된다
 - `readStructuredEvidence`와 `traceStructuredEvidence`는 읽기 시점에 조립만 한다. 새 검색, 모델 호출, 해석, 영속 사실을 만들지 않는다. root·원인·변경에 같은 범위를 적용하고, 노드가 없거나 범위 밖이면 null로 성공한다. 추적할 수 없는 노드도 `untraced` 증거로 보고한다
 - 그래프 탐색(`selectNode`)은 `memory_graph_suppressed_nodes`에 있는 노드를 빼지만, `trace`의 시작 노드는 억제 여부와 상관없이 읽는다. 대체된 읽기도 자기 출처는 남는다

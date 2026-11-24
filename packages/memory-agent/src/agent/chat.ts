@@ -73,6 +73,7 @@ import { Indexer } from "../memory/embedding/indexer.ts";
 import { Interpreter } from "../memory/interpret.ts";
 import { Nodes } from "../memory/nodes.ts";
 import { Recorder } from "../memory/record.ts";
+import { LinkedSessions, readableSessions } from "../memory/linked-sessions.ts";
 import { ProgressMemos } from "../memory/progress-memo.ts";
 import { ProjectCommands } from "../projects/commands.ts";
 import { ProjectTerms } from "../projects/terms.ts";
@@ -553,6 +554,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const recorder = yield* Recorder;
   const memoryTools = yield* MemoryTools;
   const memos = yield* ProgressMemos;
+  const linkedSessions = yield* LinkedSessions;
   const fileTools = yield* FileTools;
   const drawingPreviews = yield* DrawingPreviews;
   const redactor = yield* SecretRedactor;
@@ -1702,6 +1704,15 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const memoryScope: MemoryToolScope = (yield* recallScope).crossProject
           ? "allowed-projects"
           : "project";
+        // The conversations the user linked, read once when the run first needs them, after its
+        // user turn is stored. A report session reads its own evidence instead.
+        const linked = yield* Effect.cached(
+          reportSource !== null
+            ? Effect.succeed([])
+            : linkedSessions
+                .linked(projectId, sessionId)
+                .pipe(fallbackLogged("Linked conversations unreadable", () => [])),
+        );
         const workflowLifecycle = yield* workflowAfterRun(
           sessionId,
           runId,
@@ -2033,7 +2044,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           abortSignal: abortController.signal,
         });
         const allSharedTools = redactor.withHiddenResults([
-          ...memoryTools.toolsFor(answers, memoryScope),
+          ...memoryTools.toolsFor(answers, memoryScope, Effect.map(linked, readableSessions)),
           ...(reportSource !== null ? [] : [memos.toolFor({ projectId, sessionId, runId })]),
           // An SVG the model writes comes back with a picture of it, for the page to show.
           ...drawingPreviews.withPreviews(project, fileTools.toolsFor(project)),
@@ -2218,6 +2229,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 ),
                 yield* projectCommands.hookFor(projectId),
                 yield* projectTerms.hookFor(projectId),
+                linkedSessions.hookFor(linked),
               ]),
           // Before the gate, so a refused repeat is never reviewed or put to the user.
           yield* repeatGuardHook,
