@@ -450,6 +450,7 @@
 - codex app-server(JSON-RPC over stdio)와 번들 codex 런타임은 2026-09-19 커밋 `ca4a525`에서 제거했고, 구독 OAuth로 공급자 API를 직접 부르는 subscription provider runtime(`f3a2120`)이 대신한다. 이 결정을 늦게 기록한다.
 - 앱은 codex를 받거나 실행하지 않는다. codex 다운로드·재시도, `CODEX_HOME`, `turn/steer`, `codexAgentLoop`, codex 샌드박스와 skill 설정에 관한 앞의 결정은 역사 기록이며 현재 동작의 근거로 쓰지 않는다.
 - 코드에 남은 `codex` 이름은 Codex CLI 대화 가져오기(`imports/codex.ts`), 자격 증명 거부 경로 `.codex`, ChatGPT 구독 API의 공식 경로·originator 값, 외부 ACP 에이전트(codex-acp) 같은 런타임과 무관한 용도다.
+- 대기 메시지의 전달 방식 `steer`를 없앤다(2026-11-24). codex가 실행 중인 턴에 메시지를 바로 넣은 기록이며, 지금은 어떤 run도 그렇게 전달하지 않는다. 옛 행은 `tool_boundary`로 바꾼다. 두 경우 모두 run 도중 모델에 닿았고 화면도 대화 안에 같이 보여 주므로 표시가 달라지지 않는다. `queued_messages`는 CHECK를 바꾸려고 rowid째 다시 만든다.
 
 ### OAuth refresh 거절의 로그아웃 범위 (2026-10-12)
 

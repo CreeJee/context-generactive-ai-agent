@@ -6,10 +6,9 @@ export const queueDeliveredEvent = "memory-agent.queue.delivered";
 
 /**
  * How a queued message reached the agent: `tool_boundary` added to the conversation when a tool
- * call returned, `next_turn` sent as the next turn after the run completed. `steer` sent into a
- * codex turn at once; only older rows have it, since codex is no longer a runtime.
+ * call returned, `next_turn` sent as the next turn after the run completed.
  */
-export const DeliveryVia = Schema.Literals(["tool_boundary", "steer", "next_turn"]);
+export const DeliveryVia = Schema.Literals(["tool_boundary", "next_turn"]);
 export type DeliveryVia = typeof DeliveryVia.Type;
 
 const ItemState = Schema.TaggedUnion({

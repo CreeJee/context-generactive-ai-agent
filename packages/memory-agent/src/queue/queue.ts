@@ -14,7 +14,7 @@ import {
 import { SecureRandom } from "effect/crypto";
 import { SqlClient, SqlError, SqlSchema } from "effect/sql";
 import {
-  type DeliveryVia,
+  DeliveryVia,
   NextDelivery,
   QueueItemState,
   type QueuedMessage,
@@ -28,7 +28,7 @@ const Row = Schema.Struct({
   attachment_ids: Schema.fromJsonString(Schema.Array(Schema.String)),
   state: Schema.Literals(["waiting", "editing", "held", "delivered", "failed"]),
   draft: Schema.NullOr(Schema.String),
-  delivered_via: Schema.NullOr(Schema.Literals(["tool_boundary", "steer", "next_turn"])),
+  delivered_via: Schema.NullOr(DeliveryVia),
   run_id: Schema.NullOr(Schema.String),
   failure: Schema.NullOr(Schema.String),
   steered: Schema.Literals([0, 1]),
@@ -344,7 +344,7 @@ const make = Effect.gen(function* () {
         Effect.asVoid,
       ),
 
-    markDelivered: (id: string, via: Exclude<DeliveryVia, "steer">, runId: string | null) =>
+    markDelivered: (id: string, via: DeliveryVia, runId: string | null) =>
       Effect.gen(function* () {
         yield* sql`
           UPDATE queued_messages SET state = 'delivered', delivered_via = ${via}, run_id = ${runId},

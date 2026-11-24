@@ -866,6 +866,50 @@ export const backgroundEndsNotificationsMigration = `
   ALTER TABLE background_tasks DROP COLUMN delivered_at;
 `;
 
+/** The step that drops the queue's `steer` delivery, which only the removed codex runtime wrote. */
+export const queueSteerDeliveryMigration = `
+  -- codex put a queued message into its running turn at once ('steer'). The runtime was removed on
+  -- 2026-09-19 (decisions.md "codex 런타임 제거"), so no run delivers that way. Those messages
+  -- reached the model during the run, as a tool-boundary delivery does, and the page shows them
+  -- in the conversation the same way, so they become 'tool_boundary'. SQLite cannot change a
+  -- CHECK, so the table is made again with its rows, rowids included (secret_sweep_changes names
+  -- rows by rowid), and its index and triggers. Migrations run with foreign keys off, so dropping
+  -- it leaves queued_message_attachments as it is.
+  CREATE TABLE queued_messages_v2 (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    seq INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('waiting', 'editing', 'held', 'delivered', 'failed')),
+    draft TEXT,
+    delivered_via TEXT CHECK (delivered_via IN ('tool_boundary', 'next_turn')),
+    run_id TEXT,
+    failure TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    steered INTEGER NOT NULL DEFAULT 0 CHECK (steered IN (0, 1)),
+    CHECK ((state = 'delivered') = (delivered_via IS NOT NULL))
+  );
+  INSERT INTO queued_messages_v2 (rowid, id, session_id, seq, text, state, draft, delivered_via,
+    run_id, failure, created_at, updated_at, steered)
+  SELECT rowid, id, session_id, seq, text, state, draft,
+    CASE delivered_via WHEN 'steer' THEN 'tool_boundary' ELSE delivered_via END,
+    run_id, failure, created_at, updated_at, steered
+  FROM queued_messages ORDER BY rowid;
+  DROP TABLE queued_messages;
+  ALTER TABLE queued_messages_v2 RENAME TO queued_messages;
+  CREATE INDEX queued_messages_session ON queued_messages(session_id, seq);
+  CREATE TRIGGER secret_sweep_queued_messages_insert AFTER INSERT ON queued_messages BEGIN
+    INSERT INTO secret_sweep_changes VALUES ('queued_messages', NEW.rowid, 1)
+      ON CONFLICT DO UPDATE SET writes = writes + 1;
+  END;
+  CREATE TRIGGER secret_sweep_queued_messages_update
+  AFTER UPDATE OF text, draft ON queued_messages BEGIN
+    INSERT INTO secret_sweep_changes VALUES ('queued_messages', NEW.rowid, 1)
+      ON CONFLICT DO UPDATE SET writes = writes + 1;
+  END;
+`;
+
 /**
  * The cards each workflow revision changed from the revision before it in its session, for the
  * board's history; a revision that changed no card has no row. Revisions never change, so this is
@@ -3292,6 +3336,7 @@ export const migrations: readonly string[] = [
   `,
   orchestratorNotificationsMigration,
   backgroundEndsNotificationsMigration,
+  queueSteerDeliveryMigration,
 ];
 
 /** One of the two startup migrations that may rebuild a referenced table with FK checks suspended;

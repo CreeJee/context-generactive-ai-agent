@@ -37,7 +37,7 @@
 - 적용 버전은 마이그레이션 잠금(BEGIN IMMEDIATE)을 잡은 뒤에 읽는다. 다른 starter가 먼저 끝냈을 수 있기 때문이다.
 - user_version이 `migrations.length`보다 크면 `NewerThanBuild`로 거부한다. reader에서 더 작으면 `MigrationPending`으로 거부한다. reader는 마이그레이션하지 않으며 캐시된 스키마 버전을 가정하지 않는다.
 - `effect_sql_migrations`가 없으면 1..applied를 `schema_N` 이름으로 adopt한다. 과거 SQL은 다시 실행하지 않는다. 기록이 1..applied와 연속으로 맞지 않으면 `MetadataMismatch`로 거부한다.
-- FK를 멈춘 채 참조 테이블을 재구성할 수 있는 단계는 `goalHistoryMigration`(version 42)과 `memoryNoteKindsMigration` 둘뿐이다. 이 단계 전후로 `preservedTables`의 rowid 순 스냅샷이 같아야 하고, `PRAGMA foreign_key_check`가 비어 있어야 한다.
+- 시작 코드가 따로 실행하며 참조 테이블을 재구성하는 단계는 `goalHistoryMigration`(version 42)과 `memoryNoteKindsMigration` 둘뿐이다. 이 단계 전후로 `preservedTables`의 rowid 순 스냅샷이 같아야 하고, `PRAGMA foreign_key_check`가 비어 있어야 한다. SQL만으로 참조 테이블을 다시 만드는 일반 단계(예: `queueSteerDeliveryMigration`)도 있다. 모든 단계가 FK가 꺼진 채 돌므로 옛 표를 지워도 참조하는 행이 지워지지 않는다.
 - 대기 단계가 있었다면 COMMIT 전에 `PRAGMA foreign_key_check`를 통과하고 `assertDatabaseSchema`를 통과해야 한다.
 - `assertDatabaseSchema`는 chat_runs(run_id,thread_id,status), workflow_run_bindings(run_id,workflow_revision_id,goal_instance_id), owner_read_recoveries(receipt_id,authorization_fingerprint,execution_payload_json), owner_workflow_executions(execution_id,created_at,updated_at), nodes(id,seq,project_id,session_id,kind,text) 컬럼을 prepare로 검사한다. version cursor만으로 런타임 계약을 보장하지 않는다.
 - Migrator는 단계 실패를 일반 defect로 바꾼다. 그래서 단계 안에서는 `DatabaseSchemaRejected`를 throw해 사유를 보존하고, `catchDefect`에서 `migrationFailure`로 되돌린다.
