@@ -138,3 +138,5 @@
   (`MA/embedding/native-vector-index.ts:236-324`)를 segment 단위로 다시 짜야 한다.
 - #203이 고정한 turbovec rev(`ccab9f3`)에 있는지, 없으면 올릴지.
 - 일부만 읽었을 때 모델에게 무엇을 알릴지(`degraded`의 새 값 또는 `otherProjectsSkipped`의 모양).
+
+기술 질문의 답은 `docs/vector-index-design.md`(2026-11-25)에 있다.
