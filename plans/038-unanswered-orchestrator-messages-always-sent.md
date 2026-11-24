@@ -16,7 +16,8 @@
 - **Priority**: P1
 - **Effort**: S
 - **Risk**: LOW (늘 보내는 메시지의 집합에 몇 개를 더한다. 빼는 규칙은 그대로다)
-- **Depends on**: 없음. 계획 037과 같은 파일을 고치지 않는다. 어느 쪽을 먼저 해도 된다.
+- **Depends on**: 없음. 계획 037보다 **먼저** 한다. 037의 기준이 이 계획에 기대고, 두 계획이
+  `docs/decisions.md`와 `packages/memory-agent/src/agent/README.md`를 함께 고친다.
 - **Category**: bug
 - **Planned at**: commit `75f25592`, 2026-11-25
 
@@ -354,9 +355,11 @@ Step 1의 테스트와 Step 2의 코드를 한 commit으로 묶는다. 예:
 - 결정: 모델의 마지막 답(실패하거나 취소된 답은 치지 않는다) 뒤에 있는 orchestrator 메시지는 요청을 줄일
   때도 그대로 보낸다. 모델이 답한 뒤에는 다른 메시지와 같은 규칙으로 빠질 수 있다.
 - 코드: `packages/memory-agent/src/agent/compaction.ts`의 `alwaysSent`. 저장된 대화는 바뀌지 않는다.
-- 관련: "알림은 대화에 한 번 넣고, 모델이 답하면 전한 것으로 적는다 (2026-11-25)"(계획 037)는 그 메시지 뒤에
-  모델의 답이 있으면 알림을 전한 것으로 적는다. 이 항목이 그 기준을 받친다. 037의 항목이 아직 없으면 이
-  문장에서 제목만 적는다.
+- 관련: 계획 037은 알림 메시지 뒤에 모델의 답이 있으면 그 알림을 전한 것으로 적게 바꾼다. 이 항목이 그
+  기준을 받친다. 037의 결정 항목은 아직 없으므로 제목을 인용하지 않고 "계획 037"이라고만 적는다.
+- 알려진 드문 경우: 답으로 치는 기준이 "실패 표시가 없는 assistant 메시지"라서, 모델을 부르지 않고 대화에
+  붙는 assistant 메시지(그림 만들기)나 모델을 바꿀 때 글로 바뀌어 실리는 실패한 답이 그 뒤에 있으면 그 앞의
+  orchestrator 메시지는 이 규칙으로 지켜지지 않는다.
 - 확인: `packages/memory-agent/src/agent/compaction.test.ts`의 "never leaves out the orchestrator's messages
   the model has not answered".
 - 마지막 줄: `구현: 계획 038.`
@@ -386,7 +389,7 @@ commit 예: `docs(decisions): 답을 못 받은 orchestrator 메시지를 늘 �
 - [ ] 저장소 루트 `vp lint` exit 0
 - [ ] `cd packages/memory-agent && vp test run --maxWorkers=4 src/agent/compaction.test.ts tests/chat tests/golden` 모두 통과
 - [ ] `rg -n 'const unanswered' packages/memory-agent/src/agent/compaction.ts` → 한 줄
-- [ ] `git diff --stat 75f25592..HEAD`에 Scope의 파일만 있다
+- [ ] `git diff --stat <시작할 때의 HEAD>..HEAD`에 Scope의 파일만 있다(시작할 때 `git rev-parse HEAD`를 적어 둔다)
 - [ ] `docs/decisions.md` 끝에 새 항목이 있다
 
 ## STOP conditions
@@ -406,6 +409,10 @@ commit 예: `docs(decisions): 답을 못 받은 orchestrator 메시지를 늘 �
   (`packages/memory-agent/src/agent/orchestrator-message.ts`)과 같다: 실패하지 않은 assistant 메시지가 뒤에
   있는가. 한쪽 기준을 바꾸면 다른 쪽도 같이 바꾼다. 두 파일이 읽는 메시지 타입이 달라(`StoredMessage`와
   `ConversationMessage`) 함수는 따로 뒀다.
+- 답으로 치는 기준의 빈 곳 둘(빚): (1) `agent/image-record.ts`의 `imageMessages`는 모델을 부르지 않고
+  assistant 메시지를 대화에 붙인다. (2) model handoff는 지난 대화를 요청에 실을 때 실패한 답을 실패 표시
+  없는 글로 바꾼다(`agent/model-handoff.ts`의 `assistantText`). 어느 쪽이든 그 앞의 orchestrator 메시지가
+  답을 받은 것으로 보인다. 고치려면 모델이 쓴 답만 가리는 표시가 메시지에 있어야 한다.
 - 답을 못 받은 orchestrator 메시지는 보통 한두 개다. 그 수가 늘 보내는 분량을 키울 만큼 많아질 길이 생기면
   (예: 깨우지 않는 알림이 실패한 run마다 쌓인다) 이 규칙을 다시 본다.
 - 검토할 때 볼 것: `alwaysSent`가 주는 것이 자리 번호라는 것. `unanswered`가 메시지가 아니라 번호를 주는가.

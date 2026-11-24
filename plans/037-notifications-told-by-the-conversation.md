@@ -18,7 +18,10 @@
 - **Priority**: P1
 - **Effort**: L
 - **Risk**: MED (표를 다시 만드는 migration, 알림을 전하는 hook 둘, 테스트 여러 개)
-- **Depends on**: 033, 036 (둘 다 merge됨)
+- **Depends on**: 033, 036 (둘 다 merge됨). **038이 먼저 merge돼 있어야 한다.** 이 계획의 기준("그 메시지
+  뒤에 모델의 답이 있으면 전한 것")은 답을 못 받은 알림 메시지가 요청에서 빠지지 않아야 맞고, 그것을 038이
+  한다. 두 계획은 `docs/decisions.md`와 `packages/memory-agent/src/agent/README.md`를 함께 고친다. 시작할 때
+  `rg -n 'const unanswered' packages/memory-agent/src/agent/compaction.ts`가 한 줄을 내지 않으면 STOP이다.
 - **Category**: tech-debt (같은 일을 하는 정리 코드 네 곳을 없앤다), bug (같은 알림이 모델에게 두 번 보인다)
 - **Planned at**: commit `75f25592`, 2026-11-25
 
@@ -50,7 +53,9 @@
 
 - 알림을 전하는 메시지가 자기가 전하는 알림의 id를 가진다.
 - run이 가진 대화에 그 id가 있으면 그 알림을 다시 넣지 않는다.
-- 그 메시지 뒤에 모델의 답(실패하지 않은 답)이 있으면 전한 것으로 적는다.
+- run이 끝나 대화를 저장한 뒤에 전한 것으로 적는다. run이 `completed`나 `interrupted`로 끝났으면 그 대화가
+  전하는 알림을 모두 적는다(모델 호출이 성공했다). 실패하거나 취소됐으면 그 메시지 뒤에 모델의 답(실패하지
+  않은 답)이 있는 것만 적는다.
 
 이러면 `claim`, `release`, `deliverClaimed`, 재시작 때의 정리가 없어진다. 시작하지 못한 run과 저장하기 전에
 죽은 run은 대화에 아무것도 남기지 않았으므로, 따로 되돌릴 것이 없이 다음 run이 다시 넣는다.
@@ -115,7 +120,7 @@ SQLite는 CHECK가 이름을 쓰는 열을 `ALTER TABLE … DROP COLUMN`으로 �
 본보기는 같은 파일의 `queueSteerDeliveryMigration`(870행부터)이다: 새 이름으로 표를 만들고, 행을 옮기고, 옛
 표를 지우고, 이름을 바꾸고, 인덱스를 다시 만든다. migration은 FK가 꺼진 채 돈다.
 
-migration 테스트의 본보기는 `packages/memory-agent/tests/queue-steer-delivery-migration.test.ts`다(전체 70행).
+migration 테스트의 본보기는 `packages/memory-agent/tests/queue-steer-delivery-migration.test.ts`다(전체 66행).
 꼴은 이렇다.
 
 ```ts
@@ -418,8 +423,13 @@ const release = (sessionId: string, runId: string) =>
 
 - `joining`은 모델을 부르기 전마다 불린다. 받는 `conversation`은 그 단계가 시작할 때의 대화다. 앞 단계에서
   넣은 알림 메시지와 그 뒤의 답이 들어 있다.
-- `ended`는 run이 어떻게 끝나든 불린다(`completed`, `interrupted`, `failed`, `aborted`). 받는 `conversation`은
-  저장한 대화다. 실패하거나 취소된 run에서는 쓰던 답이 `stopReason`을 달고 끝에 붙는다.
+- `ended`는 run이 어떻게 끝나든(`completed`, `interrupted`, `failed`, `aborted`) 대화를 저장한 **뒤에**
+  불린다. 받는 `conversation`은 저장한 대화다. 실패하거나 취소된 run에서는 쓰던 답이 `stopReason`을 달고 끝에
+  붙는다. 실패한 run이 대화를 저장하지 못하면 `ended`도 불리지 않는다(`stoppedAt`, 1044–1060행).
+- 대화가 저장되는 때는 run의 시작, 글이 흐르는 동안의 가끔, run의 끝이다. 도구 호출만 한 단계는 그 자리에서
+  저장되지 않는다. 그래서 `joining`이 받는 대화는 아직 저장되지 않은 것일 수 있다.
+- 모델이 아무것도 쓰지 않으면 assistant 메시지가 생기지 않는다(937–960행의 `message`가 없다). run은
+  `completed`로 끝난다.
 - 이 파일은 고치지 않는다.
 
 ### 자동 run의 첫 메시지: `packages/memory-agent/src/agent/chat.ts`의 `runContext`
@@ -496,7 +506,7 @@ hook은 2250–2251행에서 붙는다. 고치지 않는다.
 ### 자동 run이 시작하는 조건
 
 `chat.ts` 2917–2921행: `notifications.wakes(sessionId)`가 true이고 승인 대기가 없을 때 알림 때문에 자동 run을
-시작한다. 그 앞 2950–2988행: 대화의 마지막 run이 `completed`가 아니면 자동 run을 시작하지 않는다
+시작한다. 그 뒤 2950–2988행: 대화의 마지막 run이 `completed`가 아니면 자동 run을 시작하지 않는다
 (`if (restarted) return;`). 이 계획은 이 조건을 고치지 않는다.
 
 ### 고칠 테스트가 지금 보는 것
@@ -538,7 +548,7 @@ run을 테스트에서 돌리는 도우미는 `packages/memory-agent/tests/suppo
 이 계획이 "고른 테스트"라고 하면 다음을 뜻한다.
 
 ```
-cd packages/memory-agent && vp test run --maxWorkers=4 tests/sessions tests/agent tests/agents tests/chat tests/golden src/agent/orchestrator-message.test.ts tests/notification-claims-drop-migration.test.ts tests/db-migrator-metadata.test.ts tests/orchestrator-notifications-migration.test.ts tests/background-ends-notifications-migration.test.ts tests/session-inbox-migration.test.ts
+cd packages/memory-agent && vp test run --maxWorkers=4 tests/sessions tests/agent tests/agents tests/chat tests/golden src/agent/orchestrator-message.test.ts tests/notification-claims-drop-migration.test.ts tests/db-migrator-metadata.test.ts tests/orchestrator-notifications-migration.test.ts tests/background-ends-notifications-migration.test.ts tests/session-inbox-migration.test.ts tests/background-tasks-migration.test.ts tests/notification-delivery-migration.test.ts tests/database.test.ts
 ```
 
 부하가 높으면 `Hook timed out in 10000ms`가 `tests/agents/background-tasks.test.ts`나
@@ -555,7 +565,11 @@ cd packages/memory-agent && vp test run --maxWorkers=4 tests/sessions tests/agen
 - `packages/memory-agent/src/sessions/dispatches.ts`
 - `packages/memory-agent/src/agent/task-notifications.ts`
 - `packages/memory-agent/src/agent/dispatch-notifications.ts`
-- `packages/memory-agent/src/agent/chat.ts` (`runContext` 안의 두 곳)
+- `packages/memory-agent/src/agent/chat.ts` (`runContext` 안의 두 곳. 그리고 낡게 되는 주석 둘: 1306행 근처의
+  "What an early end must undo. …"와 1761행 근처의 "Taking the notifications marks them delivered to this
+  run". 끝난 하위 작업만 run이 잡는다는 뜻으로 고친다)
+- `packages/memory-agent/tests/golden/__golden__/goal-restart.json` (Step 1에서 메시지 하나에 키 하나가
+  더해진다. 그 변화만 허용한다)
 - 테스트: `tests/notification-claims-drop-migration.test.ts`(새 파일),
   `src/agent/orchestrator-message.test.ts`, `tests/sessions/orchestrator-notifications.test.ts`,
   `tests/sessions/dispatches.test.ts`, `tests/agent/dispatch-delivery.test.ts`,
@@ -574,7 +588,8 @@ cd packages/memory-agent && vp test run --maxWorkers=4 tests/sessions tests/agen
 - `packages/memory-agent/src/model/`, `packages/memory-agent/src/api/`, `apps/agent`, `plans/`.
 - 이미 있는 migration 단계의 글과 그 테스트(`tests/orchestrator-notifications-migration.test.ts`,
   `tests/background-ends-notifications-migration.test.ts`, `tests/session-inbox-migration.test.ts`). 그
-  테스트들은 자기 단계까지만 돌리므로 `claimed_run_id`를 계속 본다. 맞다.
+  테스트들이 `claimed_run_id`를 보는 곳은 자기 단계까지만 돌린 DB다. 맞다. 배열 전체를 돌리는 테스트도
+  하나씩 있지만 claim 열을 보지 않는다.
 - `chat.ts`의 `notificationsToRelease`와 그 finalizer, 자동 run을 시작하는 조건.
 
 ## Git workflow
@@ -662,7 +677,21 @@ export const toldIn = (conversation: ReadonlyArray<StoredMessage>): ToldNotifica
   );
   return { told: toldBy(conversation), answered: toldBy(conversation.slice(0, lastAnswer)) };
 };
+
+/**
+ * The notifications a run delivered by the time it ended, from its conversation as saved: all the
+ * conversation tells when the run finished (its model calls succeeded, even one that wrote
+ * nothing), else only those the model answered before the run stopped.
+ */
+export const heardBy = (end: RunEnd, conversation: ReadonlyArray<StoredMessage>) => {
+  const said = toldIn(conversation);
+  return finishedRun(end) ? said.told : said.answered;
+};
 ```
+
+`heardBy`를 위해 `import { finishedRun, type RunEnd } from "../loop/store.ts";`를 더한다
+(`task-notifications.ts` 5행이 같은 곳에서 `finishedRun`을 가져온다). 이 import가 순환을 만들어 typecheck나
+테스트가 깨지면 STOP이다.
 
 `notificationsMessageBody`가 끝난 백그라운드 작업의 id를 싣게 한다. 몸 전체를 `Effect.map(…, telling(…))`으로
 감싼다. 안의 글은 바꾸지 않는다.
@@ -702,12 +731,26 @@ function notificationsMessageBody(id: string, notifications: TaskNotifications) 
 4. `"a message that tells none carries no list"`: `telling([])({ role: "user", content: "x" })`가
    `{ role: "user", content: "x" }`와 `toEqual`이다.
 
+그리고 `describe("heardBy", …)`에 둘(`RunEnd`는 `../loop/store.ts`에서 가져온다). 대화는 1번의 대화다(답이
+없다).
+
+5. `"a run that finished delivered everything its conversation tells"`:
+   `heardBy(RunEnd.Completed(), 대화)`가 `["n-1", "n-2"]`, `heardBy(RunEnd.Interrupted(), 대화)`도 같다.
+6. `"a run that did not finish delivered only what the model answered"`:
+   `heardBy(RunEnd.Aborted(), 대화)`가 비어 있고, 대화 뒤에 `{ role: "assistant", content: "ok" }`를 붙이면
+   `["n-1", "n-2"]`다.
+
 **Verify**:
 
 - `vp run memory-agent#typecheck` → exit 0
 - `cd packages/memory-agent && vp test run --maxWorkers=4 src/agent/orchestrator-message.test.ts tests/agent/dispatch-delivery.test.ts tests/golden` → 통과.
-  `dispatch-delivery.test.ts`가 `toldMessage?.orchestrator`만 보므로 그대로 통과한다. `tests/golden`의 결과
-  파일이 바뀌면 STOP이다(끝난 백그라운드 작업이 없는 메시지에는 새 키가 없어야 한다).
+  `dispatch-delivery.test.ts`는 `toldMessage?.orchestrator`만 보므로 그대로 통과한다. `tests/golden`은 한 곳에서
+  실패한다: `tests/golden/__golden__/goal-restart.json`의 저장된 대화에 끝난 백그라운드 작업을 전하는 메시지
+  ("Background shell task <id-7> cancelled: goal-sleeper")가 있고, 거기에 `"toldNotifications": ["<id-7>"]`가
+  더해진다. `cd packages/memory-agent && vp test run --maxWorkers=4 -u tests/golden`으로 결과 파일을 다시 쓰고
+  `git diff -- packages/memory-agent/tests/golden`을 본다. 바뀐 것이 그 메시지에 더해진 `toldNotifications` 키
+  하나뿐이어야 한다(id 자리의 번호는 그 메시지의 글에 있는 것과 같아야 한다). 다른 파일이나 다른 줄이
+  바뀌었으면 되돌리고 STOP이다.
 - `vp run agent#typecheck` 뒤 저장소 루트에서 `vp lint` → exit 0
 
 commit 예: `feat(agent): 알림 메시지가 자기가 전하는 알림의 id를 갖는다`
@@ -844,15 +887,16 @@ export const notificationClaimsDropMigration = `
       }).pipe(stored),
 
     /**
-     * Marks delivered by the run `runId` the conversation's waiting rows the model answered,
-     * whoever sent them: `answered` holds the ids told by messages an answer of the model comes
-     * after (`toldIn`). A row already delivered stays as it is. Returns the ids it marked.
+     * Marks delivered by the run `runId` the conversation's waiting rows the run delivered,
+     * whoever sent them: `delivered` holds their ids, read from the run's saved conversation
+     * (`heardBy`, agent/orchestrator-message.ts). A row already delivered stays as it is. Returns
+     * the ids it marked.
      */
-    heard: (sessionId: string, runId: string, answered: HashSet.HashSet<string>) =>
+    heard: (sessionId: string, runId: string, delivered: HashSet.HashSet<string>) =>
       Effect.gen(function* () {
-        if (HashSet.size(answered) === 0) return [];
+        if (HashSet.size(delivered) === 0) return [];
         const ids = (yield* waiting(sessionId)).flatMap((row) =>
-          HashSet.has(answered, row.id) ? [row.id] : [],
+          HashSet.has(delivered, row.id) ? [row.id] : [],
         );
         if (ids.length === 0) return [];
         const marked = yield* markDeliveredRows({
@@ -878,8 +922,8 @@ not answered."로, `wakes`의 주석에서 "no run holds"를 지우고 "It stays
 
 **4-1. `packages/memory-agent/src/sessions/dispatches.ts`**
 
-`consume`, `release`, `deliverClaimed`(196–211행)를 지우고 둘을 둔다. `effect`에서 `HashSet` 타입이 필요하면
-import에 더한다.
+`consume`, `release`, `deliverClaimed`(196–211행)를 지우고 둘을 둔다. `HashSet`은 타입으로만 쓰므로 `effect`의
+import에 `type HashSet`으로 더한다(lint가 다른 꼴을 요구하면 그것을 따른다).
 
 ```ts
     /**
@@ -893,16 +937,17 @@ import에 더한다.
         toDispatches,
       ),
 
-    /** Marks delivered by the run `runId` the waiting rows of the conversation the model answered. */
-    heard: (toSessionId: string, runId: string, answered: HashSet.HashSet<string>) =>
-      fromNotifications(notifications.heard(toSessionId, runId, answered)),
+    /** Marks delivered by the run `runId` the waiting rows of the conversation the run delivered. */
+    heard: (toSessionId: string, runId: string, delivered: HashSet.HashSet<string>) =>
+      fromNotifications(notifications.heard(toSessionId, runId, delivered)),
 ```
 
 파일 머리 주석과 `pending`, `deliver`의 주석에 claim을 말하는 곳이 있으면 새 방식에 맞게 고친다.
 
 **4-2. `packages/memory-agent/src/agent/dispatch-notifications.ts`**
 
-`consume`을 지우고 hook을 고친다. import에 `toldIn`을 더하고 `finishedRun`을 지운다.
+`consume`을 지우고 hook을 고친다. import에 `toldIn`과 `heardBy`(`./orchestrator-message.ts`)를 더하고
+`finishedRun`을 지운다. `heardBy`는 Step 1-2에서 만든다.
 
 ```ts
 export const dispatchNotifications = (services: {
@@ -913,15 +958,12 @@ export const dispatchNotifications = (services: {
   return {
     /**
      * Before each model call of the run, the dispatches its conversation does not tell yet join it
-     * as the orchestrator's message, and those the model answered are marked delivered. The store
-     * keeps a session whose user stopped the notifications from being given any (decisions.md
-     * "대상 세션의 다음 run에 전달한다").
+     * as the orchestrator's message. The store keeps a session whose user stopped the notifications
+     * from being given any (decisions.md "대상 세션의 다음 run에 전달한다").
      */
     hookFor: (sessionId: string, runId: string): RunHook => ({
-      joining: (_scope, conversation) => {
-        const said = toldIn(conversation);
-        return dispatches.heard(sessionId, runId, said.answered).pipe(
-          Effect.andThen(dispatches.untold(sessionId, said.told)),
+      joining: (_scope, conversation) =>
+        dispatches.untold(sessionId, toldIn(conversation).told).pipe(
           Effect.flatMap((untold) =>
             untold.length === 0
               ? Effect.succeed<StoredMessage[]>([])
@@ -931,20 +973,25 @@ export const dispatchNotifications = (services: {
                 ),
           ),
           Effect.mapError(asRunFailed),
-        );
-      },
-      /** However the run ended, what the model answered in it is delivered. */
-      ended: (_scope, _end, conversation) =>
+        ),
+      /**
+       * Once the conversation is saved: a run that finished delivered everything its conversation
+       * tells; one that did not delivered what the model answered before it stopped.
+       */
+      ended: (_scope, end, conversation) =>
         dispatches
-          .heard(sessionId, runId, toldIn(conversation).answered)
+          .heard(sessionId, runId, heardBy(end, conversation))
           .pipe(Effect.ignore({ log: "Warn" })),
     }),
   };
 };
 ```
 
-파일 머리 주석(9–16행)을 새 방식으로 고쳐 쓴다(영어): 메시지가 대화에 없으면 넣는다, 모델이 답하면 전한
-것으로 적는다, run을 따로 시작하지 않는다.
+파일 머리 주석(9–16행)을 새 방식으로 고쳐 쓴다(영어): 메시지가 대화에 없으면 넣는다, run이 끝나 대화를
+저장한 뒤에 전한 것으로 적는다, run을 따로 시작하지 않는다.
+
+`heard`를 `joining`에서 부르지 않는다. 대화는 run이 끝날 때(와 글이 흐르는 동안 가끔) 저장된다. 저장하기 전에
+전한 것으로 적으면, 그 뒤 프로세스가 죽었을 때 대화에는 메시지가 없는데 행은 전한 것으로 남는다.
 
 **4-3. `packages/memory-agent/src/agent/task-notifications.ts`**
 
@@ -973,7 +1020,7 @@ export const dispatchNotifications = (services: {
   ```ts
   /** Gives back the Work Trace notifications the run took; the background ends need no giving back. */
   const release = (sessionId: string, runId: string) =>
-    trace.releaseParentNotifications(sessionId, runId);
+    Effect.asVoid(trace.releaseParentNotifications(sessionId, runId));
   ```
 
 - hook.
@@ -981,8 +1028,7 @@ export const dispatchNotifications = (services: {
   ```ts
       hookFor: (sessionId: string, runId: string): RunHook => ({
         joining: (_scope, conversation) =>
-          notifications.heard(sessionId, runId, toldIn(conversation).answered).pipe(
-            Effect.andThen(consume(sessionId, runId, conversation)),
+          consume(sessionId, runId, conversation).pipe(
             Effect.flatMap((notifications: TaskNotifications) =>
               hasTaskNotifications(notifications)
                 ? Effect.map(
@@ -999,7 +1045,7 @@ export const dispatchNotifications = (services: {
               Effect.ignore({ log: "Warn" }),
             ),
             notifications
-              .heard(sessionId, runId, toldIn(conversation).answered)
+              .heard(sessionId, runId, heardBy(end, conversation))
               .pipe(Effect.ignore({ log: "Warn" })),
           ),
       }),
@@ -1008,9 +1054,11 @@ export const dispatchNotifications = (services: {
   `joining` 안의 `flatMap` 인자 이름 `notifications`가 바깥의 `notifications`(저장소)를 가린다. 지금 코드도
   그렇다. lint가 그것을 막으면 인자 이름을 `told`로 바꾼다.
 
-- import에 `toldIn`을 더한다. 파일 머리 주석(15–20행)과 `hookFor` 위 주석(58–63행)을 새 방식으로 고친다:
-  끝난 백그라운드 작업은 대화에 없으면 넣고 모델이 답하면 전한 것으로 적는다. 끝난 하위 작업은 지금처럼 run이
-  잡고, 끝나지 못하면 돌려준다.
+- import에 `toldIn`과 `heardBy`를 더한다. 파일 머리 주석(15–20행)과 `hookFor` 위 주석(58–63행)을 새 방식으로
+  고친다: 끝난 백그라운드 작업은 대화에 없으면 넣고, run이 끝나 대화를 저장한 뒤에 전한 것으로 적는다. 끝난
+  하위 작업은 지금처럼 run이 잡고, 끝나지 못하면 돌려준다.
+- `release`를 `Effect.asVoid`로 감싸는 까닭: `trace.releaseParentNotifications`는 바뀐 행의 수를 준다.
+  `chat.ts` 1310행의 `Ref<Effect.Effect<void>>`에 `release`를 넣는 코드(1833–1841행)가 그대로 맞아야 한다.
 
 **4-4. `packages/memory-agent/src/agent/chat.ts`의 `runContext`**
 
@@ -1134,6 +1182,11 @@ export const dispatchNotifications = (services: {
      - `turns: [{ toolCalls: [{ id: "call-1", name: "find_memory", arguments: '{"query":"결정"}' }] }, { failAfterText: "둘째 단계에서 실패." }]`
        (첫 단계는 "the same run is not told the same dispatch twice" 테스트와 같다).
      - run 뒤 행은 `{ state: "delivered", delivered_run_id: runId, delivered_at: expect.any(String) }`.
+  3. `"a run that completes without an answer still delivers what its conversation tells"`
+     - `turns: [{ text: "" }]`로 run 하나를 돌린다.
+     - 저장된 대화에서 그 dispatch를 전하는 메시지 뒤에 assistant 메시지가 **없을 때만** 이 테스트를 둔다. 그때
+       행은 `{ state: "delivered", delivered_run_id: runId, delivered_at: expect.any(String) }`이다.
+     - scripted 모델이 빈 글로도 assistant 메시지를 남기면 이 테스트는 쓰지 않고, 그 사실을 보고에 적는다.
 
 - "the same run is not told the same dispatch twice"의 주석 "The claim that kept the run from being told
   twice is gone …"을 "The conversation tells it once; the run delivered the row."로 바꾼다.
@@ -1229,17 +1282,18 @@ Step 2–5를 한 commit으로 묶는다. 예:
   때까지 알림을 받지 않는다)은 그대로다.
   1. 알림은 대화에 메시지로 한 번 넣는다. 그 메시지는 자기가 전하는 알림의 id를 가진다
      (`StoredUserMessage.toldNotifications`). run이 가진 대화에 그 id가 있으면 다시 넣지 않는다.
-  2. 그 메시지 뒤에 모델의 답이 대화에 있으면 전한 것으로 적는다(`state`가 `delivered`). 실패하거나 취소된
-     답(`stopReason`이 있는 답)은 답으로 치지 않는다. run이 그 뒤에 실패하거나 취소돼도 바뀌지 않는다.
-  3. 메시지가 대화에 없으면 다음 run이 다시 넣는다. 시작하지 못한 run, 저장하기 전에 죽은 run, 사용자가 그
-     메시지 앞으로 대화를 되돌린 경우가 그렇다.
+  2. run이 끝나 대화를 저장한 뒤에 전한 것으로 적는다(`state`가 `delivered`). run이 `completed`나
+     `interrupted`로 끝났으면 그 대화가 전하는 알림을 모두 적는다. 실패하거나 취소됐으면 그 메시지 뒤에 모델의
+     답이 대화에 있는 것만 적는다. 실패하거나 취소된 답(`stopReason`이 있는 답)은 답으로 치지 않는다.
+  3. 메시지가 대화에 없으면 다음 run이 다시 넣는다. 시작하지 못한 run과 저장하기 전에 죽은 run이 그렇다.
   4. 앱을 다시 시작할 때 알림을 따로 정리하지 않는다.
 - 달라진 동작:
   - 모델 호출이 실패한 run 뒤에 같은 알림이 새 메시지로 다시 들어가지 않는다. 대화에 남은 메시지가 다음
     요청에 실려 가고, 모델이 답하면 그때 전한 것으로 적는다.
   - 모델이 답한 뒤 실패한 run의 알림은 전한 것으로 남는다.
-  - 대화를 깨울 알림이 있는지(`wakes`)는 모델이 답할 때까지 true다. 자동 run은 마지막 run이 `completed`일
-    때만 시작하므로(`chat.ts`), 실패한 run 뒤에 자동으로 다시 시작하지 않는 것은 전과 같다.
+  - 대화를 깨울 알림이 있는지(`wakes`)는 전한 것으로 적을 때까지 true다. 자동 run은 마지막 run이
+    `completed`일 때만 시작하므로(`chat.ts`), 실패한 run 뒤에 자동으로 다시 시작하지 않는 것은 전과 같다.
+  - 이 방식으로 바꾸기 전에 저장된 알림 메시지에는 id가 없다. 그때 기다리던 알림은 한 번 더 들어갈 수 있다.
 - 코드: 알림 표에서 `claimed_run_id`, `claimed_at` 열과 인덱스 `orchestrator_notifications_claimed`를 지웠다
   (`notificationClaimsDropMigration`: 죽은 프로세스가 남긴 claim은 옛 재시작 정리와 같은 기준으로 한 번
   정리한다). `OrchestratorNotifications`에서 `claim`, `release`, `deliverClaimed`, 시작할 때의 claim 정리를
@@ -1247,8 +1301,12 @@ Step 2–5를 한 commit으로 묶는다. 예:
   읽는 일은 `packages/memory-agent/src/agent/orchestrator-message.ts`의 `toldIn`이 한다.
 - 아직 이 방식이 아닌 것: 끝난 하위 작업(`parent_notifications`)과 보드의 호출. 그래서 `AgentChat.start`의
   finalizer(계획 036)는 끝난 하위 작업을 돌려주려고 남아 있다.
-- 알려진 드문 경우: run이 끝날 때 전한 것으로 적는 쓰기가 실패하면(경고를 적고 넘어간다) 깨울 알림이 남아
-  자동 run이 한 번 더 시작할 수 있다. 그 run의 첫 모델 호출 전에 바로잡는다.
+- 내 기본값(사용자가 정한 것이 아니다): 모델이 아무것도 쓰지 않고 `completed`로 끝난 run도 그 대화가 전하는
+  알림을 전한 것으로 적는다. 모델 호출이 성공했고, 그렇게 하지 않으면 깨울 알림이 남아 자동 run이 되풀이된다.
+- 알려진 드문 경우 둘. (1) run이 끝날 때 전한 것으로 적는 쓰기가 실패하면(경고를 적고 넘어간다) 깨울 알림이
+  남아 자동 run이 한 번 더 시작한다. 그 run이 끝날 때 바로잡는다. (2) 그림 만들기(`AgentChat.recordImage`)는
+  모델을 부르지 않고 assistant 메시지를 대화에 붙인다. 답을 못 받은 알림 메시지 뒤에 그것이 붙고 다음 run이
+  실패하면, 모델이 받지 못한 알림이 전한 것으로 적힌다. 메시지는 대화에 남아 다음 요청에 실려 간다.
 - 요청을 줄일 때 답을 못 받은 알림 메시지를 빼지 않는 것은 계획 038이 한다.
 - 마지막 줄: `구현: 계획 037.`
 
@@ -1261,7 +1319,8 @@ Step 2–5를 한 commit으로 묶는다. 예:
   고치지 않는다.
 - `packages/memory-agent/src/agent/README.md`: `taskNotifications` 항목(16행), `dispatchNotifications`
   항목(17행). 78행의 `liveRuns`의 `claim`은 다른 것이다. 고치지 않는다.
-- `packages/memory-agent/src/tools/README.md`: 30행과 79행에서 "run이 잡고, 돌려주고"를 말하는 곳.
+- `packages/memory-agent/src/tools/README.md`: 30행에서 "run이 잡고, 돌려주고"를 말하는 곳. 79행은 그대로
+  맞다.
 - `packages/memory-agent/src/chat-store/README.md` 13행: user 메시지의 선택 키 `orchestrator`와
   `toldNotifications`(그 메시지가 전하는 알림의 id)를 한 구절로 더한다.
 
@@ -1277,11 +1336,12 @@ commit 예: `docs: 알림을 전했는지를 대화에서 읽는 것을 적는�
 
 - 새 테스트:
   - `src/agent/orchestrator-message.test.ts`의 `toldIn` 넷(대화가 전하는 id, 답이 있으면 answered, 실패한 답은
-    치지 않음, 빈 목록은 키를 두지 않음).
+    치지 않음, 빈 목록은 키를 두지 않음)과 `heardBy` 둘(끝난 run은 전한 것 모두, 끝나지 못한 run은 답한 것만).
   - `tests/notification-claims-drop-migration.test.ts` 하나(열과 인덱스가 없어지고, 끝난 run의 claim은
     delivered, 죽은 run의 claim은 waiting, 행은 남는다).
-  - `tests/agent/dispatch-delivery.test.ts` 둘(모델 호출이 실패한 run 뒤에 다음 run이 다시 넣지 않고 듣는다,
-    모델이 답한 뒤 실패한 run은 전한 것으로 남는다).
+  - `tests/agent/dispatch-delivery.test.ts` 둘이나 셋(모델 호출이 실패한 run 뒤에 다음 run이 다시 넣지 않고
+    듣는다, 모델이 답한 뒤 실패한 run은 전한 것으로 남는다, 쓸 수 있으면 아무것도 쓰지 않고 끝난 run도 전한
+    것으로 적는다).
 - 고치는 테스트: Step 5의 다섯 파일. 따를 꼴은 각 파일에 이미 있는 테스트다.
 - 돌려 볼 것: Commands 절의 "고른 테스트".
 - 실제 모델로는 확인하지 않는다(dev 서버를 다시 시작해야 하고, 그것은 사용자가 한다).
@@ -1295,19 +1355,19 @@ commit 예: `docs: 알림을 전했는지를 대화에서 읽는 것을 적는�
 - [ ] `rg -n 'claimed_run_id|claimed_at' packages/memory-agent/src -g '!*.md'` → `migrations.ts`에만 있다
 - [ ] `rg -n 'deliverClaimed|settleAbandonedClaims' packages/memory-agent` → 없음
 - [ ] `rg -n 'notificationClaimsDropMigration' packages/memory-agent/src/db/migrations.ts` → 두 줄(정의, 배열)
-- [ ] `git diff --stat 75f25592..HEAD`에 Scope의 파일만 있다
+- [ ] `git diff --stat <시작할 때의 HEAD>..HEAD`에 Scope의 파일만 있다(시작할 때 `git rev-parse HEAD`를 적어 둔다)
 - [ ] `docs/decisions.md` 끝에 새 항목이 있다
 
 ## STOP conditions
 
 - Drift check에서 발췌와 실제 코드가 다르다.
-- Step 1 뒤에 `tests/golden`의 결과 파일이 바뀐다.
+- Step 1 뒤에 `tests/golden`의 결과 파일이 Step 1의 Verify가 말한 키 하나 말고 다르게 바뀐다.
+- 시작할 때 계획 038이 merge돼 있지 않다(`compaction.ts`에 `const unanswered`가 없다).
 - Step 2의 migration이 SQLite 오류를 낸다(예: 다른 표나 trigger가 `orchestrator_notifications`를 참조한다).
 - Step 4-4에서 `runStore.thread`를 `runContext` 안에서 부를 수 없다(오류 타입이나 순서 때문에).
 - Step 5 뒤에 "고른 테스트" 가운데 이 계획이 말하지 않은 테스트가 실패하고, 그 까닭이 "잡은 run이 끝나야
   전한 것으로 적는다"를 단언하고 있어서가 아니다. 그 단언 때문이면 새 방식에 맞게 고치고 보고에 적는다.
-- 모델 요청에 같은 알림 메시지가 두 번 들어가는 경우를 찾았다(예: 대화를 줄여서 run에 넘기는 길이 있어
-  `joining`이 받는 대화에 앞의 알림 메시지가 없다). 고치지 말고 그 길을 보고한다.
+- 모델 요청에 같은 알림 메시지가 두 번 들어가는 경우를 찾았다. 고치지 말고 그 길을 보고한다.
 - `Scope`에 없는 파일을 고쳐야만 통과한다.
 - 사용자가 정해야 할 일이 생긴다. 다른 사람이나 바깥에 묻지 않는다. `NEEDS-DECISION`으로 보고한다.
 
@@ -1318,10 +1378,16 @@ commit 예: `docs: 알림을 전했는지를 대화에서 읽는 것을 적는�
   finalizer를 지운다. 보드의 호출도 같은 방식으로 옮길 수 있다.
 - `toldNotifications`는 저장되는 메시지에만 있다. 화면으로 가는 메시지(`api/chat-api.ts`의 `ChatMessage`)에는
   없다. 화면에 보일 까닭이 생기면 `note`가 아니라 따로 낸다.
-- `heard`는 보낸 쪽을 가리지 않는다. hook 둘(`task-notifications.ts`, `dispatch-notifications.ts`)이 단계마다
-  각각 부르므로 둘째 호출은 고칠 것이 없다. hook이 더 늘면 한 곳으로 모은다.
-- 대화를 줄여서 run에 넘기는 길(model handoff 등)이 `joining`에 앞부분이 빠진 대화를 주면, 답을 못 받은 알림은
-  다시 들어간다. 그 요청에 메시지가 실제로 없으므로 맞는 동작이다.
-- 검토할 때 볼 것: (1) `ended`가 run이 실패했을 때도 `heard`를 부르는가. (2) `runContext`의 첫 메시지가
+- `heard`는 보낸 쪽을 가리지 않는다. hook 둘(`task-notifications.ts`, `dispatch-notifications.ts`)이 run이
+  끝날 때 각각 부르므로 둘째 호출은 고칠 것이 없다. hook이 더 늘면 한 곳으로 모은다.
+- run은 언제나 저장된 대화 전체를 받는다(`chat.ts` 1551–1554행, 2157–2161행). model handoff와 요청 줄이기는
+  요청만 줄인다. 그래서 `joining`이 보는 대화에서 앞의 알림 메시지가 빠지는 일은 없다.
+- `ended`는 대화를 저장한 뒤에 불린다. 실패한 run이 대화를 저장하지 못하면 불리지 않는다
+  (`loop/run.ts`의 `stoppedAt`). 그때 행은 기다리는 채로 남고 다음 run이 끝날 때 바로잡는다.
+- 답으로 치는 기준(실패 표시가 없는 assistant 메시지)은 모델을 부르지 않고 붙는 assistant 메시지도 답으로
+  본다. 지금 그런 것은 그림 만들기(`agent/image-record.ts`의 `imageMessages`) 하나다. 그런 메시지가 늘면
+  모델이 쓴 답만 가리는 표시를 메시지에 둔다(빚).
+- 검토할 때 볼 것: (1) `ended`가 run이 실패했을 때도 `heard`를 부르는가. `joining`은 부르지 않는가.
+  (2) `runContext`의 첫 메시지가
   `telling`을 거치는가. 빠지면 자동 run의 첫 단계에서 같은 끝이 한 번 더 들어간다. (3) migration이 옛 단계의
   글을 건드리지 않았는가.
