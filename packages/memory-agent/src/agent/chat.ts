@@ -1302,16 +1302,18 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         ? internalFollowup
         : null;
       return Effect.gen(function* () {
-        // What an early end must undo. The run takes over the cancellation and the steering once
-        // it is following its log.
+        // What an early end must undo. The run takes over the cancellation, the steering and the
+        // notifications it took once it is following its log.
         const claimedNext = yield* Ref.make<string | null>(null);
         const cancellationToRelease = yield* Ref.make<Effect.Effect<void>>(Effect.void);
         const stopSteeringOnExit = yield* Ref.make<Effect.Effect<void>>(Effect.void);
+        const notificationsToRelease = yield* Ref.make<Effect.Effect<void>>(Effect.void);
         yield* Effect.addFinalizer(() =>
           Effect.flatMap(Ref.get(claimedNext), (next) =>
             isTruthy(next) ? queue.releaseNext(sessionId, next) : Effect.void,
           ).pipe(Effect.catch(logFailure("Queued next turn was not released"))),
         );
+        yield* Effect.addFinalizer(() => Effect.flatten(Ref.get(notificationsToRelease)));
         yield* Effect.addFinalizer(() => Effect.flatten(Ref.get(stopSteeringOnExit)));
         yield* Effect.addFinalizer(() => Effect.flatten(Ref.get(cancellationToRelease)));
         const { projectId, agent: external, title } = yield* sessions.get(sessionId);
@@ -1827,7 +1829,17 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           // their own (`Subagents.toolsFor`), so its system prompt stays the same.
           const parentNotifications = yield* EffectArray.match(followup, {
             onEmpty: () => Effect.succeed(noTaskNotifications),
-            onNonEmpty: () => notifications.consume(sessionId, runId),
+            onNonEmpty: () =>
+              Ref.set(
+                notificationsToRelease,
+                notifications
+                  .release(sessionId, runId)
+                  .pipe(
+                    Effect.catch(
+                      logFailure("Notifications of a run that did not start not given back"),
+                    ),
+                  ),
+              ).pipe(Effect.andThen(notifications.consume(sessionId, runId))),
           });
           const toldLines = hasTaskNotifications(parentNotifications)
             ? [
@@ -2363,6 +2375,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         });
         yield* Ref.set(cancellationToRelease, Effect.void);
         yield* Ref.set(stopSteeringOnExit, Effect.void);
+        yield* Ref.set(notificationsToRelease, Effect.void);
         return ChatStart.Following({ log, after: "-1" });
       }).pipe(
         Effect.scoped,
