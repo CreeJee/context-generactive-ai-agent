@@ -1,8 +1,8 @@
-import { Effect } from "effect";
+import { Effect, HashSet } from "effect";
 import { expect } from "vite-plus/test";
 import { OrchestratorNotifications, Sessions, type MessageDelivery } from "memory-agent";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
-import { sqlGet, sqlRun } from "../support/sql.ts";
+import { sqlGet } from "../support/sql.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 
 /**
@@ -47,10 +47,7 @@ const target = Effect.gen(function* () {
 });
 
 const stateOf = (id: string) =>
-  sqlGet(
-    "SELECT state, claimed_run_id, delivered_run_id FROM orchestrator_notifications WHERE id = ?",
-    id,
-  );
+  sqlGet("SELECT state, delivered_run_id FROM orchestrator_notifications WHERE id = ?", id);
 
 testAgent()(function (it) {
   it.effect("notifications put for a conversation wait there, oldest first", () =>
@@ -84,50 +81,39 @@ testAgent()(function (it) {
     }),
   );
 
-  it.effect("claim hands the waiting rows to one run, once", () =>
+  it.effect("untold gives the waiting rows the conversation does not tell", () =>
     Effect.gen(function* () {
       const { env, to, put } = yield* target;
       const first = yield* put("one");
       const second = yield* put("two");
       const notifications = yield* env.use(OrchestratorNotifications);
-      expect(yield* env.use(notifications.claim(to.id, "run-a", "conversation"))).toEqual([
-        first,
-        second,
-      ]);
-      // The same run gets nothing the second time, and another run gets nothing either.
-      expect(yield* env.use(notifications.claim(to.id, "run-a", "conversation"))).toEqual([]);
-      expect(yield* env.use(notifications.claim(to.id, "run-b", "conversation"))).toEqual([]);
+      const untold = (told: HashSet.HashSet<string>) =>
+        env.use(notifications.untold(to.id, "conversation", told));
+      expect(yield* untold(HashSet.empty())).toEqual([first, second]);
+      expect(yield* untold(HashSet.make(first.id))).toEqual([second]);
+      // Being given the rows writes nothing: they are given again.
+      expect(yield* untold(HashSet.empty())).toEqual([first, second]);
     }),
   );
 
-  it.effect("release gives claimed rows to another run", () =>
+  it.effect("heard marks the rows the model answered delivered by that run", () =>
     Effect.gen(function* () {
       const { env, to, put } = yield* target;
-      const row = yield* put("retry");
+      const done = yield* put("done");
+      const other = yield* put("other");
       const notifications = yield* env.use(OrchestratorNotifications);
-      expect(yield* env.use(notifications.claim(to.id, "run-a", "conversation"))).toHaveLength(1);
-      yield* env.use(notifications.release(to.id, "run-a"));
-      expect(yield* env.use(notifications.claim(to.id, "run-b", "conversation"))).toEqual([row]);
+      const heard = (delivered: HashSet.HashSet<string>) =>
+        env.use(notifications.heard(to.id, "run-a", delivered));
+      expect(yield* heard(HashSet.make(done.id))).toEqual([done.id]);
+      expect(yield* env.use(notifications.pending(to.id))).toEqual([other]);
+      expect(yield* stateOf(done.id)).toEqual({ state: "delivered", delivered_run_id: "run-a" });
+      // A row already delivered stays as it is, and no ids mark nothing.
+      expect(yield* heard(HashSet.make(done.id))).toEqual([]);
+      expect(yield* heard(HashSet.empty())).toEqual([]);
     }),
   );
 
-  it.effect("deliverClaimed marks what the run claimed delivered by that run", () =>
-    Effect.gen(function* () {
-      const { env, to, put } = yield* target;
-      const row = yield* put("done");
-      const notifications = yield* env.use(OrchestratorNotifications);
-      yield* env.use(notifications.claim(to.id, "run-a", "conversation"));
-      expect(yield* env.use(notifications.deliverClaimed(to.id, "run-a"))).toEqual([row.id]);
-      expect(yield* env.use(notifications.pending(to.id))).toEqual([]);
-      expect(yield* stateOf(row.id)).toEqual({
-        state: "delivered",
-        claimed_run_id: null,
-        delivered_run_id: "run-a",
-      });
-    }),
-  );
-
-  it.effect("a conversation whose notifications are on hold claims nothing", () =>
+  it.effect("a conversation whose notifications are on hold is given nothing", () =>
     Effect.gen(function* () {
       const { env, to, put } = yield* target;
       const row = yield* put("wait out");
@@ -135,7 +121,9 @@ testAgent()(function (it) {
       yield* env.use(
         Effect.flatMap(WorkTraceStore, (trace) => trace.holdParentNotifications(to.id)),
       );
-      expect(yield* env.use(notifications.claim(to.id, "run-a", "conversation"))).toEqual([]);
+      expect(yield* env.use(notifications.untold(to.id, "conversation", HashSet.empty()))).toEqual(
+        [],
+      );
       expect(yield* env.use(notifications.pending(to.id))).toEqual([row]);
     }),
   );
@@ -155,53 +143,21 @@ testAgent()(function (it) {
     }),
   );
 
-  it.effect("opening settles the claims a dead process left", () =>
-    Effect.gen(function* () {
-      const { env, to, put } = yield* target;
-      const notifications = yield* env.use(OrchestratorNotifications);
-      const told = yield* put("told");
-      yield* env.use(notifications.claim(to.id, "notifications-run-finished", "conversation"));
-      const untold = yield* put("untold");
-      yield* env.use(notifications.claim(to.id, "notifications-run-died", "conversation"));
-      yield* sqlRun(
-        "INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES ('notifications-run-finished', ?, 'completed', 1)",
-        to.id,
-      );
-      yield* env.reopen;
-      // The finished run handed its row to the model; the other run never finished, so its row
-      // waits for the next run again.
-      expect(yield* stateOf(told.id)).toEqual({
-        state: "delivered",
-        claimed_run_id: null,
-        delivered_run_id: "notifications-run-finished",
-      });
-      expect(
-        yield* env.use(
-          Effect.flatMap(OrchestratorNotifications, (notifications) =>
-            notifications.pending(to.id),
-          ),
-        ),
-      ).toEqual([untold]);
-    }),
-  );
-
-  it.effect("claim takes only the named sender's rows", () =>
+  it.effect("untold gives only the named sender's rows", () =>
     Effect.gen(function* () {
       const { env, to, put, putTask } = yield* target;
       const message = yield* put("one");
       const end = yield* putTask("task-a", "next_run");
       const notifications = yield* env.use(OrchestratorNotifications);
-      expect(yield* env.use(notifications.claim(to.id, "run-a", "task"))).toEqual([end]);
-      expect(yield* env.use(notifications.claim(to.id, "run-b", "conversation"))).toEqual([
+      expect(yield* env.use(notifications.untold(to.id, "task", HashSet.empty()))).toEqual([end]);
+      expect(yield* env.use(notifications.untold(to.id, "conversation", HashSet.empty()))).toEqual([
         message,
       ]);
-      expect(yield* stateOf(end.id)).toMatchObject({ claimed_run_id: "run-a" });
-      expect(yield* stateOf(message.id)).toMatchObject({ claimed_run_id: "run-b" });
     }),
   );
 
   it.effect(
-    "a waiting row that wakes is reported until a run claims it, and not while notifications are held",
+    "a waiting row that wakes is reported until the model answers it, and not while notifications are held",
     () =>
       Effect.gen(function* () {
         const { env, to, putTask } = yield* target;
@@ -210,7 +166,7 @@ testAgent()(function (it) {
         // A row that waits for a run that starts anyway wakes nothing.
         yield* putTask("task-later", "next_run");
         expect(yield* wakes).toBe(false);
-        yield* putTask("task-waking", "wake");
+        const waking = yield* putTask("task-waking", "wake");
         expect(yield* wakes).toBe(true);
         yield* env.use(
           Effect.flatMap(WorkTraceStore, (trace) => trace.holdParentNotifications(to.id)),
@@ -220,7 +176,10 @@ testAgent()(function (it) {
           Effect.flatMap(WorkTraceStore, (trace) => trace.resumeParentNotifications(to.id)),
         );
         expect(yield* wakes).toBe(true);
-        yield* env.use(notifications.claim(to.id, "run-a", "task"));
+        // Being given the row changes nothing.
+        yield* env.use(notifications.untold(to.id, "task", HashSet.empty()));
+        expect(yield* wakes).toBe(true);
+        yield* env.use(notifications.heard(to.id, "run-a", HashSet.make(waking.id)));
         expect(yield* wakes).toBe(false);
       }),
   );
@@ -254,11 +213,7 @@ testAgent()(function (it) {
       // A row that was delivered stays delivered when its sender puts it again.
       yield* env.use(notifications.deliver(to.id, "run-a", ["task-1"]));
       yield* putOnce("ls");
-      expect(yield* stateOf("task-1")).toEqual({
-        state: "delivered",
-        claimed_run_id: null,
-        delivered_run_id: "run-a",
-      });
+      expect(yield* stateOf("task-1")).toEqual({ state: "delivered", delivered_run_id: "run-a" });
     }),
   );
 });

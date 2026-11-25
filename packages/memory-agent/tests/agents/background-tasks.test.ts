@@ -1,4 +1,4 @@
-import { Deferred, Effect, Fiber, FileSystem, Path, Ref, Schema, Stream } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, HashSet, Path, Ref, Schema, Stream } from "effect";
 import { expect } from "vite-plus/test";
 import { OrchestratorNotifications } from "../../src/sessions/orchestrator-notifications.ts";
 import { ApprovedTools } from "../../src/tools/approved.ts";
@@ -34,10 +34,12 @@ const readResult = Effect.fnUntraced(function* (
   return yield* callTool(tasks.toolsFor(sessionId), "get_background_result", input);
 });
 
-/** The background ends the run takes from the session's notifications, as their rows carry them. */
-const takeEnds = Effect.fnUntraced(function* (sessionId: string, runId: string) {
+/** The background ends the session's notifications hold that no conversation tells yet. */
+const untoldEnds = Effect.fnUntraced(function* (sessionId: string) {
   const notifications = yield* OrchestratorNotifications;
-  return (yield* notifications.claim(sessionId, runId, "task")).map((entry) => entry.payload);
+  return (yield* notifications.untold(sessionId, "task", HashSet.empty())).map(
+    (entry) => entry.payload,
+  );
 });
 
 testAgent()("background task lifecycle", (it) => {
@@ -90,64 +92,66 @@ testAgent()("background task lifecycle", (it) => {
     }),
   );
 
-  it.effect(
-    "an end is told once to the run that takes it, and again after that run gives it back",
-    () =>
-      Effect.gen(function* () {
-        const sessionId = yield* freshSession;
-        const tasks = yield* BackgroundTasks;
-        const notifications = yield* OrchestratorNotifications;
-        const run = yield* runOf(sessionId);
-        const gate = yield* Deferred.make<void>();
-        const ended = yield* Stream.take(tasks.completions, 1).pipe(
-          Stream.runCollect,
-          Effect.forkScoped({ startImmediately: true }),
-        );
-        const receipt = yield* tasks.start(
-          run,
-          `${sessionId}:call`,
-          "shell",
-          "ls  -la",
-          Effect.as(Deferred.await(gate), "listing"),
-        );
-        expect((yield* tasks.running(sessionId)).map((task) => task.id)).toEqual([receipt.taskId]);
-        expect(yield* notifications.wakes(sessionId)).toBe(false);
-        yield* Deferred.succeed(gate, undefined);
-        yield* Fiber.join(ended);
-        expect(yield* tasks.running(sessionId)).toEqual([]);
-        expect(yield* notifications.wakes(sessionId)).toBe(true);
-        const told = [
-          {
-            _tag: "BackgroundEnd",
-            taskId: receipt.taskId,
-            parentRunId: run.runId,
-            kind: "shell",
-            title: "ls -la",
-            status: "completed",
-          },
-        ];
-        expect(yield* takeEnds(sessionId, "later-run")).toEqual(told);
-        expect(yield* takeEnds(sessionId, "next-run")).toEqual([]);
-        yield* notifications.release(sessionId, "later-run");
-        expect(yield* takeEnds(sessionId, "next-run")).toEqual(told);
-        expect(yield* notifications.wakes(sessionId)).toBe(false);
-        // A result the run waited for is its own, so its end is not told again.
-        const waited = yield* tasks.start(
-          run,
-          `${sessionId}:waited`,
-          "shell",
-          "pwd",
-          Effect.succeed("/"),
-        );
-        yield* tasks.waitResult(sessionId, waited.taskId, 2000);
-        expect(yield* notifications.wakes(sessionId)).toBe(false);
-        expect(
-          yield* sqlGet(
-            "SELECT state, delivered_run_id FROM orchestrator_notifications WHERE id = ?",
-            waited.taskId,
-          ),
-        ).toEqual({ state: "delivered", delivered_run_id: run.runId });
-      }),
+  it.effect("an end waits until the model answers it", () =>
+    Effect.gen(function* () {
+      const sessionId = yield* freshSession;
+      const tasks = yield* BackgroundTasks;
+      const notifications = yield* OrchestratorNotifications;
+      const run = yield* runOf(sessionId);
+      const gate = yield* Deferred.make<void>();
+      const ended = yield* Stream.take(tasks.completions, 1).pipe(
+        Stream.runCollect,
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      const receipt = yield* tasks.start(
+        run,
+        `${sessionId}:call`,
+        "shell",
+        "ls  -la",
+        Effect.as(Deferred.await(gate), "listing"),
+      );
+      expect((yield* tasks.running(sessionId)).map((task) => task.id)).toEqual([receipt.taskId]);
+      expect(yield* notifications.wakes(sessionId)).toBe(false);
+      yield* Deferred.succeed(gate, undefined);
+      yield* Fiber.join(ended);
+      expect(yield* tasks.running(sessionId)).toEqual([]);
+      expect(yield* notifications.wakes(sessionId)).toBe(true);
+      const told = [
+        {
+          _tag: "BackgroundEnd",
+          taskId: receipt.taskId,
+          parentRunId: run.runId,
+          kind: "shell",
+          title: "ls -la",
+          status: "completed",
+        },
+      ];
+      expect(yield* untoldEnds(sessionId)).toEqual(told);
+      // A conversation that tells it is not given it again, and it still wakes the session.
+      expect(yield* notifications.untold(sessionId, "task", HashSet.make(receipt.taskId))).toEqual(
+        [],
+      );
+      expect(yield* notifications.wakes(sessionId)).toBe(true);
+      yield* notifications.heard(sessionId, "later-run", HashSet.make(receipt.taskId));
+      expect(yield* untoldEnds(sessionId)).toEqual([]);
+      expect(yield* notifications.wakes(sessionId)).toBe(false);
+      // A result the run waited for is its own, so its end is not told again.
+      const waited = yield* tasks.start(
+        run,
+        `${sessionId}:waited`,
+        "shell",
+        "pwd",
+        Effect.succeed("/"),
+      );
+      yield* tasks.waitResult(sessionId, waited.taskId, 2000);
+      expect(yield* notifications.wakes(sessionId)).toBe(false);
+      expect(
+        yield* sqlGet(
+          "SELECT state, delivered_run_id FROM orchestrator_notifications WHERE id = ?",
+          waited.taskId,
+        ),
+      ).toEqual({ state: "delivered", delivered_run_id: run.runId });
+    }),
   );
 
   it.effect(
@@ -174,13 +178,13 @@ testAgent()("background task lifecycle", (it) => {
         );
         yield* Fiber.join(ended);
         expect(yield* notifications.wakes(sessionId)).toBe(false);
-        expect(yield* takeEnds(sessionId, "next-run")).toMatchObject([
+        expect(yield* untoldEnds(sessionId)).toMatchObject([
           { taskId: receipt.taskId, parentRunId: boardRun.runId, status: "completed" },
         ]);
       }),
   );
 
-  it.effect("a run that finishes delivers the ends it took", () =>
+  it.effect("an end the model answered is delivered by that run", () =>
     Effect.gen(function* () {
       const sessionId = yield* freshSession;
       const tasks = yield* BackgroundTasks;
@@ -198,22 +202,14 @@ testAgent()("background task lifecycle", (it) => {
       );
       yield* Fiber.join(ended);
       const stateOf = sqlGet(
-        "SELECT state, claimed_run_id, delivered_run_id FROM orchestrator_notifications WHERE id = ?",
+        "SELECT state, delivered_run_id FROM orchestrator_notifications WHERE id = ?",
         receipt.taskId,
       );
-      // While the run goes on, the end it took still waits, marked with that run.
-      yield* notifications.claim(sessionId, "run-x", "task");
-      expect(yield* stateOf).toEqual({
-        state: "waiting",
-        claimed_run_id: "run-x",
-        delivered_run_id: null,
-      });
-      yield* notifications.deliverClaimed(sessionId, "run-x");
-      expect(yield* stateOf).toEqual({
-        state: "delivered",
-        claimed_run_id: null,
-        delivered_run_id: "run-x",
-      });
+      // Being given the end changes nothing: it waits until the model answers it.
+      yield* notifications.untold(sessionId, "task", HashSet.empty());
+      expect(yield* stateOf).toEqual({ state: "waiting", delivered_run_id: null });
+      yield* notifications.heard(sessionId, "run-x", HashSet.make(receipt.taskId));
+      expect(yield* stateOf).toEqual({ state: "delivered", delivered_run_id: "run-x" });
     }),
   );
 

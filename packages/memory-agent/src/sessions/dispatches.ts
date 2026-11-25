@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Context, Effect, type HashSet, Layer, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { ToolFailed } from "../tools/failure.ts";
 import { runTool, type RunTool } from "../tools/run-tool.ts";
@@ -186,29 +186,19 @@ const make = Effect.gen(function* () {
       fromNotifications(notifications.deliver(toSessionId, deliveredRunId, ids)),
 
     /**
-     * Takes the conversation's waiting dispatches for the run `runId`, oldest first, each marked
-     * with the run that delivers it. The mark keeps every run, including `runId` again, from
-     * taking the same dispatch twice; a run that does not finish gives its takes back with
-     * `release`, and a run that finishes completes their delivery with `deliverClaimed`. A session
-     * whose user stopped the notifications (parent_notification_holds, decisions.md "대상 세션의
-     * 다음 run에 전달한다") takes nothing: its rows keep waiting for a later run.
+     * The conversation's waiting dispatches its conversation does not tell yet, oldest first;
+     * `told` holds the ids the conversation's messages tell. A session whose user stopped the
+     * notifications is given nothing.
      */
-    consume: (toSessionId: string, runId: string) =>
+    untold: (toSessionId: string, told: HashSet.HashSet<string>) =>
       Effect.map(
-        fromNotifications(notifications.claim(toSessionId, runId, "conversation")),
+        fromNotifications(notifications.untold(toSessionId, "conversation", told)),
         toDispatches,
       ),
 
-    /** Gives back the dispatches the run `runId` claimed; the rows wait for the next run again. */
-    release: (toSessionId: string, runId: string) =>
-      fromNotifications(notifications.release(toSessionId, runId)),
-
-    /**
-     * Marks the dispatches the run `runId` claimed of the conversation delivered, as `deliver`
-     * does, and lets go of the claims. A row another call already delivered stays delivered.
-     */
-    deliverClaimed: (toSessionId: string, runId: string) =>
-      fromNotifications(notifications.deliverClaimed(toSessionId, runId)),
+    /** Marks delivered by the run `runId` the waiting rows of the conversation the run delivered. */
+    heard: (toSessionId: string, runId: string, delivered: HashSet.HashSet<string>) =>
+      fromNotifications(notifications.heard(toSessionId, runId, delivered)),
 
     /**
      * The run's `notify_session` tool, bound to the conversation and run whose model calls it.

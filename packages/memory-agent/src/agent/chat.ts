@@ -136,6 +136,7 @@ import {
   noTaskNotifications,
   notificationLines,
   orchestratorMessage,
+  telling,
 } from "./orchestrator-message.ts";
 import { taskNotifications } from "./task-notifications.ts";
 import { dispatchNotifications } from "./dispatch-notifications.ts";
@@ -1303,7 +1304,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         : null;
       return Effect.gen(function* () {
         // What an early end must undo. The run takes over the cancellation, the steering and the
-        // notifications it took once it is following its log.
+        // Work Trace notifications it took once it is following its log.
         const claimedNext = yield* Ref.make<string | null>(null);
         const cancellationToRelease = yield* Ref.make<Effect.Effect<void>>(Effect.void);
         const stopSteeringOnExit = yield* Ref.make<Effect.Effect<void>>(Effect.void);
@@ -1758,7 +1759,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         /**
          * The run's context prompts, the same on either loop: report evidence, skills, delegation,
          * workspace and workflow, the subagent notifications since the last run and why an
-         * automatic run started. Taking the notifications marks them delivered to this run.
+         * automatic run started. Taking the Work Trace notifications marks them delivered to this
+         * run; a background end waits until the model answers the message that tells it.
          */
         const runContext = Effect.fn("AgentChat.runContext")(function* (
           skillset: Omit<SkillToolset, "tools">,
@@ -1839,7 +1841,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                       logFailure("Notifications of a run that did not start not given back"),
                     ),
                   ),
-              ).pipe(Effect.andThen(notifications.consume(sessionId, runId))),
+              ).pipe(
+                Effect.andThen(runStore.thread(sessionId)),
+                Effect.flatMap((stored) => notifications.consume(sessionId, runId, stored)),
+              ),
           });
           const toldLines = hasTaskNotifications(parentNotifications)
             ? [
@@ -1851,15 +1856,18 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           const orchestrator = yield* EffectArray.match(followup, {
             onEmpty: () => Effect.succeed(null),
             onNonEmpty: (texts) =>
-              Effect.flatMap(
-                crypto.uuidV7(),
-                orchestratorMessage(
-                  {
-                    next: kanbanFollowup !== null ? "board" : "results",
-                    ended: endedTasks(parentNotifications),
-                  },
-                  [...texts, ...(toldLines.length === 0 ? [] : [toldLines.join("\n")])],
+              Effect.map(
+                Effect.flatMap(
+                  crypto.uuidV7(),
+                  orchestratorMessage(
+                    {
+                      next: kanbanFollowup !== null ? "board" : "results",
+                      ended: endedTasks(parentNotifications),
+                    },
+                    [...texts, ...(toldLines.length === 0 ? [] : [toldLines.join("\n")])],
+                  ),
                 ),
+                telling(parentNotifications.background.map((end) => end.taskId)),
               ),
           });
           const prompts = [

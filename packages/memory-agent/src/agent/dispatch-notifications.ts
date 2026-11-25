@@ -2,54 +2,48 @@ import { Effect } from "effect";
 import type { SecureRandom } from "effect/crypto";
 import type { StoredMessage } from "../chat-store/schema.ts";
 import { asRunFailed, type RunHook } from "../loop/run.ts";
-import { finishedRun } from "../loop/store.ts";
 import type { SessionDispatches } from "../sessions/dispatches.ts";
-import { dispatchesMessage } from "./orchestrator-message.ts";
+import { dispatchesMessage, heardBy, toldIn } from "./orchestrator-message.ts";
 
 /**
  * What a target conversation's run does with the dispatches other conversations left its session
- * (docs/decisions.md "대상 세션의 다음 run에 전달한다"): it takes the ones still waiting as it
- * tells the model, a claim marking it the run that delivers them, hands them over as the
- * orchestrator's message before the next model call, and settles them when the run ends — the
- * claimed ones delivered when the run finished, given back to wait again when it did not. A run is
- * never started for them: they wait for the next run there is.
+ * (docs/decisions.md "대상 세션의 다음 run에 전달한다"): the ones still waiting that its conversation
+ * does not tell yet join it as the orchestrator's message before the next model call, and once the
+ * run ended and saved its conversation, the ones it delivered are marked delivered. A run is never
+ * started for them: they wait for the next run there is.
  */
 export const dispatchNotifications = (services: {
   readonly dispatches: SessionDispatches["Service"];
   readonly crypto: SecureRandom.SecureRandom["Service"];
 }) => {
   const { dispatches, crypto } = services;
-  /**
-   * Takes the session's waiting dispatches for the run. The store itself keeps a session whose
-   * user stopped the notifications from taking anything (decisions.md "대상 세션의 다음 run에
-   * 전달한다"), so nothing waits out a run here either.
-   */
-  const consume = (sessionId: string, runId: string) => dispatches.consume(sessionId, runId);
   return {
-    consume,
     /**
-     * Before each model call of the run, the dispatches not delivered yet join the conversation as
-     * the orchestrator's message; when the run fails or is cancelled they go back to the next run.
+     * Before each model call of the run, the dispatches its conversation does not tell yet join it
+     * as the orchestrator's message. The store keeps a session whose user stopped the notifications
+     * from being given any (decisions.md "대상 세션의 다음 run에 전달한다").
      */
     hookFor: (sessionId: string, runId: string): RunHook => ({
-      joining: () =>
-        consume(sessionId, runId).pipe(
-          Effect.flatMap((claimed) =>
-            claimed.length === 0
+      joining: (_scope, conversation) =>
+        dispatches.untold(sessionId, toldIn(conversation).told).pipe(
+          Effect.flatMap((untold) =>
+            untold.length === 0
               ? Effect.succeed<StoredMessage[]>([])
               : Effect.map(
-                  Effect.flatMap(crypto.uuidV7(), dispatchesMessage(claimed)),
+                  Effect.flatMap(crypto.uuidV7(), dispatchesMessage(untold)),
                   (message): StoredMessage[] => [message],
                 ),
           ),
           Effect.mapError(asRunFailed),
         ),
-      /** A finished run delivered what it claimed; a run that did not finish gives it back. */
-      ended: (_scope, end) =>
-        (finishedRun(end)
-          ? Effect.asVoid(dispatches.deliverClaimed(sessionId, runId))
-          : dispatches.release(sessionId, runId)
-        ).pipe(Effect.ignore({ log: "Warn" })),
+      /**
+       * Once the conversation is saved: a run that finished delivered everything its conversation
+       * tells; one that did not delivered what the model answered before it stopped.
+       */
+      ended: (_scope, end, conversation) =>
+        dispatches
+          .heard(sessionId, runId, heardBy(end, conversation))
+          .pipe(Effect.ignore({ log: "Warn" })),
     }),
   };
 };

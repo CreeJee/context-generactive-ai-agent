@@ -5,7 +5,6 @@ import {
   DateTime,
   Effect,
   HashSet,
-  Iterable,
   Layer,
   Option,
   Result,
@@ -21,7 +20,7 @@ import { MessageDelivery } from "./message-delivery.ts";
  * What the app's orchestrator hands a conversation's model without the user typing it: the end of a
  * task, a message another conversation left, the board's call. One table for every sender
  * (docs/decisions.md "앱이 모델에게 전할 알림은 orchestrator notifications에 둔다"). A row waits until
- * a run of its conversation hands it to the model; the app restarts never lose one. The user's own
+ * the model answers the message that tells it; the app restarts never lose one. The user's own
  * waiting messages are not here: they stay in `queued_messages`.
  */
 
@@ -140,60 +139,36 @@ const make = Effect.gen(function* () {
         ${row.state}, ${row.delivered_run_id}, ${row.created_at}, ${row.delivered_at})
       ON CONFLICT(id) DO NOTHING`,
   });
-  /** The rows of a conversation that wait and that no run holds, oldest first. */
+  /** The rows of a conversation that wait, oldest first. */
   const waiting = SqlSchema.findAll({
     Request: Schema.String,
     Result: NotificationRow,
     execute: (sessionId) => sql`
       SELECT * FROM orchestrator_notifications
-      WHERE session_id = ${sessionId} AND state = 'waiting' AND claimed_run_id IS NULL
+      WHERE session_id = ${sessionId} AND state = 'waiting'
       ORDER BY created_at, id`,
   });
-  /** The rows of one sender that wait in a conversation and that no run holds, oldest first. */
+  /** The rows of one sender that wait in a conversation, oldest first. */
   const waitingFrom = SqlSchema.findAll({
     Request: Schema.Struct({ sessionId: Schema.String, sender: NotificationSender }),
     Result: NotificationRow,
     execute: ({ sessionId, sender }) => sql`
       SELECT * FROM orchestrator_notifications
       WHERE session_id = ${sessionId} AND sender = ${sender} AND state = 'waiting'
-        AND claimed_run_id IS NULL
       ORDER BY created_at, id`,
   });
-  /** A waiting row no run holds that wakes its conversation, unless the user stopped its notifications. */
+  /** A waiting row that wakes its conversation, unless the user stopped its notifications. */
   const wakingRow = SqlSchema.findOneOption({
     Request: Schema.String,
     Result: Schema.Struct({ waking: Schema.Finite }),
     execute: (sessionId) => sql`
       SELECT 1 AS waking FROM orchestrator_notifications n
-      WHERE n.session_id = ${sessionId} AND n.state = 'waiting' AND n.claimed_run_id IS NULL
+      WHERE n.session_id = ${sessionId} AND n.state = 'waiting'
         AND n.delivery = 'wake'
         AND NOT EXISTS (
           SELECT 1 FROM parent_notification_holds h WHERE h.session_id = n.session_id
         )
       LIMIT 1`,
-  });
-  /** One run's claim on waiting rows: the mark that says which run is delivering them. */
-  const claimRows = SqlSchema.findAll({
-    Request: Schema.Struct({
-      sessionId: Schema.String,
-      ids: Schema.Array(Schema.String),
-      runId: Schema.String,
-      now: Schema.String,
-    }),
-    Result: Schema.Struct({ id: Schema.String }),
-    execute: ({ sessionId, ids, runId, now }) => sql`
-      UPDATE orchestrator_notifications SET claimed_run_id = ${runId}, claimed_at = ${now}
-      WHERE session_id = ${sessionId} AND state = 'waiting' AND claimed_run_id IS NULL
-        AND id IN ${sql.in(ids)}
-      RETURNING id`,
-  });
-  const dropClaims = SqlSchema.findAll({
-    Request: Schema.Struct({ sessionId: Schema.String, runId: Schema.String }),
-    Result: Schema.Struct({ id: Schema.String }),
-    execute: ({ sessionId, runId }) => sql`
-      UPDATE orchestrator_notifications SET claimed_run_id = NULL, claimed_at = NULL
-      WHERE session_id = ${sessionId} AND claimed_run_id = ${runId}
-      RETURNING id`,
   });
   const markDeliveredRows = SqlSchema.findAll({
     Request: Schema.Struct({
@@ -206,21 +181,8 @@ const make = Effect.gen(function* () {
     execute: ({ sessionId, ids, deliveredRunId, deliveredAt }) => sql`
       UPDATE orchestrator_notifications
       SET state = 'delivered', delivered_run_id = ${deliveredRunId},
-        delivered_at = ${deliveredAt}, claimed_run_id = NULL, claimed_at = NULL
+        delivered_at = ${deliveredAt}
       WHERE session_id = ${sessionId} AND state = 'waiting' AND id IN ${sql.in(ids)}
-      RETURNING id`,
-  });
-  const markClaimedDelivered = SqlSchema.findAll({
-    Request: Schema.Struct({
-      sessionId: Schema.String,
-      runId: Schema.String,
-      deliveredAt: Schema.String,
-    }),
-    Result: Schema.Struct({ id: Schema.String }),
-    execute: ({ sessionId, runId, deliveredAt }) => sql`
-      UPDATE orchestrator_notifications SET state = 'delivered', delivered_run_id = ${runId},
-        delivered_at = ${deliveredAt}, claimed_run_id = NULL, claimed_at = NULL
-      WHERE session_id = ${sessionId} AND state = 'waiting' AND claimed_run_id = ${runId}
       RETURNING id`,
   });
   const isoNow = Effect.map(Clock.currentTimeMillis, (millis) =>
@@ -233,25 +195,6 @@ const make = Effect.gen(function* () {
     execute: (sessionId) => sql`
       SELECT 1 AS held FROM parent_notification_holds WHERE session_id = ${sessionId}`,
   });
-
-  // A run that claimed rows and then died without settling them leaves its claims behind. A claim
-  // of a run that finished delivered what it claimed; every other claim is dropped, so those rows
-  // wait for the next run again. No current-process runs exist while this singleton is
-  // constructed, as the work trace's startup recovery assumes.
-  const settleAbandonedClaims = Effect.gen(function* () {
-    const now = yield* isoNow;
-    yield* Effect.asVoid(sql`
-      UPDATE orchestrator_notifications
-      SET state = 'delivered', delivered_run_id = claimed_run_id,
-        delivered_at = ${now}, claimed_run_id = NULL, claimed_at = NULL
-      WHERE state = 'waiting' AND claimed_run_id IN (
-        SELECT run_id FROM chat_runs WHERE status IN ('completed', 'interrupted'))`);
-    yield* Effect.asVoid(sql`
-      UPDATE orchestrator_notifications SET claimed_run_id = NULL, claimed_at = NULL
-      WHERE claimed_run_id IS NOT NULL`);
-  });
-
-  yield* settleAbandonedClaims;
 
   return {
     /** Stores one waiting message for the conversation and returns the row it stored. */
@@ -288,38 +231,35 @@ const make = Effect.gen(function* () {
         });
       }).pipe(stored),
 
-    /** The rows of a conversation that still wait and that no run holds, oldest first. */
+    /** The rows of a conversation that still wait, oldest first: those the model has not answered. */
     pending: (sessionId: string) =>
       Effect.map(waiting(sessionId), (rows) => rows.map(toEntry)).pipe(stored),
 
     /**
-     * Whether the conversation has a waiting row no run holds that wakes it (`wake` delivery),
-     * whoever sent it. A conversation whose user stopped the notifications is not woken.
+     * Whether the conversation has a waiting row that wakes it (`wake` delivery), whoever sent it.
+     * It stays true until the model answers the row. A conversation whose user stopped the
+     * notifications is not woken.
      */
     wakes: (sessionId: string) => Effect.map(wakingRow(sessionId), Option.isSome).pipe(stored),
 
     /**
-     * Takes the conversation's waiting rows of the sender `sender` for the run `runId`, oldest
-     * first, each marked with the run that delivers it; the rows of other senders stay for the
-     * hook that tells them. The mark keeps every run, including `runId` again, from taking the
-     * same row twice; a run that does not finish gives its takes back with `release`, and a run
-     * that finishes completes their delivery with `deliverClaimed`. A session whose user stopped
-     * the notifications (parent_notification_holds, decisions.md "대상 세션의 다음 run에
-     * 전달한다") takes nothing: its rows keep waiting for a later run.
+     * The conversation's waiting rows of the sender `sender` that its conversation does not tell
+     * yet, oldest first; the rows of other senders stay for the hook that tells them. `told` holds
+     * the ids the conversation's messages tell (`toldIn`, agent/orchestrator-message.ts). Nothing
+     * is written: a row is told by the message that carries its id being saved in the
+     * conversation, so a run that never saves that message leaves the row for the next run. A
+     * session whose user stopped the notifications (parent_notification_holds, decisions.md "대상
+     * 세션의 다음 run에 전달한다") is given nothing: its rows keep waiting for a later run.
      */
-    claim: <Sender extends StoredSender>(sessionId: string, runId: string, sender: Sender) =>
+    untold: <Sender extends StoredSender>(
+      sessionId: string,
+      sender: Sender,
+      told: HashSet.HashSet<string>,
+    ) =>
       Effect.gen(function* () {
         const held = yield* notificationsHeld(sessionId);
         if (Option.isSome(held)) return [];
         const rows = yield* waitingFrom({ sessionId, sender });
-        if (rows.length === 0) return [];
-        const taken = yield* claimRows({
-          sessionId,
-          ids: rows.map((row) => row.id),
-          runId,
-          now: yield* isoNow,
-        });
-        const takenIds = HashSet.fromIterable(Iterable.map(taken, (row) => row.id));
         // The rows read are this sender's already; the guard gives them that sender's type.
         const fromSender = (
           entry: NotificationEntry,
@@ -327,29 +267,33 @@ const make = Effect.gen(function* () {
           entry.sender === sender;
         return Arr.filterMap(rows, (row) => {
           const entry = toEntry(row);
-          return HashSet.has(takenIds, row.id) && fromSender(entry)
+          return !HashSet.has(told, row.id) && fromSender(entry)
             ? Result.succeed(entry)
             : Result.failVoid;
         });
-      }).pipe(sql.withTransaction, stored),
-
-    /** Gives back the rows the run `runId` claimed; they wait for the next run again. */
-    release: (sessionId: string, runId: string) =>
-      Effect.asVoid(stored(dropClaims({ sessionId, runId }))),
+      }).pipe(stored),
 
     /**
-     * Marks the rows the run `runId` claimed of the conversation delivered and lets go of the
-     * claims. A row another call already delivered stays delivered. Returns the ids it marked.
+     * Marks delivered by the run `runId` the conversation's waiting rows the run delivered,
+     * whoever sent them: `delivered` holds their ids, read from the run's saved conversation
+     * (`heardBy`, agent/orchestrator-message.ts). A row already delivered stays as it is. Returns
+     * the ids it marked.
      */
-    deliverClaimed: (sessionId: string, runId: string) =>
+    heard: (sessionId: string, runId: string, delivered: HashSet.HashSet<string>) =>
       Effect.gen(function* () {
-        const marked = yield* markClaimedDelivered({
+        if (HashSet.size(delivered) === 0) return [];
+        const ids = (yield* waiting(sessionId)).flatMap((row) =>
+          HashSet.has(delivered, row.id) ? [row.id] : [],
+        );
+        if (ids.length === 0) return [];
+        const marked = yield* markDeliveredRows({
           sessionId,
-          runId,
+          ids,
+          deliveredRunId: runId,
           deliveredAt: yield* isoNow,
         });
         return marked.map((row) => row.id);
-      }).pipe(stored),
+      }).pipe(sql.withTransaction, stored),
 
     /**
      * Marks the listed waiting rows of the conversation delivered by the run `deliveredRunId`;

@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Effect, HashSet, Schema } from "effect";
 import { SecureRandom } from "effect/crypto";
 import { expect } from "vite-plus/test";
 import { SessionDispatches, Sessions } from "memory-agent";
@@ -12,8 +12,6 @@ import { send } from "../agents/agent-env.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { sqlGet } from "../support/sql.ts";
 import { scriptedRun } from "../support/loop-run.ts";
-
-const Count = Schema.Struct({ count: Schema.Finite });
 
 /** The one row of `orchestrator_notifications` the id names, as fixture SQL reads it. */
 const dispatchRow = (id: string) =>
@@ -31,15 +29,11 @@ const dispatchRow = (id: string) =>
     ),
   );
 
-/** The claims on one dispatch. */
-const claimCount = (id: string) =>
-  Effect.flatMap(
-    sqlGet(
-      "SELECT count(*) AS count FROM orchestrator_notifications WHERE id = ? AND claimed_run_id IS NOT NULL",
-      id,
-    ),
-    Schema.decodeUnknownEffect(Count),
-  );
+/** Whether a message is the orchestrator's and carries the dispatch's words. */
+const tells = (body: string) => (message: StoredMessage) =>
+  message.role === "user" &&
+  message.orchestrator !== undefined &&
+  messageText(message).includes(body);
 
 /** The dispatch delivery hooks as chat.ts binds them: store, holds and secure ids. */
 const told = Effect.map(
@@ -109,15 +103,15 @@ testAgent()(function (it) {
         next: "run",
         ended: { background: 0, subagent: 0 },
       });
-      // The run claimed it, and finishing delivered it once, to this run.
+      expect(toldMessage?.toldNotifications).toEqual([dispatch.id]);
+      // The run finished, so it delivered the dispatch its conversation tells.
       expect(yield* dispatchRow(dispatch.id)).toEqual({
         state: "delivered",
         delivered_run_id: runId,
         delivered_at: expect.any(String),
       });
-      expect(yield* claimCount(dispatch.id)).toEqual({ count: 0 });
-      // No other run can take it again.
-      expect(yield* (yield* SessionDispatches).consume(target.id, "other-run")).toEqual([]);
+      // No other run is given it again.
+      expect(yield* (yield* SessionDispatches).untold(target.id, HashSet.empty())).toEqual([]);
     }),
   );
 
@@ -149,8 +143,7 @@ testAgent()(function (it) {
         );
         expect(toldTimes).toHaveLength(1);
       }
-      // The claim that kept the run from being told twice is gone once the run delivered the row.
-      expect(yield* claimCount(dispatch.id)).toEqual({ count: 0 });
+      // The conversation tells it once; the run delivered the row.
       expect(yield* dispatchRow(dispatch.id)).toMatchObject({
         state: "delivered",
         delivered_run_id: runId,
@@ -158,27 +151,70 @@ testAgent()(function (it) {
     }),
   );
 
-  it.effect("a run that fails gives the claimed dispatch back to the next run", () =>
+  it.effect(
+    "a run whose model call fails leaves the dispatch in the conversation, and the next run hears it without being told again",
+    () =>
+      Effect.gen(function* () {
+        const { project, source, target } = yield* twoSessions;
+        const body = "한 번만 넣을 내용";
+        const dispatch = yield* leaveDispatch(project, source.id, target.id, body);
+        const runId = `${target.id}:run`;
+        yield* scriptedRun({
+          runId,
+          turns: [{ failAfterText: "모델이 실패했습니다." }],
+          threadId: target.id,
+          conversation: userTurn("이어서 진행해 줘."),
+          hooks: [(yield* told).hookFor(target.id, runId)],
+        });
+        // The model did not answer, so the row still waits.
+        expect(yield* dispatchRow(dispatch.id)).toEqual({
+          state: "waiting",
+          delivered_run_id: null,
+          delivered_at: null,
+        });
+        // The failed run saved the message that tells the dispatch.
+        const stored = yield* (yield* RunStore).thread(target.id);
+        expect(stored.filter(tells(body))).toHaveLength(1);
+        const nextRunId = `${target.id}:next`;
+        const next = yield* scriptedRun({
+          runId: nextRunId,
+          turns: [{ text: "확인했습니다." }],
+          threadId: target.id,
+          conversation: [...stored, { role: "user", content: "다시 해 줘." }],
+          hooks: [(yield* told).hookFor(target.id, nextRunId)],
+        });
+        // The next run sends the saved message and is not given the dispatch as a new one.
+        const invocations = yield* next.invocations;
+        expect(invocations).toHaveLength(1);
+        expect(invocations[0]!.history.filter(tells(body))).toHaveLength(1);
+        expect(yield* dispatchRow(dispatch.id)).toEqual({
+          state: "delivered",
+          delivered_run_id: nextRunId,
+          delivered_at: expect.any(String),
+        });
+      }),
+  );
+
+  it.effect("a run that fails after the model answered keeps the dispatch delivered", () =>
     Effect.gen(function* () {
       const { project, source, target } = yield* twoSessions;
-      const dispatch = yield* leaveDispatch(project, source.id, target.id, "돌려받을 내용");
+      const dispatch = yield* leaveDispatch(project, source.id, target.id, "답한 뒤 실패");
       const runId = `${target.id}:run`;
       yield* scriptedRun({
         runId,
-        turns: [{ failAfterText: "모델이 실패했습니다." }],
+        turns: [
+          { toolCalls: [{ id: "call-1", name: "find_memory", arguments: '{"query":"결정"}' }] },
+          { failAfterText: "둘째 단계에서 실패." },
+        ],
         threadId: target.id,
         conversation: userTurn("이어서 진행해 줘."),
         hooks: [(yield* told).hookFor(target.id, runId)],
       });
-      // The row waits again, unclaimed.
       expect(yield* dispatchRow(dispatch.id)).toEqual({
-        state: "waiting",
-        delivered_run_id: null,
-        delivered_at: null,
+        state: "delivered",
+        delivered_run_id: runId,
+        delivered_at: expect.any(String),
       });
-      expect(yield* claimCount(dispatch.id)).toEqual({ count: 0 });
-      // The next run takes it again.
-      expect(yield* (yield* SessionDispatches).consume(target.id, "next-run")).toHaveLength(1);
     }),
   );
 
@@ -196,16 +232,15 @@ testAgent()(function (it) {
         conversation: userTurn("이어서 진행해 줘."),
         hooks: [(yield* told).hookFor(target.id, runId)],
       });
-      // The dispatch waited out the run, unclaimed and still waiting.
+      // The dispatch waited out the run and still waits.
       expect(yield* dispatchRow(dispatch.id)).toEqual({
         state: "waiting",
         delivered_run_id: null,
         delivered_at: null,
       });
-      expect(yield* claimCount(dispatch.id)).toEqual({ count: 0 });
-      // Once the user turns the session's notifications back on, the next run takes it.
+      // Once the user turns the session's notifications back on, the next run is given it.
       yield* trace.resumeParentNotifications(target.id);
-      expect(yield* (yield* SessionDispatches).consume(target.id, "next-run")).toHaveLength(1);
+      expect(yield* (yield* SessionDispatches).untold(target.id, HashSet.empty())).toHaveLength(1);
     }),
   );
 });

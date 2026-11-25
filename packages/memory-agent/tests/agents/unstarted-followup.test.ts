@@ -40,7 +40,7 @@ testAgent({
   },
 })("an automatic run that does not start", (it) => {
   it.effect(
-    "gives back the ended background task it took, and the next run hears it",
+    "leaves the ended background task waiting, and the next run hears it",
     () =>
       Effect.gen(function* () {
         yield* selectTestModel();
@@ -56,21 +56,21 @@ testAgent({
           "pwd",
           Effect.succeed("/"),
         );
-        // The automatic run takes the notifications before it prepares its model.
+        // The automatic run reads the notifications before it prepares its model, and saves no message.
         yield* until(
           () => MutableRef.get(unstarted) > 0,
           "the automatic run to be refused its model",
         );
         yield* until(
           (yield* OrchestratorNotifications).wakes(sessionId),
-          "the end to be given back",
+          "the end to still wake the session",
         );
         expect(
           yield* sqlGet(
-            "SELECT state, claimed_run_id FROM orchestrator_notifications WHERE id = ?",
+            "SELECT state FROM orchestrator_notifications WHERE id = ?",
             receipt.taskId,
           ),
-        ).toEqual({ state: "waiting", claimed_run_id: null });
+        ).toEqual({ state: "waiting" });
         MutableRef.set(modelGone, false);
         yield* send(sessionId, "next");
         expect(

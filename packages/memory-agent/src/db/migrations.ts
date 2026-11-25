@@ -910,6 +910,45 @@ export const queueSteerDeliveryMigration = `
   END;
 `;
 
+/** The step that drops the claim columns of the orchestrator's notifications. */
+export const notificationClaimsDropMigration = `
+  -- Whether a notification was told is read from the conversation now: the message that tells it
+  -- carries its id (decisions.md "알림은 대화에 한 번 넣고, 모델이 답하면 전한 것으로 적는다"). No row
+  -- says which run holds it any more. A claim a dead process left is settled as opening the store
+  -- settled it: the row of a run that completed or waits for the user was delivered by that run;
+  -- every other row waits again. SQLite cannot drop a column a CHECK names, so the table is made
+  -- again with its rows. No table references it and it has no trigger.
+  CREATE TABLE orchestrator_notifications_v2 (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    sender TEXT NOT NULL CHECK (sender IN ('task', 'conversation', 'board')),
+    delivery TEXT NOT NULL CHECK (delivery IN ('interrupt', 'wake', 'next_run')),
+    payload TEXT NOT NULL CHECK (json_valid(payload)),
+    state TEXT NOT NULL CHECK (state IN ('waiting', 'delivered')),
+    delivered_run_id TEXT,
+    created_at TEXT NOT NULL,
+    delivered_at TEXT,
+    CHECK ((state = 'delivered') = (delivered_run_id IS NOT NULL)),
+    CHECK ((state = 'delivered') = (delivered_at IS NOT NULL))
+  );
+  INSERT INTO orchestrator_notifications_v2 (id, session_id, sender, delivery, payload, state,
+    delivered_run_id, created_at, delivered_at)
+  SELECT n.id, n.session_id, n.sender, n.delivery, n.payload,
+    CASE WHEN r.run_id IS NULL THEN n.state ELSE 'delivered' END,
+    CASE WHEN r.run_id IS NULL THEN n.delivered_run_id ELSE n.claimed_run_id END,
+    n.created_at,
+    CASE WHEN r.run_id IS NULL THEN n.delivered_at
+      ELSE strftime('%Y-%m-%dT%H:%M:%fZ', 'now') END
+  FROM orchestrator_notifications n
+  LEFT JOIN chat_runs r ON r.run_id = n.claimed_run_id AND n.state = 'waiting'
+    AND r.status IN ('completed', 'interrupted')
+  ORDER BY n.rowid;
+  DROP TABLE orchestrator_notifications;
+  ALTER TABLE orchestrator_notifications_v2 RENAME TO orchestrator_notifications;
+  CREATE INDEX orchestrator_notifications_waiting
+    ON orchestrator_notifications(session_id, state, created_at);
+`;
+
 /**
  * The cards each workflow revision changed from the revision before it in its session, for the
  * board's history; a revision that changed no card has no row. Revisions never change, so this is
@@ -3337,6 +3376,7 @@ export const migrations: readonly string[] = [
   orchestratorNotificationsMigration,
   backgroundEndsNotificationsMigration,
   queueSteerDeliveryMigration,
+  notificationClaimsDropMigration,
 ];
 
 /** One of the two startup migrations that may rebuild a referenced table with FK checks suspended;
