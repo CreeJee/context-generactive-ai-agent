@@ -65,6 +65,11 @@ export const StoredUserMessage = Schema.Struct({
   content: Content,
   /** The orchestrator sent it. The model still reads it as a user message; the page shows who sent it. */
   orchestrator: Schema.optionalKey(OrchestratorNote),
+  /**
+   * The orchestrator notifications (`orchestrator_notifications.id`) the message tells the model.
+   * Absent on a message that tells none.
+   */
+  toldNotifications: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
 export const StoredAssistantMessage = Schema.Struct({

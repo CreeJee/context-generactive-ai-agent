@@ -541,7 +541,10 @@
             },
             "next": "run"
           },
-          "role": "user"
+          "role": "user",
+          "toldNotifications": [
+            "<id-7>"
+          ]
         },
         {
           "content": null,
