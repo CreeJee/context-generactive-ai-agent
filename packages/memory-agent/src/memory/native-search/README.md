@@ -52,7 +52,7 @@
 - memory read의 text·morph 채널은 worker가 연 lexical 색인에서 찾고, 같은 SQLite 스냅샷에서 노드가 허용 프로젝트이고 `lexical_changes`에 남은 변경이 없는지 확인한 뒤에만 남긴다. lexical 색인 없이 text나 morph를 켜면 `invalid-input`이다.
 - memory read에서 text 단계만 자기 몫(남은 예산 600ms 여유)을 넘으면 그 결과만 버리고 `textUnavailable=true`로 표시해 읽기를 계속한다. `success`에 벡터·morph가 함께 온다. `FindResult.degraded`의 `"text"`로 모델에 전달된다(`docs/decisions.md` 2026-10-30).
 - setup 검증: `dimensions`는 0보다 큰 8의 배수이면서 4294967295 이하다. `bits`는 1, 2, 4, 8 중 하나다. id는 canonical 10진 u64 문자열이다(20자 이하, 18446744073709551615 이하).
-- add는 `vectors.length === ids.length * dimensions`이고 모든 값이 finite여야 한다. vector-search 계열은 `query.length === dimensions`이고 `0 < k ≤ 4294967295`여야 한다. memory read의 `vectorK`는 `maxVectorK`(48) 이하여야 하며, 넘으면 read 전체가 실패한다.
+- add는 `vectors.length === ids.length * dimensions`이고 모든 값이 finite여야 한다. add한 뒤 읽기 세션으로 그 벡터들의 소유(부모 node, 대화나 프로젝트)를 읽어 색인에 둔다(`attachOwners`). 청크 행은 add 전에 commit되므로 읽힌다. worker가 열릴 때도 색인의 모든 벡터에 대해 한 번 읽는다. 읽기는 이 소유로 허용 목록을 만들고 hit만 SQLite로 확인한다(`docs/vector-index-design.md` 1단계). vector-search 계열은 `query.length === dimensions`이고 `0 < k ≤ 4294967295`여야 한다. memory read의 `vectorK`는 `maxVectorK`(48) 이하여야 하며, 넘으면 read 전체가 실패한다.
 - lexical 색인은 `lexicalDirectory`가 있을 때만 연다. 없으면 `lexical-apply`/`lexical-reset`은 `invalid-input`이다. `lexical-apply`의 seq가 음수여도 `invalid-input`이다. 두 명령의 reply 기한은 2초이고, native 실패는 다른 명령처럼 `index-failed`(fatal)다.
 - 저장된 인덱스의 dimensions/bits가 setup과 다를 때 `recover !== true`이면 `index-failed`다. 재구축은 명시적 호스트 recovery로만 한다. 조용히 빈 owner로 바꾸지 않는다(`needsReset` 보고).
 - save는 `index.tvim.tmp`에 쓰고 fsync한 뒤 `index.tvim`으로 rename한다.

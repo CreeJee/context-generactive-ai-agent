@@ -9,7 +9,7 @@
 - `loadTurbovec()` — `createRequire`로 `memory-turbovec.node`를 불러 `TurbovecAddon`을 돌려준다. `vp run build`로 바이너리를 만들지 않았으면 throw한다
 - `addonPath` — 로컬 빌드된 애드온(`memory-turbovec.node`)의 절대 경로 문자열
 - `TurbovecAddon` — `{ VectorIndex, CacheLease, MemoryReadSession, SearchControl, LexicalIndex }` 클래스 묶음 타입
-- `VectorIndex` — 정규화된 u64 10진 문자열 id로 키를 거는 양자화 inner-product 인덱스. `new(dimensions, bits)`, static `load(path)`, `add(vectors: Float32Array, ids)`, `search(query, k, allowedIds?)`, `searchControlled(query, k, token, ownerKey, epoch, requestId, allowedIds?)`, `remove(id)`, `save(path) -> SaveTimings`, `dimensions()`, `bits()`, `size()`, `validateIds(ids)`, `close()`
+- `VectorIndex` — 정규화된 u64 10진 문자열 id로 키를 거는 양자화 inner-product 인덱스. `new(dimensions, bits)`, static `load(path)`, `add(vectors: Float32Array, ids)`, `search(query, k, allowedIds?)`, `searchControlled(query, k, token, ownerKey, epoch, requestId, allowedIds?)`, `remove(id)`, `attachOwners(session, ids?)`(벡터마다 부모 node와 그 대화·프로젝트를 읽기 세션으로 읽어 둔다. 읽기의 허용 목록이 여기서 나온다), `save(path) -> SaveTimings`, `dimensions()`, `bits()`, `size()`, `validateIds(ids)`, `close()`
 - `SearchResult` — `{ ids: string[], scores: number[] }`. `VectorIndex.search` 결과
 - `ControlledSearchResult` — `{ kind: "success"|"cancelled"|"budget-exceeded"|"invalid-input"|"index-failed", ids, scores, nativeWindow: "whole-call", nativeMs }`
 - `SearchControl` — Rust가 소유한 일회성 요청 제어. `new(token, ownerKey, epoch, requestId, remainingMs)`, `token()`(새로 발급한 capability), `snapshotWasPinned()`, `cancel()`, `close()`, static `count()`

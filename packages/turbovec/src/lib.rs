@@ -2,6 +2,7 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use std::fs::File;
 mod lexical;
+mod owners;
 mod read_session;
 mod search_control;
 mod sqlite_bridge;
@@ -89,6 +90,8 @@ impl CacheLease {
 pub struct VectorIndex {
     /// `None` after `close`: later calls fail instead of reaching the released index.
     inner: Option<IdMapIndex>,
+    /// The node and holder of each vector `attach_owners` found; reads build their allowlist here.
+    pub(crate) owners: owners::Owners,
 }
 
 impl VectorIndex {
@@ -110,6 +113,7 @@ impl VectorIndex {
     pub fn new(dimensions: u32, bits: u32) -> Result<Self> {
         Ok(Self {
             inner: Some(IdMapIndex::new(dimensions as usize, bits as usize).map_err(js_error)?),
+            owners: owners::Owners::default(),
         })
     }
     #[napi]
@@ -193,7 +197,37 @@ impl VectorIndex {
     #[napi]
     pub fn remove(&mut self, id: String) -> Result<bool> {
         let id = parse_id(&id)?;
-        Ok(self.index_mut()?.remove(id))
+        let removed = self.index_mut()?.remove(id);
+        self.owners.remove(id);
+        Ok(removed)
+    }
+    /// Reads from `session` the node and holder of `ids`, or of every vector when omitted, and
+    /// keeps them for reads. A vector whose node the database does not have stays unowned: no read
+    /// finds it. Returns how many vectors the index now owns.
+    #[napi]
+    pub fn attach_owners(
+        &mut self,
+        session: ClassInstance<'_, MemoryReadSession>,
+        ids: Option<Vec<String>>,
+    ) -> Result<u32> {
+        let index = self.index()?;
+        let ids = match ids {
+            Some(ids) => ids
+                .iter()
+                .map(|id| parse_id(id))
+                .collect::<Result<Vec<_>>>()?,
+            None => index.iter_ids().collect(),
+        };
+        let found = session.owners_of(&ids).map_err(js_error)?;
+        let index = self.index()?;
+        let present: Vec<_> = found
+            .into_iter()
+            .filter(|(id, _, _)| index.contains(*id))
+            .collect();
+        for (id, parent, holder) in present {
+            self.owners.insert(id, parent, holder);
+        }
+        Ok(self.owners.len() as u32)
     }
     /// Writes the index to `path` and syncs it, timing each step. The caller renames the file into
     /// place, so this does not stage its own temporary file the way `IdMapIndex::write` does; the
@@ -220,6 +254,7 @@ impl VectorIndex {
     pub fn load(path: String) -> Result<Self> {
         Ok(Self {
             inner: Some(IdMapIndex::load(path).map_err(js_error)?),
+            owners: owners::Owners::default(),
         })
     }
     #[napi]

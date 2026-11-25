@@ -6,16 +6,17 @@
 
 ## Interface
 
-- `VectorIndex` — napi 클래스. `new(dimensions, bits)`, `add(vectors, ids)`, `search(query, k, allowedIds?)`, `searchControlled(query, k, token, ownerKey, epoch, requestId, allowedIds?)`, `remove(id)`, `save(path)`(단계별 시간 `SaveTimings` 반환), 팩토리 `load(path)`, `dimensions()`, `bits()`, `size()`, `close()`, `validateIds(ids)`를 제공한다
+- `VectorIndex` — napi 클래스. `new(dimensions, bits)`, `add(vectors, ids)`, `search(query, k, allowedIds?)`, `searchControlled(query, k, token, ownerKey, epoch, requestId, allowedIds?)`, `remove(id)`, `attachOwners(session, ids?)`, `save(path)`(단계별 시간 `SaveTimings` 반환), 팩토리 `load(path)`, `dimensions()`, `bits()`, `size()`, `close()`, `validateIds(ids)`를 제공한다. `attachOwners`는 `ids`(생략하면 색인의 모든 벡터)의 부모 node seq와 그 node를 가진 것(대화, 대화 밖 node면 프로젝트)을 읽기 세션으로 읽어 들고 있고, 소유가 있는 벡터 수를 돌려준다. `remove`는 그 소유도 지운다
 - `SearchResult` — napi 객체 `{ ids: string[], scores: f64[] }`. `VectorIndex.search`의 결과다
 - `CacheLease` — napi 클래스. 생성자는 경로의 파일을 열거나 만들고(0o600) 배타적 non-blocking 락을 잡는다. `close()`로 락을 놓는다
 - `SearchControl` — napi 클래스. `new(token, ownerKey, epoch, requestId, remainingMs)`, `token()`, `snapshotWasPinned()`, `cancel()`, `close()`, static `count()`를 제공한다. 요청별 취소와 deadline 상태를 전역 레지스트리에 등록한다
 - `ControlledSearchResult` — napi 객체 `{ kind, ids, scores, nativeWindow, nativeMs }`. `kind`는 Outcome 태그 문자열이다
 - `LexicalIndex` — napi 클래스. factory `open(dir, recover)`는 색인을 열거나 만든다. 열 수 없거나 스키마가 다르면 `recover`일 때만 비운 색인으로 바꾸고, 아니면 "Lexical index layout mismatch"로 실패한다. `instance()`는 마지막 `reset(instance)`가 commit payload로 남긴 build 이름(없으면 null), `apply(documents, removed)`는 `removed`와 각 문서 seq의 문서를 지우고 문서를 더해 한 번 commit한 뒤 크기와 단계별 시간(`LexicalApplied`: analyze/write/commit/reload ms)을 돌려준다. `size()`, `morphTerms(text)`, `close()`를 제공한다. factory `openReadOnly(dir)`는 이미 있는 색인을 writer 없이 연다. 다른 프로세스가 writer를 잡고 있어도 열리고, 연 시점까지의 commit을 본다. 색인이 없거나 스키마가 다르면 만들거나 바꾸지 않고 실패하며, 이렇게 연 색인의 `reset`·`apply`는 "Lexical index is open read-only"로 실패한다
 - `LexicalDocument` — napi 객체 `{ seq: i64, project, text }`
+- `owners::{Owners, Holder}` — crate 내부. 벡터 id마다 부모 node seq와 가진 것(`Holder::Session`/`Holder::Project`)을 묶어 둔다. 가진 것마다 벡터 목록을 따로 두어 읽기의 허용 목록을 그 크기만큼의 비용으로 만든다
 - `lexical::{Morphology, LexicalSearch}` — crate 내부. `Morphology::terms`는 NFKC 정규화한 원문의 ko-dic 형태소에서 Kiwi 규칙(품사 NNG·NNP·NR·VV·VA·XR·SH, 가벼운 어간 제외, 붙여 쓴 명사 합침, 원문의 라틴 문자·숫자)으로 검색어를 고르고 소문자로 바꾼다. `LexicalSearch`는 한 읽기의 searcher로 `phrases`(3글자 이상 검색어를 gram 구절로, BM25 top k), `short_terms`(두 글자 검색어마다 최신 k개), `morphs`(질문의 형태소 검색어, BM25 top k)를 찾는다. 모두 프로젝트를 수집하며 거르고, 일치 문서를 전부 점수 매긴다
 - `MemoryReadSession` — napi 클래스. `new(databasePath)`는 읽기 전용 SQLite 연결을 연다. `close()`, `search(index, lexical, input, token, ownerKey, epoch, requestId) -> NativeReadOutput`을 제공한다. text나 morph 채널을 켜면 `lexical`이 있어야 한다(없으면 `invalid-input`)
-- `NativeReadInput` — napi 객체. `allowedProjects`, `embedder`, `query?`, `trigramTerms`, `shortTerms`, `morphQuery`(질문 원문. lexical 색인이 형태소 검색어로 나눈다), `beforeSeq?`(있으면 벡터 후보 SQL과 lexical 수집기가 이 seq 전에 저장된 노드만 남긴다), `vectorK`/`textK`/`morphK`, `textEnabled`, `morphEnabled`, `remainingMs`, `input`/`outputBudgetBytes` 필드를 가진다
+- `NativeReadInput` — napi 객체. `allowedProjects`, `embedder`, `query?`, `trigramTerms`, `shortTerms`, `morphQuery`(질문 원문. lexical 색인이 형태소 검색어로 나눈다), `beforeSeq?`(있으면 벡터 허용 목록, 벡터 hit 확인, lexical 수집기가 이 seq 전에 저장된 노드만 남긴다), `vectorK`/`textK`/`morphK`, `textEnabled`, `morphEnabled`, `remainingMs`, `input`/`outputBudgetBytes` 필드를 가진다
 - `NativeReadOutput` — napi 객체. `kind`, `vectorIds`/`vectorSeqs`/`vectorScores`, `vectorUnavailable`, `textUnavailable`, `textIds`, `morphIds`, `candidateCount`, `sqliteExecutions`, 단계별 `*Ms`(`queueMs`, text 단계 안의 `trigramMs`, `shortTermMs`/`shortTermMaxMs`/`shortTermsDone` 포함), `failedStage?`, `input`/`outputLogicalBytes` 필드를 가진다
 - `sqlite3_turbovec_init` — `#[no_mangle] extern "C"` SQLite 확장 진입점(`node-sqlite` feature). 호스트 SQLite의 API 테이블을 한 번만 초기화한다
 - `sqlite_bridge::ensure_initialized` — crate 내부 함수. 브리지가 `SQLITE_OK_LOAD_PERMANENTLY`로 초기화되지 않았으면 "Node SQLite bridge is not initialized" 오류를 낸다. `test-sqlite` 빌드에서는 항상 Ok를 돌려준다
@@ -32,7 +33,9 @@
 - `sqlite3_turbovec_init`는 SQL 함수나 DB 효과를 등록하지 않는다. 확장 코드와 API 테이블은 프로세스 수명 동안 상주한다
 - `MemoryReadSession` 경로는 빈 문자열, `":memory:"`, `"file:"`로 시작하는 값을 받지 않는다. 연결은 `READ_ONLY|NO_MUTEX`로 열고 `PRAGMA query_only=ON`과 `PRAGMA cache_size=-262144`(256MiB), `PRAGMA mmap_size=1073741824`(1GiB 상한)를 건다. 권한 확인과 인덱스 게시 직렬화는 호스트가 맡는다
 - worker teardown 전에 `MemoryReadSession.close()`로 SQLite를 닫아야 한다. 나중의 N-API GC가 WAL 매핑을 붙잡으면 안 되기 때문이다
-- 벡터 후보는 허용 프로젝트의 `node_vectors` 중 `memory_graph_vector_removals`에서 색인을 떠나기를 기다리지 않는 것 전부다. indexer는 검색할 수 있는 발언만 임베딩하고, 숨기거나 바뀐 노드의 벡터는 그 대기열에 들어가므로 kind·공백·숨김을 다시 보지 않는다
+- 벡터 허용 목록은 SQLite가 아니라 `VectorIndex`가 든 소유에서 만든다. 허용 프로젝트의 대화(`sessions`를 한 번 읽는다)와 그 프로젝트의 대화 밖 node가 가진 벡터 중 부모 seq가 `beforeSeq` 전인 것이다. 대화 id는 바뀌지 않고 fold는 대화째로 프로젝트를 옮기므로, 대화로 묶어 두면 옮긴 뒤에도 새 프로젝트에서 찾는다(`docs/vector-index-design.md` 1단계)
+- 소유는 낡을 수 있다(아직 commit하지 않은 벡터, 색인을 떠나기를 기다리는 벡터, 다시 임베딩한 node의 옛 청크). 그래서 매 라운드 부모마다 가장 높은 hit 하나를 이 스냅샷에서 확인한다(`checked`, SQL 한 번). 지금 embedder의 `node_vectors` 행이 있고, 청크면 그 부모에 아직 매핑돼 있고, 허용 프로젝트이고 `beforeSeq` 전이고, `memory_graph_vector_removals`에 없어야 남는다. 떨어진 hit은 허용 목록에서 빼고 다음 라운드를 읽으므로 라운드마다 목록이 줄어든다. 확인 비용은 k에 비례한다. 라운드를 넘어 순서가 바뀔 수 있어 마지막에 점수로 다시 정렬한다
+- 확인과 node id 읽기는 같은 SQL이라 `mappingMs`는 확인에 쓴 시간이고, `vectorMs`는 그것을 뺀 벡터 단계 시간이다. `candidateMs`는 허용 목록을 만든 시간이다
 - lexical 색인은 노드를 마지막으로 반영한 변경 때의 모습으로 들고 있다. 그래서 text·morph 채널은 k의 2배(`LEXICAL_DEPTH`)를 찾고, 이 스냅샷에서 허용 프로젝트이고 `lexical_changes`에 남은 변경이 없는 노드만 순서대로 k개 남긴다(`lexical_ids`, SQL 한 번). 비었거나 숨긴 노드는 indexer가 색인에 넣지 않고, 숨김 추가·해제도 변경으로 기록되므로 따로 검사하지 않는다. 미임베딩·미해석·lexical 미반영 수(coverage)는 읽기가 세지 않는다. 호스트 worker가 자기 연결로 센다
 - `LexicalIndex`의 동기 메서드는 소유 worker 안에서만 호출된다. `open`은 열려 있는 동안 Tantivy writer lock을 잡으므로 같은 폴더를 두 번 열면 "Lexical index is locked by another writer"로 실패한다. `openReadOnly`는 writer lock을 잡지 않으므로 writer가 열려 있는 폴더도 열 수 있다. 모든 commit은 build 이름을 payload로 다시 쓴다(commit마다 payload가 바뀐다). commit 뒤 reader를 바로 reload하므로 다음 검색이 그 commit을 본다
 - `LexicalIndex` 안의 오류는 문자열로 다루고 napi 메서드에서만 JS 오류로 바꾼다. Rust 단위 테스트 실행 파일에는 napi 오류를 만들 Node가 없기 때문이다
@@ -56,7 +59,7 @@
 - `CacheLease`: 경로의 파일을 read/write/create로 연다. truncate하지 않고, unix에서는 0o600 권한이다. close나 drop 전까지 OS 배타 파일 락을 잡고 있다
 - `VectorIndex.save`는 인덱스 파일을 디스크에 쓰고 `fsync`한 뒤 쓰기·fsync 시간(`SaveTimings`)을 돌려준다. 자체 임시 파일과 rename은 하지 않는다. 바이트는 `IdMapIndex::write`와 같고(`write_to_writer`), 제자리 rename은 호출자가 한다. addon은 호스트 tracer에 닿지 못하므로 단계 시간을 값으로 돌려준다. `VectorIndex.load`는 디스크에서 읽는다 `VectorIndex.load`는 디스크에서 읽는다
 - `MemoryReadSession`: SQLite 파일을 읽기 전용으로 연다. 요청마다 `BEGIN DEFERRED`/`ROLLBACK`을 실행하고, 1000 VM op마다 취소와 deadline을 확인해 중단하는 progress handler를 건다
-- SQLite에서 읽는 테이블: `nodes`, `node_vectors`, `node_vector_chunks`, `memory_graph_vector_removals`, `lexical_changes`, `sqlite_schema`
+- SQLite에서 읽는 테이블: `nodes`, `sessions`, `node_vectors`, `node_vector_chunks`, `memory_graph_vector_removals`, `lexical_changes`, `sqlite_schema`
 - 프로세스 전역 상태: `REGISTRY`(`OnceLock<Mutex<HashMap<String, Arc<RequestState>>>>`), `NEXT_TOKEN`(`AtomicU64`), `INITIALIZED`(`OnceLock<i32>`)
 - `sqlite3_turbovec_init`: 호스트 SQLite의 `sqlite3_load_extension`이 부르는 C ABI 심볼이다. 확장을 영구 로드(`SQLITE_OK_LOAD_PERMANENTLY`)한다
 - 시간 측정과 deadline에 단조 시계 `Instant::now()`를 쓴다

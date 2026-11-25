@@ -196,15 +196,22 @@ it(
             expect(pending.result.textIds).toEqual(["alpha", "latest"]);
             expect(pending.result.morphIds).not.toContain("beta");
             db.exec("DELETE FROM lexical_changes");
-            // A vector waiting to leave the index (its node was suppressed or changed) is no
-            // candidate.
+            // A vector waiting to leave the index (its node was suppressed or changed) is still a
+            // candidate, but its hit is dropped when checked against the snapshot.
             db.prepare("INSERT INTO memory_graph_vector_removals VALUES (2, 'fixture')").run();
             const removing = yield* search("removing");
             if (!OwnerReply.guards["memory-result"](removing))
               return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
-            expect(removing.result.candidateCount).toBe(1);
+            expect(removing.result.candidateCount).toBe(2);
             expect(removing.result.vectorIds).toEqual(["alpha"]);
             db.exec("DELETE FROM memory_graph_vector_removals");
+            // A vector whose row is gone (a purge, a redaction to re-embed) is dropped the same way.
+            db.exec("DELETE FROM node_vectors WHERE node_seq = 1");
+            const unmapped = yield* search("unmapped");
+            if (!OwnerReply.guards["memory-result"](unmapped))
+              return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
+            expect(unmapped.result.vectorIds).toEqual(["beta"]);
+            db.exec("INSERT INTO node_vectors VALUES (1, 'fixture')");
             // Bounded before beta: every channel reads memory as it was then, alpha alone.
             const earlier = yield* search("earlier", { beforeSeq: 2 });
             if (!OwnerReply.guards["memory-result"](earlier))
@@ -220,6 +227,25 @@ it(
               return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
             expect(one.result.vectorIds).toEqual(["alpha"]);
             expect(one.result.sqliteExecutions).toBe(reply.result.sqliteExecutions);
+            // A fold moves a conversation to another project: its vectors are found there at once,
+            // because the index holds them by conversation.
+            db.exec(`
+              UPDATE sessions SET project_id = 'allowed' WHERE id = 'other-project-session';
+              INSERT INTO node_project_moves (from_project, to_project) VALUES ('other-project', 'allowed');
+              UPDATE nodes SET project_id = 'allowed' WHERE project_id = 'other-project';
+              DELETE FROM node_project_moves;
+            `);
+            const folded = yield* search("folded", { vectorK: 3 });
+            if (!OwnerReply.guards["memory-result"](folded))
+              return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
+            expect(folded.result.candidateCount).toBe(3);
+            expect([...folded.result.vectorIds].sort()).toEqual(["alpha", "beta", "other"]);
+            db.exec(`
+              UPDATE sessions SET project_id = 'other-project' WHERE id = 'other-project-session';
+              INSERT INTO node_project_moves (from_project, to_project) VALUES ('allowed', 'other-project');
+              UPDATE nodes SET project_id = 'other-project' WHERE session_id = 'other-project-session';
+              DELETE FROM node_project_moves;
+            `);
             // Growing candidates must not enlarge the request with an allowlist or add hit SELECTs.
             const extra = new Float32Array(384 * 50);
             const extraIds = Array.from({ length: 50 }, (_, row) => String(100 + row));

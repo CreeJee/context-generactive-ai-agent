@@ -66,6 +66,12 @@ export declare class VectorIndex {
     allowedIds?: string[],
   ): ControlledSearchResult;
   remove(id: string): boolean;
+  /**
+   * Reads from `session` the node and holder (conversation, or project outside one) of `ids`, or
+   * of every vector when omitted; reads build their allowlist from these. Returns how many vectors
+   * are owned.
+   */
+  attachOwners(session: MemoryReadSession, ids?: string[]): number;
   /** Writes and syncs the index at `path` (the caller renames it into place), timing each step. */
   save(path: string): SaveTimings;
   dimensions(): number;

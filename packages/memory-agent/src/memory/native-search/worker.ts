@@ -186,6 +186,21 @@ const owner = Effect.gen(function* () {
       ),
     ),
   );
+  /**
+   * Reads which node and conversation each of `ids` (every vector when omitted) belongs to: reads
+   * build their allowlist from that instead of from SQLite (docs/vector-index-design.md, step 1).
+   */
+  const attachOwners = (index: InstanceType<typeof binding.VectorIndex>, ids?: readonly string[]) =>
+    Effect.transposeOption(
+      Option.map(reader, (session) =>
+        native(() => index.attachOwners(session, ids === undefined ? undefined : [...ids])).pipe(
+          Effect.withSpan("VectorIndex.attachOwners", {
+            attributes: { vectors: ids?.length ?? index.size() },
+          }),
+        ),
+      ),
+    );
+  yield* attachOwners(ScopedRef.getUnsafe(indexRef));
   const size = yield* native(() => ScopedRef.getUnsafe(indexRef).size());
   const lexicalReady = yield* Effect.transposeOption(
     Option.map(lexical, (index) => native(() => ({ instance: index.instance() }))),
@@ -226,6 +241,8 @@ const owner = Effect.gen(function* () {
           yield* native(() => index.add(command.vectors, [...command.ids])).pipe(
             Effect.withSpan("VectorIndex.add", { attributes: { vectors: command.ids.length } }),
           );
+          // The chunk rows are committed before the add, so the reader sees them.
+          yield* attachOwners(index, command.ids);
           return yield* native(ack);
         }),
       remove: (command) =>

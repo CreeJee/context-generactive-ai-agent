@@ -1,6 +1,7 @@
 //! Read-only seed ranking. Host owns authorization and index publication serialization.
 use crate::{
     lexical::{LexicalIndex, Scope},
+    owners::Holder,
     search_control::{admitted, claim, Outcome},
     VectorIndex,
 };
@@ -26,6 +27,10 @@ const LEXICAL_CURRENT: &str =
 /// How many lexical hits a channel asks for, per hit it keeps: hits the snapshot drops (a change
 /// not yet applied, a suppressed node) leave room for the next ones.
 const LEXICAL_DEPTH: usize = 2;
+/// The first chunk vector id (`node_vector_chunks`' CHECK); a vector id below it is its node's seq.
+const CHUNK_VECTOR_ID_FLOOR: u64 = 1 << 52;
+/// Ids per statement when reading owners: well below SQLite's bound on variables.
+const OWNER_IDS_PER_STATEMENT: usize = 1000;
 #[napi(object)]
 pub struct NativeReadInput {
     pub allowed_projects: Vec<String>,
@@ -237,6 +242,55 @@ fn lexical_ids(
     }
     Ok(ids)
 }
+/// What a read's hits are checked against: its embedder, projects and `before_seq`.
+struct Checked<'a> {
+    embedder: &'a str,
+    projects: &'a [String],
+    before_seq: Option<i64>,
+}
+/// The node ids of the `hits` (vector id, parent seq, score) this snapshot still searches: the
+/// vector is the embedder's current one for its parent (a chunk still mapped to it, or a one-vector
+/// node's own seq), the parent is in an allowed project and before `before_seq`, and it is not
+/// waiting to leave the index. A hit the index holds but the snapshot does not is left out.
+fn checked(
+    connection: &Connection,
+    snapshot: &Checked<'_>,
+    hits: &[(u64, u64, f32)],
+    check: &dyn Fn() -> std::result::Result<(), Outcome>,
+) -> std::result::Result<HashMap<u64, String>, Outcome> {
+    let marks = |count: usize| vec!["?"; count].join(",");
+    let bounded = if snapshot.before_seq.is_some() {
+        " AND n.seq<?"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "SELECT COALESCE(c.vector_id,n.seq),n.id FROM nodes n JOIN node_vectors v ON v.node_seq=n.seq AND v.embedder=? LEFT JOIN node_vector_chunks c ON c.node_seq=n.seq AND c.embedder=v.embedder AND c.vector_id IN ({}) WHERE n.seq IN ({}) AND n.project_id IN ({}){bounded} AND NOT EXISTS (SELECT 1 FROM memory_graph_vector_removals r WHERE r.node_seq=v.node_seq AND r.embedder=v.embedder)",
+        marks(hits.len()),
+        marks(hits.len()),
+        scope(snapshot.projects)
+    );
+    let values = std::iter::once(Value::Text(snapshot.embedder.to_owned()))
+        .chain(hits.iter().map(|(id, _, _)| Value::Integer(*id as i64)))
+        .chain(
+            hits.iter()
+                .map(|(_, parent, _)| Value::Integer(*parent as i64)),
+        )
+        .chain(snapshot.projects.iter().cloned().map(Value::Text))
+        .chain(snapshot.before_seq.map(Value::Integer));
+    let mut statement = connection.prepare(&sql).map_err(|_| Outcome::ReadFailed)?;
+    let mut rows = statement
+        .query(params_from_iter(values))
+        .map_err(|_| Outcome::ReadFailed)?;
+    let mut current = HashMap::new();
+    while let Some(row) = rows.next().map_err(|_| Outcome::ReadFailed)? {
+        check()?;
+        let id: i64 = row.get(0).map_err(|_| Outcome::ReadFailed)?;
+        let node: String = row.get(1).map_err(|_| Outcome::ReadFailed)?;
+        current.insert(id as u64, node);
+    }
+    Ok(current)
+}
 /// The first `k` of `seqs` the snapshot kept, as ids.
 fn kept(seqs: &[u64], ids: &HashMap<u64, String>, k: usize) -> Vec<String> {
     seqs.iter()
@@ -304,6 +358,49 @@ impl MemoryReadSession {
             connection: Some(connection),
             unusable: std::cell::Cell::new(false),
         })
+    }
+    /// The parent node seq and holder of each of `ids` the database has: a chunk through its
+    /// mapping row, a one-vector node through its seq.
+    pub(crate) fn owners_of(
+        &self,
+        ids: &[u64],
+    ) -> std::result::Result<Vec<(u64, u64, Holder)>, String> {
+        let connection = self
+            .connection
+            .as_ref()
+            .ok_or_else(|| "Read session is closed".to_string())?;
+        if self.unusable.get() {
+            return Err("Read session is unusable".into());
+        }
+        let (chunks, seqs): (Vec<u64>, Vec<u64>) =
+            ids.iter().partition(|id| **id >= CHUNK_VECTOR_ID_FLOOR);
+        let mut found = Vec::with_capacity(ids.len());
+        let mut read = |sql: &str, batch: &[u64]| -> std::result::Result<(), String> {
+            let sql = sql.replace("{ids}", &vec!["?"; batch.len()].join(","));
+            let mut statement = connection.prepare(&sql).map_err(|e| e.to_string())?;
+            let mut rows = statement
+                .query(params_from_iter(batch.iter().map(|id| *id as i64)))
+                .map_err(|e| e.to_string())?;
+            while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+                let id: i64 = row.get(0).map_err(|e| e.to_string())?;
+                let parent: i64 = row.get(1).map_err(|e| e.to_string())?;
+                let session: Option<String> = row.get(2).map_err(|e| e.to_string())?;
+                let project: String = row.get(3).map_err(|e| e.to_string())?;
+                let holder = match session {
+                    Some(session) => Holder::Session(session),
+                    None => Holder::Project(project),
+                };
+                found.push((id as u64, parent as u64, holder));
+            }
+            Ok(())
+        };
+        for batch in chunks.chunks(OWNER_IDS_PER_STATEMENT) {
+            read("SELECT c.vector_id, c.node_seq, n.session_id, n.project_id FROM node_vector_chunks c JOIN nodes n ON n.seq=c.node_seq WHERE c.vector_id IN ({ids})", batch)?;
+        }
+        for batch in seqs.chunks(OWNER_IDS_PER_STATEMENT) {
+            read("SELECT n.seq, n.seq, n.session_id, n.project_id FROM nodes n WHERE n.seq IN ({ids})", batch)?;
+        }
+        Ok(found)
     }
     /// Close SQLite before worker teardown; a later N-API GC must not retain WAL mappings.
     #[napi]
@@ -448,10 +545,6 @@ impl MemoryReadSession {
                 projects: &input.allowed_projects,
                 before: input.before_seq.map(|seq| seq as u64),
             };
-            let (bounded, bound) = match input.before_seq {
-                Some(seq) => (" AND n.seq<?", vec![Value::Integer(seq)]),
-                None => ("", vec![]),
-            };
             let project_values = || {
                 input
                     .allowed_projects
@@ -460,47 +553,63 @@ impl MemoryReadSession {
                     .map(Value::Text)
                     .collect::<Vec<_>>()
             };
+            // The allowlist comes from the index's own owners: the vectors of the allowed
+            // projects' conversations and of their nodes outside a conversation, before
+            // `before_seq`. What is stale there (a vector not committed yet, waiting to be
+            // removed, or left by a re-embedded node) is dropped when its hit is checked against
+            // this snapshot below, so the cost here follows the allowed vectors, not every node.
             let mut allowed = Vec::new();
-            let mut parents = HashMap::new();
-            if input.query.is_some() && !input.allowed_projects.is_empty() {
-                let mut values = vec![Value::Text(input.embedder.clone())];
-                values.extend(project_values());
-                values.extend(bound);
-                // Every vector of the allowed projects but those waiting to leave the index (a
-                // suppressed or changed node's): the indexer embeds only searchable statements.
-                let sql = format!("SELECT COALESCE(c.vector_id,n.seq),n.seq FROM node_vectors v JOIN nodes n ON n.seq=v.node_seq LEFT JOIN node_vector_chunks c ON c.node_seq=v.node_seq AND c.embedder=v.embedder WHERE v.embedder=? AND n.project_id IN ({projects}){bounded} AND NOT EXISTS (SELECT 1 FROM memory_graph_vector_removals r WHERE r.node_seq=v.node_seq AND r.embedder=v.embedder)");
+            let mut parents: HashMap<u64, u64> = HashMap::new();
+            if input.query.is_some() && !input.allowed_projects.is_empty() && index.owners.len() > 0
+            {
+                let mut holders: Vec<Holder> = input
+                    .allowed_projects
+                    .iter()
+                    .cloned()
+                    .map(Holder::Project)
+                    .collect();
+                let sql = format!("SELECT id FROM sessions WHERE project_id IN ({projects})");
                 let mut statement = connection.prepare(&sql).map_err(|_| Outcome::ReadFailed)?;
                 let mut rows = statement
-                    .query(params_from_iter(values))
+                    .query(params_from_iter(project_values()))
                     .map_err(|_| Outcome::ReadFailed)?;
                 out.sqlite_executions += 1;
                 while let Some(row) = rows.next().map_err(|_| Outcome::ReadFailed)? {
                     check()?;
-                    let seq: i64 = row.get(0).map_err(|_| Outcome::ReadFailed)?;
-                    if seq < 0 {
-                        return Err(Outcome::ReadFailed);
+                    holders.push(Holder::Session(
+                        row.get(0).map_err(|_| Outcome::ReadFailed)?,
+                    ));
+                }
+                let before = input.before_seq.map(|seq| seq as u64);
+                for holder in &holders {
+                    let Some(group) = index.owners.group(holder) else {
+                        continue;
+                    };
+                    check()?;
+                    for (id, parent) in group {
+                        if before.is_none_or(|before| *parent < before) {
+                            allowed.push(*id);
+                            parents.insert(*id, *parent);
+                        }
                     }
-                    allowed.push(seq as u64);
-                    parents.insert(
-                        seq as u64,
-                        row.get::<_, i64>(1).map_err(|_| Outcome::ReadFailed)?,
-                    );
                 }
             }
             out.candidate_count = allowed.len() as u32;
             out.candidate_ms = ms(running.1);
             running = (Stage::Vector, Instant::now());
-            // The parent node of each hit in `out.vector_seqs`, same order.
-            let mut hit_parents = Vec::new();
+            let vector_started = running.1;
+            let mut checking_ms = 0.;
             if let Some(query) = &input.query {
                 check()?;
-                let mut remaining = allowed.clone();
-                let mut seen = HashSet::new();
+                let k = input.vector_k as usize;
+                let mut remaining = allowed;
+                // Parents with a checked hit, and those hits: score, vector id, node id.
+                let mut accepted = HashSet::new();
+                let mut found: Vec<(f32, u64, String)> = Vec::new();
+                let mut found_bytes = 0usize;
                 let mut last_call = Duration::ZERO;
-                while !remaining.is_empty() && !inner.is_empty() {
-                    let take =
-                        (input.vector_k as usize - out.vector_seqs.len()).min(remaining.len());
-                    let previous = seen.len();
+                while found.len() < k && !remaining.is_empty() && !inner.is_empty() {
+                    let take = (k - found.len()).min(remaining.len());
                     // Each round rescans the whole allowlist; admit it only while the budget
                     // still covers the round before it.
                     if !admitted(
@@ -517,83 +626,77 @@ impl MemoryReadSession {
                     last_call = call.elapsed();
                     // Never convert cancellation/deadline into a degraded success.
                     check()?;
-                    record_vector_channel(&mut out, result, |hits, out| {
-                        // Hits are score ordered: the first chunk is the parent's maximum score.
-                        for (id, score) in hits.ids.iter().zip(&hits.scores) {
-                            if let Some(parent) = parents.get(id) {
-                                if seen.insert(*parent) {
-                                    hit_parents.push(*parent);
-                                    out.vector_seqs.push(id.to_string());
-                                    out.vector_scores.push(*score as f64);
-                                    if out.vector_seqs.len() >= input.vector_k as usize {
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    });
-                    if out.vector_unavailable
-                        || out.vector_seqs.len() >= input.vector_k as usize
-                        || seen.len() == previous
-                    {
+                    let mut hits = None;
+                    record_vector_channel(&mut out, result, |found, _| hits = Some(found));
+                    let Some(hits) = hits else {
+                        break;
+                    };
+                    // Hits are score ordered: the first chunk is the parent's maximum score.
+                    let mut round = HashSet::new();
+                    let fresh: Vec<(u64, u64, f32)> = hits
+                        .ids
+                        .iter()
+                        .zip(&hits.scores)
+                        .filter_map(|(id, score)| {
+                            let parent = *parents.get(id)?;
+                            round.insert(parent).then_some((*id, parent, *score))
+                        })
+                        .collect();
+                    if fresh.is_empty() {
                         break;
                     }
-                    // Exclude all chunks of selected parents before the next bounded search.
-                    // Keep each call inside the k <= 48 admission bound.
-                    remaining.retain(|id| parents.get(id).is_some_and(|p| !seen.contains(p)));
-                }
-                if out.vector_unavailable {
-                    hit_parents.clear();
-                    out.vector_seqs.clear();
-                    out.vector_scores.clear();
-                }
-            }
-            out.vector_ms = ms(running.1);
-            running = (Stage::Mapping, Instant::now());
-            if !hit_parents.is_empty() {
-                // The candidate read already applied embedder, kind, project and meaning in this
-                // snapshot, so the parents only need their ids. Matching the hits' vector ids
-                // instead walked every node of the allowed projects: no index covers that.
-                let placeholders = vec!["?"; hit_parents.len()].join(",");
-                let sql = format!("SELECT seq,id FROM nodes WHERE seq IN ({placeholders})");
-                let mut statement = connection.prepare(&sql).map_err(|_| Outcome::ReadFailed)?;
-                let mut rows = statement
-                    .query(params_from_iter(hit_parents.iter()))
-                    .map_err(|_| Outcome::ReadFailed)?;
-                out.sqlite_executions += 1;
-                let mut mapped = HashMap::new();
-                let mut mapping_bytes = 0usize;
-                while let Some(row) = rows.next().map_err(|_| Outcome::ReadFailed)? {
-                    check()?;
-                    let value = row.get_ref(1).map_err(|_| Outcome::ReadFailed)?;
-                    let id = value.as_str().map_err(|_| Outcome::ReadFailed)?;
-                    mapping_bytes = mapping_bytes.saturating_add(id.len());
-                    if mapping_bytes > input.output_budget_bytes as usize {
-                        return Err(Outcome::BudgetExceeded);
+                    running = (Stage::Mapping, Instant::now());
+                    let current = checked(
+                        connection,
+                        &Checked {
+                            embedder: &input.embedder,
+                            projects: &input.allowed_projects,
+                            before_seq: input.before_seq,
+                        },
+                        &fresh,
+                        &check,
+                    )?;
+                    out.sqlite_executions += 1;
+                    checking_ms += ms(running.1);
+                    running = (Stage::Vector, vector_started);
+                    let mut rejected = HashSet::new();
+                    for (id, parent, score) in fresh {
+                        if found.len() >= k {
+                            break;
+                        }
+                        match current.get(&id) {
+                            Some(node) => {
+                                found_bytes = found_bytes.saturating_add(node.len());
+                                if found_bytes > input.output_budget_bytes as usize {
+                                    return Err(Outcome::BudgetExceeded);
+                                }
+                                accepted.insert(parent);
+                                found.push((score, id, node.clone()));
+                            }
+                            None => {
+                                rejected.insert(id);
+                            }
+                        }
                     }
-                    mapped.insert(
-                        row.get::<_, i64>(0).map_err(|_| Outcome::ReadFailed)?,
-                        id.to_owned(),
-                    );
+                    // Every hit of this round was taken or dropped, so each round narrows the
+                    // allowlist. Keep each call inside the k <= 48 admission bound.
+                    remaining.retain(|id| {
+                        !rejected.contains(id)
+                            && parents.get(id).is_some_and(|p| !accepted.contains(p))
+                    });
                 }
-                let mut seqs = Vec::new();
-                let mut scores = Vec::new();
-                for ((seq, score), parent) in out
-                    .vector_seqs
-                    .iter()
-                    .zip(&out.vector_scores)
-                    .zip(&hit_parents)
-                {
-                    if let Some(id) = mapped.remove(parent) {
-                        out.vector_ids.push(id);
-                        seqs.push(seq.clone());
-                        scores.push(*score);
+                if !out.vector_unavailable {
+                    // A later round can hold a parent's second chunk above an earlier round's hit.
+                    found.sort_by(|left, right| right.0.total_cmp(&left.0));
+                    for (score, id, node) in found {
+                        out.vector_seqs.push(id.to_string());
+                        out.vector_scores.push(score as f64);
+                        out.vector_ids.push(node);
                     }
                 }
-                out.vector_seqs = seqs;
-                out.vector_scores = scores;
             }
-            out.mapping_ms = ms(running.1);
+            out.vector_ms = ms(vector_started) - checking_ms;
+            out.mapping_ms = checking_ms;
             running = (Stage::Text, Instant::now());
             let text_deadline = Instant::now() + cell.remaining().saturating_sub(TEXT_RESERVE);
             if let Ok(mut until) = text_until.lock() {
@@ -773,12 +876,92 @@ mod tests {
         assert_eq!(failed.candidate_count, 3);
         assert_eq!((failed.candidate_ms, failed.vector_ms), (5., 6.));
         assert_eq!(
-            (failed.queue_ms, failed.trigram_ms, failed.short_term_ms, failed.short_terms_done),
+            (
+                failed.queue_ms,
+                failed.trigram_ms,
+                failed.short_term_ms,
+                failed.short_terms_done
+            ),
             (2., Some(3.), 4., 1)
         );
         assert!(failed.mapping_ms >= 40.);
         assert_eq!(failed.text_ms, 0.);
         assert_eq!(failed.failed_stage.as_deref(), Some("mapping"));
+    }
+    #[cfg(feature = "test-sqlite")]
+    fn hit_fixture() -> MemoryReadSession {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE nodes(seq INTEGER PRIMARY KEY, id TEXT, project_id TEXT, session_id TEXT);
+                CREATE TABLE node_vectors(node_seq INTEGER, embedder TEXT);
+                CREATE TABLE node_vector_chunks(vector_id INTEGER PRIMARY KEY, node_seq INTEGER, embedder TEXT);
+                CREATE TABLE memory_graph_vector_removals(node_seq INTEGER, embedder TEXT);
+                INSERT INTO nodes VALUES (1,'whole','p','s'),(2,'chunked','p','s'),(3,'removing','p','s'),
+                  (4,'elsewhere','q','t'),(5,'later','p','s'),(6,'unpublished','p','s'),(7,'topic','p',NULL);
+                INSERT INTO node_vectors VALUES (1,'e'),(2,'e'),(3,'e'),(4,'e'),(5,'e');
+                INSERT INTO node_vector_chunks VALUES (4503599627370496,2,'e'),(4503599627370498,3,'e'),
+                  (4503599627370499,4,'e'),(4503599627370500,5,'e');
+                INSERT INTO memory_graph_vector_removals VALUES (3,'e');",
+            )
+            .unwrap();
+        MemoryReadSession {
+            connection: Some(connection),
+            unusable: std::cell::Cell::new(false),
+        }
+    }
+    #[test]
+    #[cfg(feature = "test-sqlite")]
+    fn owners_are_read_by_chunk_mapping_or_node_seq() {
+        let reader = hit_fixture();
+        let owners = reader
+            .owners_of(&[1, 7, 4503599627370496, 4503599627370497])
+            .unwrap();
+        assert_eq!(
+            owners,
+            [
+                (4503599627370496, 2, Holder::Session("s".into())),
+                (1, 1, Holder::Session("s".into())),
+                (7, 7, Holder::Project("p".into())),
+            ]
+        );
+    }
+    #[test]
+    #[cfg(feature = "test-sqlite")]
+    fn checked_keeps_only_hits_the_snapshot_still_searches() {
+        let reader = hit_fixture();
+        let projects = ["p".to_string()];
+        let snapshot = Checked {
+            embedder: "e",
+            projects: &projects,
+            before_seq: Some(5),
+        };
+        // Current: the one-vector node 1 and node 2's mapped chunk. Dropped: node 2's unmapped
+        // chunk, node 3 waiting to leave, node 4 of another project, node 5 after `before_seq`,
+        // node 6 with no vector row.
+        let hits = [
+            (1, 1, 0.9),
+            (4503599627370496, 2, 0.8),
+            (4503599627370497, 2, 0.7),
+            (4503599627370498, 3, 0.6),
+            (4503599627370499, 4, 0.5),
+            (4503599627370500, 5, 0.4),
+            (6, 6, 0.3),
+        ];
+        let current = checked(
+            reader.connection.as_ref().unwrap(),
+            &snapshot,
+            &hits,
+            &|| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(
+            current,
+            HashMap::from([
+                (1, "whole".to_string()),
+                (4503599627370496, "chunked".to_string())
+            ])
+        );
     }
     #[test]
     #[cfg(feature = "test-sqlite")]
