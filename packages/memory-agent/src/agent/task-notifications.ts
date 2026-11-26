@@ -33,13 +33,19 @@ export const taskNotifications = (services: {
       background: Effect.map(
         notifications.untold(sessionId, "task", toldIn(conversation).told),
         (entries) =>
-          entries.map(({ payload }): BackgroundEnd => ({
-            taskId: payload.taskId,
-            parentRunId: payload.parentRunId,
-            kind: payload.kind,
-            title: payload.title,
-            status: payload.status,
-          })),
+          entries.flatMap(({ payload }): BackgroundEnd[] =>
+            payload._tag === "BackgroundEnd"
+              ? [
+                  {
+                    taskId: payload.taskId,
+                    parentRunId: payload.parentRunId,
+                    kind: payload.kind,
+                    title: payload.title,
+                    status: payload.status,
+                  },
+                ]
+              : [],
+          ),
       ),
     });
   /** Gives back the Work Trace notifications the run took; the background ends need no giving back. */

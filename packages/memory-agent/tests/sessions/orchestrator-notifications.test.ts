@@ -1,6 +1,8 @@
 import { Effect, HashSet } from "effect";
+import { SqlClient } from "effect/sql";
 import { expect } from "vite-plus/test";
 import { OrchestratorNotifications, Sessions, type MessageDelivery } from "memory-agent";
+import { taskStatusWrites } from "../../src/sessions/orchestrator-notifications.ts";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
 import { sqlGet } from "../support/sql.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
@@ -214,6 +216,82 @@ testAgent()(function (it) {
       yield* env.use(notifications.deliver(to.id, "run-a", ["task-1"]));
       yield* putOnce("ls");
       expect(yield* stateOf("task-1")).toEqual({ state: "delivered", delivered_run_id: "run-a" });
+    }),
+  );
+
+  it.effect("keeps a task's status change and gives it to the task sender's reader", () =>
+    Effect.gen(function* () {
+      const { env, to } = yield* target;
+      const notifications = yield* env.use(OrchestratorNotifications);
+      const payload = {
+        _tag: "TaskStatus",
+        taskId: "t-1",
+        parentRunId: "run-1",
+        kind: "completed",
+        summary: "Done",
+        detail: { attemptId: "a-1" },
+      } as const;
+      yield* env.use(
+        notifications.putOnce({
+          id: "status-kept",
+          sessionId: to.id,
+          sender: "task",
+          delivery: "wake",
+          payload,
+        }),
+      );
+      expect(
+        (yield* env.use(notifications.untold(to.id, "task", HashSet.empty()))).map(
+          (entry) => entry.payload,
+        ),
+      ).toEqual([payload]);
+    }),
+  );
+
+  it.effect("taskStatusWrites stores a change once and redacts a deleted task's words", () =>
+    Effect.gen(function* () {
+      const { env, to, putTask } = yield* target;
+      const writes = taskStatusWrites(yield* env.use(SqlClient.SqlClient));
+      const change = (id: string, taskId: string, summary: string) =>
+        ({
+          id,
+          sessionId: to.id,
+          delivery: "wake",
+          payload: {
+            _tag: "TaskStatus",
+            taskId,
+            parentRunId: "run-1",
+            kind: "completed",
+            summary,
+            detail: { attemptId: "a-1" },
+          },
+        }) as const;
+      const first = change("status-once", "t-1", "Done");
+      const other = change("status-other", "t-2", "Other");
+      yield* writes.putOnce(first);
+      yield* writes.putOnce(change("status-once", "t-1", "Done again"));
+      yield* writes.putOnce(other);
+      // A background end of the same task id is not a status change: its words stay.
+      const end = yield* putTask("t-1", "next_run");
+      const notifications = yield* env.use(OrchestratorNotifications);
+      const payloads = Effect.map(env.use(notifications.pending(to.id)), (rows) =>
+        Object.fromEntries(rows.map((row) => [row.id, row.payload])),
+      );
+      expect(yield* payloads).toEqual({
+        "status-once": first.payload,
+        "status-other": other.payload,
+        [end.id]: end.payload,
+      });
+      yield* writes.redact("t-1");
+      expect(yield* payloads).toEqual({
+        "status-once": {
+          ...first.payload,
+          summary: "Deleted task lifecycle notification",
+          detail: {},
+        },
+        "status-other": other.payload,
+        [end.id]: end.payload,
+      });
     }),
   );
 });
