@@ -63,7 +63,9 @@ it.effect("the Work Trace a deleted conversation left goes; its own receipt stay
     expect(db.prepare("SELECT task_id FROM agent_invocations").all()).toEqual([
       { task_id: "kept" },
     ]);
-    expect(db.prepare("SELECT count(*) AS n FROM parent_notifications").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT count(*) AS n FROM orchestrator_notifications").get()).toEqual({
+      n: 0,
+    });
     expect(db.prepare("SELECT id FROM lifecycle_operations").all()).toEqual([{ id: "op-gone" }]);
     expect(db.prepare("SELECT id FROM purge_receipts").all()).toEqual([{ id: "receipt-op-gone" }]);
     expect(

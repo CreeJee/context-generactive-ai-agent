@@ -949,6 +949,36 @@ export const notificationClaimsDropMigration = `
     ON orchestrator_notifications(session_id, state, created_at);
 `;
 
+/** The step that moves the status changes of Work Trace tasks into the orchestrator's notifications. */
+export const taskStatusNotificationsMigration = `
+  -- A Work Trace task's status change is told through the orchestrator's notifications like every
+  -- other thing the app hands a conversation's model (decisions.md "하위 작업의 상태 알림을
+  -- orchestrator notifications에 둔다"). A row keeps the key that made it unique as its id. What a
+  -- run took is settled once, as the step that dropped the claims settled them: a row taken by a
+  -- run that completed or waits for the user is delivered, every other row waits. A row whose
+  -- conversation is gone has no one to tell and does not move. OR IGNORE keeps a row the table
+  -- cannot hold from stopping the app's start.
+  INSERT OR IGNORE INTO orchestrator_notifications (id, session_id, sender, delivery, payload,
+    state, delivered_run_id, created_at, delivered_at)
+  SELECT n.idempotency_key, n.origin_session_id, 'task', t.delivery,
+    json_object('_tag', 'TaskStatus', 'taskId', n.task_id, 'parentRunId', n.parent_run_id,
+      'kind', n.kind, 'summary', n.summary,
+      'detail', json(CASE WHEN json_type(n.payload) = 'object' THEN n.payload ELSE '{}' END)),
+    CASE WHEN r.run_id IS NULL THEN 'waiting' ELSE 'delivered' END,
+    CASE WHEN r.run_id IS NULL THEN NULL ELSE n.delivered_to_run_id END,
+    strftime('%Y-%m-%dT%H:%M:%fZ', n.created_at / 1000.0, 'unixepoch'),
+    CASE WHEN r.run_id IS NULL THEN NULL
+      ELSE strftime('%Y-%m-%dT%H:%M:%fZ', coalesce(n.delivered_at, n.created_at) / 1000.0,
+        'unixepoch') END
+  FROM parent_notifications n
+  JOIN work_tasks t ON t.id = n.task_id
+  JOIN sessions s ON s.id = n.origin_session_id
+  LEFT JOIN chat_runs r ON r.run_id = n.delivered_to_run_id
+    AND r.status IN ('completed', 'interrupted')
+  ORDER BY n.seq;
+  DROP TABLE parent_notifications;
+`;
+
 /**
  * The cards each workflow revision changed from the revision before it in its session, for the
  * board's history; a revision that changed no card has no row. Revisions never change, so this is
@@ -3377,6 +3407,7 @@ export const migrations: readonly string[] = [
   backgroundEndsNotificationsMigration,
   queueSteerDeliveryMigration,
   notificationClaimsDropMigration,
+  taskStatusNotificationsMigration,
 ];
 
 /** One of the two startup migrations that may rebuild a referenced table with FK checks suspended;

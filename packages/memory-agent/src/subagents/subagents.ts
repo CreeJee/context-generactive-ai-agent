@@ -825,7 +825,6 @@ const make = Effect.gen(function* () {
         "Subagent started",
         null,
         notifyParentImmediately,
-        binding.runId,
       );
       const progress = yield* Ref.make(childRunStart);
       yield* loopChildRun(
@@ -872,7 +871,6 @@ const make = Effect.gen(function* () {
         attemptEnds[status].summary,
         Option.getOrNull(Option.map(ran.failure, (reason) => ({ reason }))),
         notifyParentImmediately,
-        binding.runId,
         optionalProperty("messageId", Option.getOrUndefined(answerMessageId)),
       );
       yield* finish(status, answer, failureCode, row.id);
@@ -948,7 +946,6 @@ const make = Effect.gen(function* () {
               "Subagent crashed",
               { reason: AttemptFailureReason.cases.AgentCrashed.make({}) },
               false,
-              binding.runId,
             );
             yield* finish("failed", "", "AgentCrashed", row.id);
           }),
@@ -988,7 +985,6 @@ const make = Effect.gen(function* () {
                     "Queued subagent cancelled",
                     null,
                     false,
-                    binding.runId,
                   )
                   .pipe(Effect.as(null)),
             }),
@@ -1184,7 +1180,6 @@ const make = Effect.gen(function* () {
                     "Subagent no longer exists",
                     null,
                     true,
-                    binding.runId,
                   ),
                 onSome: (known) =>
                   startAgain(
@@ -1418,7 +1413,6 @@ const make = Effect.gen(function* () {
                   "Subagent not started",
                   null,
                   false,
-                  binding.runId,
                 )
                 .pipe(Effect.andThen(finish("cancelled", "", null, row.id))),
             ),

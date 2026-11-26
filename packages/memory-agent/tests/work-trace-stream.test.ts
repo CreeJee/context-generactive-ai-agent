@@ -1,8 +1,9 @@
 import { it } from "@effect/vitest";
-import { DateTime, Effect, Fiber, Layer, Schema } from "effect";
+import { DateTime, Effect, Fiber, HashSet, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
+import { OrchestratorNotifications } from "../src/sessions/orchestrator-notifications.ts";
 import { AttemptFailureReason } from "../src/work-trace/contracts.ts";
 import {
   heartbeatIntervalMs,
@@ -14,7 +15,11 @@ import { sqlRun, sqlExec } from "./support/sql.ts";
 
 const testLayer = () => {
   const database = Database.layer(":memory:");
-  return Layer.merge(database, WorkTraceStore.layer.pipe(Layer.provide(database)));
+  return Layer.mergeAll(
+    database,
+    WorkTraceStore.layer.pipe(Layer.provide(database)),
+    OrchestratorNotifications.layer.pipe(Layer.provide(database)),
+  );
 };
 
 const run = Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
@@ -255,8 +260,8 @@ describe("Work Trace durable stream source", () => {
           stage: "model",
         });
         expect(
-          (yield* trace.consumeParentNotifications("s1", "parent-2")).map(
-            (notification) => notification.kind,
+          (yield* (yield* OrchestratorNotifications).untold("s1", "task", HashSet.empty())).flatMap(
+            ({ payload }) => (payload._tag === "TaskStatus" ? [payload.kind] : []),
           ),
         ).toContain("failed");
       }),

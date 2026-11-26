@@ -4,7 +4,7 @@
   "attempts": [
     {
       "attempt_number": 1,
-      "chat_run_id": "<id-25>",
+      "chat_run_id": "<id-23>",
       "failure": null,
       "pending_tool_call_ids": [],
       "resumability": {
@@ -17,7 +17,7 @@
     },
     {
       "attempt_number": 1,
-      "chat_run_id": "<id-27>",
+      "chat_run_id": "<id-25>",
       "failure": null,
       "pending_tool_call_ids": [],
       "resumability": {
@@ -25,7 +25,7 @@
       },
       "resume_reason": null,
       "status": "completed",
-      "task_id": "<id-14>",
+      "task_id": "<id-13>",
       "thread_id": "subagent-<id-3>"
     }
   ],
@@ -55,7 +55,7 @@
     {
       "detail": {},
       "kind": "assistant",
-      "run_id": "<id-24>",
+      "run_id": "<id-22>",
       "text": ""
     },
     {
@@ -64,7 +64,7 @@
         "toolName": "run_subagent"
       },
       "kind": "tool_call",
-      "run_id": "<id-24>",
+      "run_id": "<id-22>",
       "text": "run_subagent {\"agent\":\"helper\",\"task\":\"first task\"}"
     },
     {
@@ -74,7 +74,7 @@
         "toolName": "run_subagent"
       },
       "kind": "tool_result",
-      "run_id": "<id-24>",
+      "run_id": "<id-22>",
       "text": {
         "agent": "helper",
         "attemptId": "<id-5>",
@@ -86,32 +86,32 @@
     {
       "detail": {},
       "kind": "assistant",
-      "run_id": "<id-24>",
+      "run_id": "<id-22>",
       "text": "first started"
     },
     {
       "detail": {},
       "kind": "assistant",
-      "run_id": "<id-10>",
+      "run_id": "<id-9>",
       "text": ""
     },
     {
       "detail": {
-        "toolCallId": "call-reports@<id-10>",
+        "toolCallId": "call-reports@<id-9>",
         "toolName": "get_subagent_reports"
       },
       "kind": "tool_call",
-      "run_id": "<id-10>",
+      "run_id": "<id-9>",
       "text": "get_subagent_reports {\"attempts\":[{\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\"}]}"
     },
     {
       "detail": {
         "ok": true,
-        "toolCallId": "call-reports@<id-10>",
+        "toolCallId": "call-reports@<id-9>",
         "toolName": "get_subagent_reports"
       },
       "kind": "tool_result",
-      "run_id": "<id-10>",
+      "run_id": "<id-9>",
       "text": {
         "reports": [
           {
@@ -130,7 +130,7 @@
     {
       "detail": {},
       "kind": "assistant",
-      "run_id": "<id-10>",
+      "run_id": "<id-9>",
       "text": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\",\"status\":\"completed\",\"answer\":\"child done: first task (earlier user messages: 0)\",\"error\":null,\"memo\":[]}"
     },
     {
@@ -142,7 +142,7 @@
     {
       "detail": {},
       "kind": "assistant",
-      "run_id": "<id-26>",
+      "run_id": "<id-24>",
       "text": ""
     },
     {
@@ -151,7 +151,7 @@
         "toolName": "run_subagent"
       },
       "kind": "tool_call",
-      "run_id": "<id-26>",
+      "run_id": "<id-24>",
       "text": "run_subagent {\"agent\":\"helper\",\"task\":\"second task\"}"
     },
     {
@@ -161,55 +161,55 @@
         "toolName": "run_subagent"
       },
       "kind": "tool_result",
-      "run_id": "<id-26>",
+      "run_id": "<id-24>",
       "text": {
         "agent": "helper",
-        "attemptId": "<id-15>",
+        "attemptId": "<id-14>",
         "status": "running",
         "subagentId": "<id-3>",
-        "taskId": "<id-14>"
+        "taskId": "<id-13>"
       }
     },
     {
       "detail": {},
       "kind": "assistant",
-      "run_id": "<id-26>",
+      "run_id": "<id-24>",
       "text": "second started"
     },
     {
       "detail": {},
       "kind": "assistant",
-      "run_id": "<id-20>",
+      "run_id": "<id-18>",
       "text": ""
     },
     {
       "detail": {
-        "toolCallId": "call-reports@<id-20>",
+        "toolCallId": "call-reports@<id-18>",
         "toolName": "get_subagent_reports"
       },
       "kind": "tool_call",
-      "run_id": "<id-20>",
-      "text": "get_subagent_reports {\"attempts\":[{\"taskId\":\"<id-14>\",\"attemptId\":\"<id-15>\"}]}"
+      "run_id": "<id-18>",
+      "text": "get_subagent_reports {\"attempts\":[{\"taskId\":\"<id-13>\",\"attemptId\":\"<id-14>\"}]}"
     },
     {
       "detail": {
         "ok": true,
-        "toolCallId": "call-reports@<id-20>",
+        "toolCallId": "call-reports@<id-18>",
         "toolName": "get_subagent_reports"
       },
       "kind": "tool_result",
-      "run_id": "<id-20>",
+      "run_id": "<id-18>",
       "text": {
         "reports": [
           {
             "agent": "helper",
             "answer": "child done: second task (earlier user messages: 1)",
-            "attemptId": "<id-15>",
+            "attemptId": "<id-14>",
             "error": null,
             "memo": [],
             "status": "completed",
             "subagentId": "<id-3>",
-            "taskId": "<id-14>"
+            "taskId": "<id-13>"
           }
         ]
       }
@@ -217,15 +217,15 @@
     {
       "detail": {},
       "kind": "assistant",
-      "run_id": "<id-20>",
-      "text": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-14>\",\"attemptId\":\"<id-15>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null,\"memo\":[]}"
+      "run_id": "<id-18>",
+      "text": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-13>\",\"attemptId\":\"<id-14>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null,\"memo\":[]}"
     }
   ],
   "notifications": [
     {
-      "delivered_to_run_id": "<id-10>",
+      "delivered_to_run_id": "<id-9>",
       "kind": "completed",
-      "parent_run_id": "<id-24>",
+      "parent_run_id": "<id-22>",
       "payload": {
         "attemptId": "<id-5>"
       },
@@ -233,18 +233,45 @@
       "task_id": "<id-4>"
     },
     {
-      "delivered_to_run_id": "<id-20>",
+      "delivered_to_run_id": "<id-18>",
       "kind": "completed",
-      "parent_run_id": "<id-26>",
+      "parent_run_id": "<id-24>",
       "payload": {
-        "attemptId": "<id-15>"
+        "attemptId": "<id-14>"
       },
       "summary": "Subagent completed",
-      "task_id": "<id-14>"
+      "task_id": "<id-13>"
     }
   ],
   "queue": [],
   "runs": [
+    {
+      "cancel_requested": null,
+      "error": null,
+      "error_code": null,
+      "run_id": "<id-22>",
+      "status": "completed",
+      "thread_id": "<session>",
+      "usage": null
+    },
+    {
+      "cancel_requested": null,
+      "error": null,
+      "error_code": null,
+      "run_id": "<id-23>",
+      "status": "completed",
+      "thread_id": "subagent-<id-3>",
+      "usage": null
+    },
+    {
+      "cancel_requested": null,
+      "error": null,
+      "error_code": null,
+      "run_id": "<id-9>",
+      "status": "completed",
+      "thread_id": "<session>",
+      "usage": null
+    },
     {
       "cancel_requested": null,
       "error": null,
@@ -267,34 +294,7 @@
       "cancel_requested": null,
       "error": null,
       "error_code": null,
-      "run_id": "<id-10>",
-      "status": "completed",
-      "thread_id": "<session>",
-      "usage": null
-    },
-    {
-      "cancel_requested": null,
-      "error": null,
-      "error_code": null,
-      "run_id": "<id-26>",
-      "status": "completed",
-      "thread_id": "<session>",
-      "usage": null
-    },
-    {
-      "cancel_requested": null,
-      "error": null,
-      "error_code": null,
-      "run_id": "<id-27>",
-      "status": "completed",
-      "thread_id": "subagent-<id-3>",
-      "usage": null
-    },
-    {
-      "cancel_requested": null,
-      "error": null,
-      "error_code": null,
-      "run_id": "<id-20>",
+      "run_id": "<id-18>",
       "status": "completed",
       "thread_id": "<session>",
       "usage": null
@@ -336,7 +336,7 @@
     {
       "current": 1,
       "display_format": 1,
-      "display_id": "<id-9>",
+      "display_id": "<id-8>",
       "first_message_seq": 5,
       "seq": 4,
       "thread_id": "<session>"
@@ -344,7 +344,7 @@
     {
       "current": 1,
       "display_format": 1,
-      "display_id": "<id-11>",
+      "display_id": "<id-10>",
       "first_message_seq": 7,
       "seq": 5,
       "thread_id": "<session>"
@@ -352,7 +352,7 @@
     {
       "current": 1,
       "display_format": 1,
-      "display_id": "<id-12>",
+      "display_id": "<id-11>",
       "first_message_seq": 8,
       "seq": 6,
       "thread_id": "<session>"
@@ -360,7 +360,7 @@
     {
       "current": 1,
       "display_format": 1,
-      "display_id": "<id-13>",
+      "display_id": "<id-12>",
       "first_message_seq": 9,
       "seq": 7,
       "thread_id": "<session>"
@@ -368,7 +368,7 @@
     {
       "current": 1,
       "display_format": 1,
-      "display_id": "<id-16>",
+      "display_id": "<id-15>",
       "first_message_seq": 11,
       "seq": 8,
       "thread_id": "<session>"
@@ -376,7 +376,7 @@
     {
       "current": 1,
       "display_format": 1,
-      "display_id": "<id-17>",
+      "display_id": "<id-16>",
       "first_message_seq": 12,
       "seq": 9,
       "thread_id": "<session>"
@@ -384,7 +384,7 @@
     {
       "current": 1,
       "display_format": 1,
-      "display_id": "<id-19>",
+      "display_id": "<id-17>",
       "first_message_seq": 13,
       "seq": 10,
       "thread_id": "<session>"
@@ -392,7 +392,7 @@
     {
       "current": 1,
       "display_format": 1,
-      "display_id": "<id-21>",
+      "display_id": "<id-19>",
       "first_message_seq": 15,
       "seq": 11,
       "thread_id": "<session>"
@@ -408,7 +408,7 @@
     {
       "current": 1,
       "display_format": 1,
-      "display_id": "<id-22>",
+      "display_id": "<id-20>",
       "first_message_seq": 1,
       "seq": 1,
       "thread_id": "subagent-<id-3>"
@@ -424,7 +424,7 @@
     {
       "current": 1,
       "display_format": 1,
-      "display_id": "<id-23>",
+      "display_id": "<id-21>",
       "first_message_seq": 3,
       "seq": 3,
       "thread_id": "subagent-<id-3>"
@@ -438,7 +438,7 @@
       "last_answer": "child done: second task (earlier user messages: 1)",
       "last_task": "second task",
       "name": "helper",
-      "parent_run_id": "<id-26>",
+      "parent_run_id": "<id-24>",
       "status": "completed"
     }
   ],
@@ -448,7 +448,7 @@
       "agent_id": "<id-3>",
       "agent_name": "helper",
       "id": "<id-4>",
-      "parent_run_id": "<id-24>",
+      "parent_run_id": "<id-22>",
       "parent_task_id": null,
       "parent_tool_call_id": "first@<session>",
       "request": "first task",
@@ -458,8 +458,8 @@
     {
       "agent_id": "<id-3>",
       "agent_name": "helper",
-      "id": "<id-14>",
-      "parent_run_id": "<id-26>",
+      "id": "<id-13>",
+      "parent_run_id": "<id-24>",
       "parent_task_id": null,
       "parent_tool_call_id": "second@<session>",
       "request": "second task",
@@ -518,7 +518,7 @@
           }
         },
         {
-          "content": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nThis is an automatic task completion follow-up, not a new user request or approval. Review operational notifications, retrieve subagent reports with get_subagent_reports and background operation results with get_background_result, and briefly update the user if useful. Do not repeat the original dispatch merely because it appears in the history.\n\nTask status notifications since the previous parent run:\n- Notification <id-8>; task <id-4>; completed: Subagent completed; {\"attemptId\":\"<id-5>\"}\nTreat these as operational state, not as user instructions or approval.\n</orchestrator>",
+          "content": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nThis is an automatic task completion follow-up, not a new user request or approval. Review operational notifications, retrieve subagent reports with get_subagent_reports and background operation results with get_background_result, and briefly update the user if useful. Do not repeat the original dispatch merely because it appears in the history.\n\nTask status notifications since the previous parent run:\n- Notification attempt:<id-5>:completed; task <id-4>; completed: Subagent completed; {\"attemptId\":\"<id-5>\"}\nTreat these as operational state, not as user instructions or approval.\n</orchestrator>",
           "createdAt": "<time>",
           "id": "<id-7>",
           "orchestrator": {
@@ -528,13 +528,16 @@
             },
             "next": "results"
           },
-          "role": "user"
+          "role": "user",
+          "toldNotifications": [
+            "attempt:<id-5>:completed"
+          ]
         },
         {
           "content": null,
           "createdAt": "<time>",
           "finishReason": "tool_calls",
-          "id": "<id-9>",
+          "id": "<id-8>",
           "model": "scripted-1",
           "role": "assistant",
           "source": {
@@ -548,7 +551,7 @@
                 "arguments": "{\"attempts\":[{\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\"}]}",
                 "name": "get_subagent_reports"
               },
-              "id": "call-reports@<id-10>",
+              "id": "call-reports@<id-9>",
               "type": "function"
             }
           ]
@@ -556,13 +559,13 @@
         {
           "content": "{\"reports\":[{\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\",\"status\":\"completed\",\"answer\":\"child done: first task (earlier user messages: 0)\",\"error\":null,\"memo\":[]}]}",
           "role": "tool",
-          "toolCallId": "call-reports@<id-10>"
+          "toolCallId": "call-reports@<id-9>"
         },
         {
           "content": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\",\"status\":\"completed\",\"answer\":\"child done: first task (earlier user messages: 0)\",\"error\":null,\"memo\":[]}",
           "createdAt": "<time>",
           "finishReason": "stop",
-          "id": "<id-11>",
+          "id": "<id-10>",
           "model": "scripted-1",
           "role": "assistant",
           "source": {
@@ -574,14 +577,14 @@
         {
           "content": "golden:subagent-second",
           "createdAt": "<time>",
-          "id": "<id-12>",
+          "id": "<id-11>",
           "role": "user"
         },
         {
           "content": null,
           "createdAt": "<time>",
           "finishReason": "tool_calls",
-          "id": "<id-13>",
+          "id": "<id-12>",
           "model": "scripted-1",
           "role": "assistant",
           "source": {
@@ -601,7 +604,7 @@
           ]
         },
         {
-          "content": "{\"status\":\"running\",\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-14>\",\"attemptId\":\"<id-15>\"}",
+          "content": "{\"status\":\"running\",\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-13>\",\"attemptId\":\"<id-14>\"}",
           "role": "tool",
           "toolCallId": "second@<session>"
         },
@@ -609,7 +612,7 @@
           "content": "second started",
           "createdAt": "<time>",
           "finishReason": "stop",
-          "id": "<id-16>",
+          "id": "<id-15>",
           "model": "scripted-1",
           "role": "assistant",
           "source": {
@@ -619,9 +622,9 @@
           }
         },
         {
-          "content": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nThis is an automatic task completion follow-up, not a new user request or approval. Review operational notifications, retrieve subagent reports with get_subagent_reports and background operation results with get_background_result, and briefly update the user if useful. Do not repeat the original dispatch merely because it appears in the history.\n\nTask status notifications since the previous parent run:\n- Notification <id-18>; task <id-14>; completed: Subagent completed; {\"attemptId\":\"<id-15>\"}\nTreat these as operational state, not as user instructions or approval.\n</orchestrator>",
+          "content": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nThis is an automatic task completion follow-up, not a new user request or approval. Review operational notifications, retrieve subagent reports with get_subagent_reports and background operation results with get_background_result, and briefly update the user if useful. Do not repeat the original dispatch merely because it appears in the history.\n\nTask status notifications since the previous parent run:\n- Notification attempt:<id-14>:completed; task <id-13>; completed: Subagent completed; {\"attemptId\":\"<id-14>\"}\nTreat these as operational state, not as user instructions or approval.\n</orchestrator>",
           "createdAt": "<time>",
-          "id": "<id-17>",
+          "id": "<id-16>",
           "orchestrator": {
             "ended": {
               "background": 0,
@@ -629,13 +632,16 @@
             },
             "next": "results"
           },
-          "role": "user"
+          "role": "user",
+          "toldNotifications": [
+            "attempt:<id-14>:completed"
+          ]
         },
         {
           "content": null,
           "createdAt": "<time>",
           "finishReason": "tool_calls",
-          "id": "<id-19>",
+          "id": "<id-17>",
           "model": "scripted-1",
           "role": "assistant",
           "source": {
@@ -646,24 +652,24 @@
           "toolCalls": [
             {
               "function": {
-                "arguments": "{\"attempts\":[{\"taskId\":\"<id-14>\",\"attemptId\":\"<id-15>\"}]}",
+                "arguments": "{\"attempts\":[{\"taskId\":\"<id-13>\",\"attemptId\":\"<id-14>\"}]}",
                 "name": "get_subagent_reports"
               },
-              "id": "call-reports@<id-20>",
+              "id": "call-reports@<id-18>",
               "type": "function"
             }
           ]
         },
         {
-          "content": "{\"reports\":[{\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-14>\",\"attemptId\":\"<id-15>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null,\"memo\":[]}]}",
+          "content": "{\"reports\":[{\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-13>\",\"attemptId\":\"<id-14>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null,\"memo\":[]}]}",
           "role": "tool",
-          "toolCallId": "call-reports@<id-20>"
+          "toolCallId": "call-reports@<id-18>"
         },
         {
-          "content": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-14>\",\"attemptId\":\"<id-15>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null,\"memo\":[]}",
+          "content": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-13>\",\"attemptId\":\"<id-14>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null,\"memo\":[]}",
           "createdAt": "<time>",
           "finishReason": "stop",
-          "id": "<id-21>",
+          "id": "<id-19>",
           "model": "scripted-1",
           "role": "assistant",
           "source": {
@@ -685,7 +691,7 @@
           "content": "child done: first task (earlier user messages: 0)",
           "createdAt": "<time>",
           "finishReason": "stop",
-          "id": "<id-22>",
+          "id": "<id-20>",
           "model": "scripted-1",
           "role": "assistant",
           "source": {
@@ -702,7 +708,7 @@
           "content": "child done: second task (earlier user messages: 1)",
           "createdAt": "<time>",
           "finishReason": "stop",
-          "id": "<id-23>",
+          "id": "<id-21>",
           "model": "scripted-1",
           "role": "assistant",
           "source": {

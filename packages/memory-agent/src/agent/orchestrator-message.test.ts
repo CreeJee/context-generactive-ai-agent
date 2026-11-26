@@ -2,23 +2,21 @@ import { describe, expect, it } from "vite-plus/test";
 import type { StoredMessage } from "../chat-store/schema.ts";
 import { boardRunId } from "../kanban/board-run.ts";
 import { RunEnd } from "../loop/store.ts";
-import type { ParentNotificationView } from "../work-trace/store.ts";
-import { endedTasks, heardBy, telling, toldIn } from "./orchestrator-message.ts";
+import type { TaskStatusNotification } from "../work-trace/task-status.ts";
+import { endedTasks, heardBy, telling, toldIds, toldIn } from "./orchestrator-message.ts";
 
 const notification = (
   taskId: string,
   parentRunId: string,
-  agentName: string,
-  kind = "completed",
-): ParentNotificationView => ({
+  kind: TaskStatusNotification["kind"] = "completed",
+): TaskStatusNotification => ({
+  _tag: "TaskStatus",
   id: `n-${taskId}`,
   taskId,
   parentRunId,
-  agentName,
   kind,
   summary: "Subagent completed",
-  payload: {},
-  createdAt: 0,
+  detail: {},
 });
 
 describe("endedTasks", () => {
@@ -26,12 +24,12 @@ describe("endedTasks", () => {
     expect(
       endedTasks({
         tasks: [
-          notification("t1", "chat-run", "explorer"),
-          notification("t2", "chat-run", "reviewer", "failed"),
-          notification("t3", "chat-run", "explorer", "resumed"),
-          notification("c1", boardRunId("goal-1", "p1", 1), "card-p1-g1"),
-          notification("c2", boardRunId("goal-1", "p1", "verify", "x"), "card-p1-verify"),
-          notification("c3", boardRunId("goal-1", "p1", 2), "card-p1-g1", "failed"),
+          notification("t1", "chat-run"),
+          notification("t2", "chat-run", "failed"),
+          notification("t3", "chat-run", "resumed"),
+          notification("c1", boardRunId("goal-1", "p1", 1)),
+          notification("c2", boardRunId("goal-1", "p1", "verify", "x")),
+          notification("c3", boardRunId("goal-1", "p1", 2), "failed"),
         ],
         background: [
           {
@@ -51,6 +49,25 @@ describe("endedTasks", () => {
         ],
       }),
     ).toEqual({ background: 1, subagent: 2 });
+  });
+});
+
+describe("toldIds", () => {
+  it("lists the status changes and the background ends", () => {
+    expect(
+      toldIds({
+        tasks: [notification("t-1", "run-1")],
+        background: [
+          {
+            taskId: "b-1",
+            parentRunId: "run-1",
+            kind: "shell",
+            title: "ls",
+            status: "completed",
+          },
+        ],
+      }),
+    ).toEqual(["n-t-1", "b-1"]);
   });
 });
 

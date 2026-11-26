@@ -81,9 +81,9 @@ const Busy = Schema.Struct({ busy: Schema.Finite });
 
 /**
  * Waits until the session's delegated work and the follow-ups it started are over: no attempt or
- * run is going and every notification reached a run that ended. A follow-up takes its
- * notifications before it counts as live, and a run ends after its record says so, so both the
- * record and the agent's own view of the live run decide when the next message can be sent.
+ * run is going and no status change waits to be told. A change is marked delivered once the run
+ * that told it ended, and a run ends after its record says so, so both the record and the agent's
+ * own view of the live run decide when the next message can be sent.
  */
 export const settled = (sessionId: string) =>
   until(
@@ -94,10 +94,9 @@ export const settled = (sessionId: string) =>
              (SELECT count(*) FROM agent_run_attempts a JOIN work_tasks t ON t.id = a.task_id
               WHERE t.origin_session_id = ?
                 AND a.status IN ('queued', 'running', 'waiting', 'blocked'))
-             + (SELECT count(*) FROM parent_notifications n
-                WHERE n.origin_session_id = ? AND NOT EXISTS (
-                  SELECT 1 FROM chat_runs r
-                  WHERE r.run_id = n.delivered_to_run_id AND r.status <> 'running')) AS busy`,
+             + (SELECT count(*) FROM orchestrator_notifications n
+                WHERE n.session_id = ? AND n.sender = 'task'
+                  AND json_extract(n.payload, '$._tag') = 'TaskStatus' AND n.state = 'waiting') AS busy`,
           sessionId,
           sessionId,
         ),
