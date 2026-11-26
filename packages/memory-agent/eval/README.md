@@ -32,7 +32,7 @@
 - live-compaction 예산: provider 호출은 최대 20회, 요청당 추정 입력 16,000 토큰에 25% margin을 더한다. 추정치는 provider usage나 cached-token 한도가 아니다. guard는 요약 요청을 포함해 provider 요청 전에 멈춘다. 두 arm(`auto` → `auto-plus-manual`)은 순서대로 실행한다. 기준 arm이 evidence나 계산에 실패하면 다음 유료 arm을 돌리지 않는다.
 - live-compaction은 7번째 프롬프트 전에 `summaries.catchUp`으로 자동 요약 상태를 맞춘다. 수동 /compact가 아무것도 바꾸지 않으면 `pilot_manual_compact_changed_nothing`으로 실패한다.
 - live-delegation은 합성 파일만 쓴다. 사용자 config와 project는 쓰지 않는다. `GlobalConfig.update`는 임시 storage root 안에서만 일어난다. 대상은 openai만이다. 예산은 총 24회, 누적 추정 200,000 토큰, 요청당 30,000 토큰(margin 포함)이다.
-- live-delegation의 `settled`는 1초 간격으로 기다린다. 대기 대상은 세 가지다. 자식 attempt(queued/running/waiting/blocked), running chat_run, 아직 끝난 run에 전달되지 않은 parent_notifications. 자식 보고는 첫 run이 끝난 뒤의 완료 follow-up에서만 부모에 도달하기 때문이다.
+- live-delegation의 `settled`는 1초 간격으로 기다린다. 대기 대상은 세 가지다. 자식 attempt(queued/running/waiting/blocked), running chat_run, 아직 전하지 않은 하위 작업의 상태 알림(`orchestrator_notifications`). 자식 보고는 첫 run이 끝난 뒤의 완료 follow-up에서만 부모에 도달하기 때문이다.
 - compaction 평가의 threshold 5개가 모두 통과해야 한다: 입력 토큰 감소, cacheable 비율 개선, evidence 도달, 정정 반영, `retrievalTokens <= retrievalTokenLimit`. 하나라도 실패하면 compaction-cli가 `process.exitCode = 1`로 끝난다.
 - `evidenceNarrative`는 모든 필드와 원문 텍스트를 보존해야 한다. evidence 선택은 바꾸지 않는다. provenance와 changes는 `concurrency: 1`로 반환 순서를 유지한다.
 - memory-research-lab은 `packages/memory-agent`를 cwd로 실행해야 한다. 프로젝트 root는 `process.cwd()`, 임시 root는 `<repo>/node_modules/.vp-tmp`다. 단계마다 별도 임시 storage root를 쓴다. 모델 파일을 읽을 수 없으면 해당 단계는 실패하지 않고 사유와 함께 skip된다.
@@ -41,7 +41,7 @@
 
 ## Side Effects
 
-- SQLite: `storedOAuthProfiles`는 사용자 앱 DB를 read-only로 연다(`Database.over` + `acquireRelease`). live-delegation은 임시 storage의 DB에 1초마다 SQL 폴링을 한다. 대상 테이블은 `agent_run_attempts`, `work_tasks`, `chat_runs`, `parent_notifications`다. 파일럿과 lab 실행은 임시 storage root에 `memoryAgentLayer` DB를 만들고 쓴다.
+- SQLite: `storedOAuthProfiles`는 사용자 앱 DB를 read-only로 연다(`Database.over` + `acquireRelease`). live-delegation은 임시 storage의 DB에 1초마다 SQL 폴링을 한다. 대상 테이블은 `agent_run_attempts`, `work_tasks`, `chat_runs`, `orchestrator_notifications`다. 파일럿과 lab 실행은 임시 storage root에 `memoryAgentLayer` DB를 만들고 쓴다.
 - Keychain: `OAuthKeychain.keychain`으로 OAuth 자격증명을 읽는다(anthropic-usage-probe, live-delegation).
 - 네트워크(유료): anthropic-usage-probe는 Anthropic 구독 usage 요청을 1회 보낸다. live-compaction과 live-delegation은 OpenAI 구독 모델을 실제 호출한다. structured-memory는 provider 호출 여부를 직접 읽지 않았다. 다만 `ReportedUsage`, `inputLimit`/`outputLimit` 심볼이 있다.
 - 파일 시스템: 기본 storage root의 `config.json`을 읽는다(live-delegation). `makeTempDirectoryScoped`로 임시 디렉터리를 만들고 fixture 소스(`src/checksum.ts`, `main.ts`, `child.ts`)를 쓴다. memory-research-lab은 실제 storage root의 모델 파일(로컬 모델의 cpu/gpu 파일)을 stat하고, `node_modules/.vp-tmp` 아래에 임시 root를 만든다.

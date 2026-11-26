@@ -6064,3 +6064,39 @@
 - 시작할 때 소유 읽기: 벡터 1만 개가 넘으면 node를 seq로 하나씩 찾지 않고 `node_vector_chunks`와
   `nodes_session`을 훑는다. 1단계의 방식은 캐시가 빈 3.3GB DB에서 3.6–7.9초였다(앞 항목의 185ms는 데워진
   상태였다). 훑기는 같은 조건에서 처음 1.4초, 다시 읽으면 145ms였다.
+
+## 하위 작업의 상태 알림을 orchestrator notifications에 둔다 (2026-11-26)
+
+- 계기: 사용자가 알림 넷(끝난 하위 작업, 끝난 백그라운드 작업, 다른 대화가 남긴 메시지, 보드의 호출)이 규칙
+  하나를 따른다고 정했다(2026-11-23). "알림은 대화에 한 번 넣고, 모델이 답하면 전한 것으로 적는다
+  (2026-11-25)"가 그 규칙을 바꿨고, 끝난 백그라운드 작업과 다른 대화가 남긴 메시지가 따른다. 하위 작업의 상태
+  알림은 표 `parent_notifications`에서 옛 방식으로 돌았다. run이 읽는 순간 전한 것으로 적고, 실패하면
+  되돌리고, 재시작할 때 따로 되돌렸다. 실패한 run 뒤에 같은 알림이 새 메시지로 한 번 더 들어갔다.
+- 결정: 하위 작업의 상태 알림을 `orchestrator_notifications`에 둔다. 보낸 쪽은 `task`, payload의 태그는
+  `TaskStatus`다. 2026-11-25의 규칙을 그대로 따른다.
+- 코드:
+  - 표 `parent_notifications`를 없앴다(`taskStatusNotificationsMigration`). 옛 행은 옮겼다. `completed`나
+    `interrupted`로 끝난 run이 들은 행은 전한 것으로, 나머지는 기다리는 것으로 옮겼다(2026-11-23의 기준. 계획
+    037의 단계와 같다). 대화가 없어진 행은 옮기지 않았다.
+  - 알림의 id는 한 번만 넣으려고 쓰던 키(`attempt:<attempt id>:<kind>` 등)다.
+  - `WorkTraceStore`에서 `consumeParentNotifications`, `releaseParentNotifications`,
+    `wakingParentNotificationSessions`, 시작할 때의 되돌리기를 지웠다. `notifyParent`는 상태를 적는
+    transaction 안에서 알림을 넣는다(`taskStatusWrites`).
+  - `AgentChat.start`의 finalizer(계획 036)를 지웠다. 되돌릴 것이 없다.
+- 달라진 동작:
+  - 모델 호출이 실패한 run 뒤에 같은 알림이 새 메시지로 다시 들어가지 않는다.
+  - 사용자가 멈춘 대화는 사용자의 다음 메시지가 올 때까지 하위 작업의 알림도 받지 않는다. 전에는 승인 뒤에
+    이어 도는 run처럼 사용자 메시지 없이 도는 run이 받았다. 2026-11-23의 3번과 같아졌다.
+  - 재시작한 뒤에 `interrupted`(승인 대기)로 멈춘 run이 들은 알림을 다시 넣지 않는다. 전에는 하위 작업의
+    알림만 `completed`가 아닌 run이 들은 것을 모두 되돌렸다.
+  - 한 메시지 안에서 알림의 순서가 넣은 순서가 아니라 넣은 시각, 그다음 id의 순서다. 같은 밀리초에 넣은 둘은
+    id의 글자 순서로 나온다.
+  - 이 방식으로 바꾸기 전에 저장된 알림 메시지에는 id가 없다. 그때 기다리던 알림은 한 번 더 들어갈 수 있다.
+- 내 기본값(사용자가 정한 것이 아니다): 부르는 쪽의 도구 결과가 이미 전하는 상태 변화
+  (`transitionAttempt`의 `deliveredImmediately`)는 알림으로 남기지 않는다. 전에는 처음부터 전한 것으로 적은
+  행을 남겼고, 그 run이 실패하거나 앱이 다시 시작하면 그 행도 되돌려져 다음 run에게 전해졌다. 지금 코드에서
+  해당하는 것은 없어진 subagent의 재시도를 거두는 `stopped` 하나다(`subagents.ts`의 "Subagent no longer
+  exists").
+- 아직 이 방식이 아닌 것: 보드의 호출.
+
+구현: 계획 039.
