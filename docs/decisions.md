@@ -6100,3 +6100,21 @@
 - 아직 이 방식이 아닌 것: 보드의 호출.
 
 구현: 계획 039.
+
+## 기억 읽기는 owner 옆 reader worker 둘이 맡고, 갱신을 기다리지 않는다 (2026-11-27)
+
+`docs/vector-index-design.md` 3단계를 바꿨다. 근거는 그 문서의 "3단계를 바꾼 이유"에 있다.
+
+- native worker 하나가 명령을 한 번에 하나씩 돌려, 읽기가 add·save·lexical commit·coverage count와 다른 읽기
+  뒤에 한 줄로 섰다. 이제 DB가 있으면 reader worker 둘이 `memory-search`와 `memory-coverage`를 맡는다. reader는
+  owner가 private owner key로 공유한 벡터·lexical 색인을 같은 프로세스 안에서 그대로 읽고, SQLite 연결은 따로
+  가진다. 색인을 바꾸는 명령은 owner만 받는다.
+- 벡터 색인과 소유 표는 Rust `RwLock` 하나에 있다. 읽기는 허용 목록과 벡터 단계 동안만 쥔다. turbovec이 색인에
+  없는 id를 허용 목록에서 거부하므로 둘이 같은 잠금 안에 있어야 한다.
+- 읽기는 publication gate를 기다리지 않는다. hit 확인이 commit 전 벡터를 거른다. gate는 갱신끼리의 순서와 실패
+  뒤의 멈춤만 지킨다. snapshot pin 신호와 그 polling 루프는 지웠다.
+- thread pool 대신 worker를 쓴다. libuv pool은 프로세스의 파일 I/O와 같이 쓰고, JS로 된 coverage count는 Rust
+  thread로 옮길 수 없다.
+- 실제 DB 사본(벡터 99,507개)에서 읽기 하나 26–37ms, 8개 동시 112ms(한 줄이면 약 230ms), coverage 옆 읽기
+  25ms. reader마다 메모리를 약 100MB 더 쓴다. reader 하나의 치명 실패는 지금처럼 owner 전체를 다시 열게 한다.
+- 기한 안에서 일부만 읽고 돌려주는 것은 4단계(후보 좁히기)로 옮겼다.
