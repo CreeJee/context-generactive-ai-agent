@@ -12,7 +12,7 @@
 - `VectorIndex` — 정규화된 u64 10진 문자열 id로 키를 거는 양자화 inner-product 인덱스. `new(dimensions, bits)`, static `load(path)`, static `attach(key)`(owner가 `share(key)`한 색인을 읽기만 하는 view), `share(key)`, `reset(dimensions, bits)`(그 자리에서 비운다), `add(vectors: Float32Array, ids)`, `search(query, k, allowedIds?)`, `searchControlled(query, k, token, ownerKey, epoch, requestId, allowedIds?)`, `remove(id)`, `attachOwners(session, ids?)`(벡터마다 부모 node와 그 대화·프로젝트를 읽기 세션으로 읽어 둔다. 읽기의 허용 목록이 여기서 나온다), `save(path) -> number`(바뀐 것만 쓰고 걸린 ms를 돌려준다), `dimensions()`, `bits()`, `size()`, `validateIds(ids)`, `close()`
 - `SearchResult` — `{ ids: string[], scores: number[] }`. `VectorIndex.search` 결과
 - `ControlledSearchResult` — `{ kind: "success"|"cancelled"|"budget-exceeded"|"invalid-input"|"index-failed", ids, scores, nativeWindow: "whole-call", nativeMs }`
-- `SearchControl` — Rust가 소유한 일회성 요청 제어. `new(token, ownerKey, epoch, requestId, remainingMs)`, `token()`(새로 발급한 capability), `snapshotWasPinned()`, `cancel()`, `close()`, static `count()`
+- `SearchControl` — Rust가 소유한 일회성 요청 제어. `new(token, ownerKey, epoch, requestId, remainingMs)`, `token()`(새로 발급한 capability), `cancel()`, `close()`, static `count()`
 - `CacheLease` — 벡터 캐시 디렉터리에 한 프로세스만 쓰도록 OS 파일 락을 잡는 클래스. `new(path)`, `close()`
 - `LexicalIndex` — 노드 원문의 Tantivy 색인(위치 있는 3글자 `ngram`, Lindera 형태소를 Kiwi 규칙으로 고른 `lindera`). factory `open(dir, recover)`·`openReadOnly(dir)`, `instance()`, `reset(instance)`, `apply(documents, removed) -> LexicalApplied`, `size()`, `morphTerms(text)`, `close()`
 - `LexicalApplied` — `{ size, analyzeMs, writeMs, commitMs, reloadMs }`. `LexicalIndex.apply`가 남긴 크기와 단계별 시간
@@ -34,7 +34,6 @@
 - `SearchControl`은 모든 종료 경로에서 `close()`해야 한다. 취소는 worker claim 이후에도 유지된다.
 - `searchControlled`의 control은 입력 검증·복사·큐잉 전에 등록되어야 한다. 시간 제어는 측정 envelope 기반 admission과 협력적 사전·사후 검사이며 스캔 중 선점이 아니다.
 - `SearchControl.token()`은 생성자에 준 엔트로피 seed가 아니라 새로 발급한 capability이며 재사용하지 않는다.
-- `snapshotWasPinned()`는 실제 SQLite pin이 일어났는지를 나타내는 단조 이벤트이고 진행 중인 lease가 아니다. 완료 여부는 따로 추적해야 한다.
 - `NativeReadInput.remainingMs`는 호환용 DTO 필드일 뿐이고, 등록된 `SearchControl`의 deadline이 기준이다.
 - `MemoryReadSession`은 worker마다 하나다. 빌려 쓰는 `VectorIndex`·`LexicalIndex`는 그 worker가 연 것이거나, 같은 프로세스의 owner가 `share`한 것을 `attach`한 view다. view로는 쓰지 못한다.
 - `NativeReadOutput.vectorUnavailable`이 true여도 text/morph 결과는 같은 깨끗한 스냅샷에서 나온 값이다. text 단계가 자기 몫의 시간(남은 예산에서 600ms을 남긴 시점, `TEXT_RESERVE`)을 넘으면 그때까지의 text 결과를 버리고 `textUnavailable=true`로 표시한 뒤 읽기를 계속한다 — 실패가 아니라 성공의 일부다. `failedStage`는 읽기 도중 실패한 단계만 표시하고, 성공했거나 읽기 전에 실패하면 없다.

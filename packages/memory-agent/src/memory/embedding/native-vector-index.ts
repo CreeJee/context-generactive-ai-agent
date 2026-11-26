@@ -473,7 +473,7 @@ const makeNativeVectorIndex = Effect.gen(function* () {
         );
         const id = yield* identity;
         const { publication: current, result } = yield* publication
-          .read(() => owner.startRead(OwnerCommand.cases["memory-search"].make({ ...id, input })))
+          .read(owner.execute(OwnerCommand.cases["memory-search"].make({ ...id, input })))
           .pipe(Effect.mapError(publicationError));
         if (!OwnerReply.guards["memory-result"](result)) return yield* publicationError(result);
         return { publication: current, result: result.result };

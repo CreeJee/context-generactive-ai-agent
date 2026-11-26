@@ -9,7 +9,7 @@
 - `VectorIndex` — napi 클래스. `new(dimensions, bits)`, `share(key)`, 팩토리 `attach(key)`, `reset(dimensions, bits)`, `add(vectors, ids)`, `search(query, k, allowedIds?)`, `searchControlled(query, k, token, ownerKey, epoch, requestId, allowedIds?)`, `remove(id)`, `attachOwners(session, ids?)`, `save(path)`(걸린 ms 반환), 팩토리 `load(path)`, `dimensions()`, `bits()`, `size()`, `close()`, `validateIds(ids)`를 제공한다. `attachOwners`는 `ids`(생략하면 색인의 모든 벡터)의 부모 node seq와 그 node를 가진 것(대화, 대화 밖 node면 프로젝트)을 읽기 세션으로 읽어 들고 있고, 소유가 있는 벡터 수를 돌려준다. id가 1만 개를 넘으면 `node_vector_chunks`와 `nodes`의 대화 색인(`nodes_session`)을 차례로 훑어 읽는다. node를 seq로 하나씩 찾으면 node마다 표 page를 하나씩 읽어 큰 DB에서 몇 초가 걸리기 때문이다. `remove`는 그 소유도 지운다
 - `SearchResult` — napi 객체 `{ ids: string[], scores: f64[] }`. `VectorIndex.search`의 결과다
 - `CacheLease` — napi 클래스. 생성자는 경로의 파일을 열거나 만들고(0o600) 배타적 non-blocking 락을 잡는다. `close()`로 락을 놓는다
-- `SearchControl` — napi 클래스. `new(token, ownerKey, epoch, requestId, remainingMs)`, `token()`, `snapshotWasPinned()`, `cancel()`, `close()`, static `count()`를 제공한다. 요청별 취소와 deadline 상태를 전역 레지스트리에 등록한다
+- `SearchControl` — napi 클래스. `new(token, ownerKey, epoch, requestId, remainingMs)`, `token()`, `cancel()`, `close()`, static `count()`를 제공한다. 요청별 취소와 deadline 상태를 전역 레지스트리에 등록한다
 - `ControlledSearchResult` — napi 객체 `{ kind, ids, scores, nativeWindow, nativeMs }`. `kind`는 Outcome 태그 문자열이다
 - `LexicalIndex` — napi 클래스. factory `open(dir, recover)`는 색인을 열거나 만든다. 열 수 없거나 스키마가 다르면 `recover`일 때만 비운 색인으로 바꾸고, 아니면 "Lexical index layout mismatch"로 실패한다. `instance()`는 마지막 `reset(instance)`가 commit payload로 남긴 build 이름(없으면 null), `apply(documents, removed)`는 `removed`와 각 문서 seq의 문서를 지우고 문서를 더해 한 번 commit한 뒤 크기와 단계별 시간(`LexicalApplied`: analyze/write/commit/reload ms)을 돌려준다. `size()`, `morphTerms(text)`, `close()`를 제공한다. factory `openReadOnly(dir)`는 이미 있는 색인을 writer 없이 연다. 다른 프로세스가 writer를 잡고 있어도 열리고, 연 시점까지의 commit을 본다. 색인이 없거나 스키마가 다르면 만들거나 바꾸지 않고 실패하며, 이렇게 연 색인의 `reset`·`apply`는 "Lexical index is open read-only"로 실패한다
 - `LexicalDocument` — napi 객체 `{ seq: i64, project, text }`
@@ -42,8 +42,6 @@
 - 두 글자 검색어는 그 두 글자로 시작하거나 끝나는 gram(`(?s:ab.|.ab)`)으로 찾는다. 원문 끝이 아니면 시작하는 gram이 있고, 끝이면 끝나는 gram이 있다. 원문 전체가 두 글자인 노드는 찾지 못한다
 - 검색 수집은 segment의 alive bitset으로 지운 문서를 건너뛴다. `Weight::for_each`는 지운 문서를 거르지 않는다
 - `ReadGuard`는 명시적 `finish`로 끝내야 하고, Drop은 unwinding 대비책일 뿐이다. `finish`는 progress handler를 지우고 ROLLBACK한다. autocommit으로 돌아오지 못하면 세션을 쓸 수 없음(`unusable`)으로 표시하고, 이 표시는 이후에도 유지된다
-- snapshot pinned 표시(`mark_snapshot_pinned`)는 `BEGIN DEFERRED`와 실제 읽기가 성공해 SQLite 스냅샷을 고정한 뒤에만 게시한다
-- `snapshotWasPinned`는 요청 로컬의 단조 이벤트일 뿐 스냅샷이 아직 살아 있다는 증거가 아니다. 실제 완료·취소와 owner 순서는 호스트가 따로 관찰해야 한다
 - 읽기 결과에서 vector 엔진 실패만 vector 채널을 degrade한다(`vectorUnavailable=true`). text 단계가 자기 몫의 시간(남은 예산에서 600ms를 남긴 시점)을 넘으면 그때까지의 text 결과를 버리고 `textUnavailable=true`로 mark해 읽기를 계속한다(`read_session.rs`의 `TEXT_RESERVE`). 제어 실패와 SQLite 실패는 원자적으로 실패한다. 호출자는 제어 상태를 먼저 확인해야 한다
 - 실패한 읽기 출력에는 히트가 없다. 끝난 단계의 시간, 지금까지 잰 실행 중 단계의 시간, 그리고 `failedStage`만 담는다
 - 읽기 입력 검증 조건: input/output 예산은 1~1,048,576바이트이다. query는 차원이 일치하고 유한하며 |x|<1e16이어야 하고, 그때 `vectorK`>0이어야 한다. text/morph가 켜져 있으면 해당 k>0이어야 한다. 문자열은 비어 있지 않고 65536바이트 이하여야 한다. 어긴 입력은 `invalid-input`이 된다

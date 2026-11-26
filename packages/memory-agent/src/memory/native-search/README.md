@@ -4,15 +4,14 @@
 
 `native-search`는 Rust/N-API 애드온 `turbovec`의 벡터 인덱스와 SQLite 읽기 세션을 전용 worker thread에 가두는 계층이다. 색인을 쓰는 owner worker 하나와, DB가 있으면 읽기만 하는 reader worker 둘이 있다(`docs/vector-index-design.md` 3단계). reader는 owner가 공유한 색인을 같은 프로세스 안에서 그대로 읽으므로, 읽기가 owner의 쓰기나 다른 읽기 뒤에 줄 서지 않는다. 호스트 쪽 `client.ts`의 `makeNativeOwner`/`NativeOwner`는 Effect RPC(`NativeOwnerRpcs`)로 worker들을 띄운다. 호스트는 worker마다 슬롯 1개를 두고 모두 합쳐 대기 상한 32개로 요청을 받으며, 취소·타임아웃·치명 실패를 관리한다.
 
-`worker.ts`는 worker 진입점이다. 인덱스 add/remove/save/reset/validate/vector-search와 controlled memory-search를 실행한다. `contracts.ts`·`read-protocol.ts`·`worker-protocol.ts`는 전송 계약과 스키마를 제공한다. `publication.ts`는 인덱스 변경과 읽기 스냅샷 pin을 묶는 세대(generation) 게이트를 제공한다. 이 계층은 `packages/memory-agent/src/memory/embedding/native-vector-index.ts`의 `nativeVectorIndexLayer`가 `NativeOwner.layer`와 `NativePublication.layer`를 제공하고 두 서비스를 yield해 사용한다.
+`worker.ts`는 worker 진입점이다. 인덱스 add/remove/save/reset/validate/vector-search와 controlled memory-search를 실행한다. `contracts.ts`·`read-protocol.ts`·`worker-protocol.ts`는 전송 계약과 스키마를 제공한다. `publication.ts`는 인덱스 변경을 한 번에 하나씩 돌리는 세대(generation) 게이트를 제공한다. 읽기는 게이트를 기다리지 않는다. 이 계층은 `packages/memory-agent/src/memory/embedding/native-vector-index.ts`의 `nativeVectorIndexLayer`가 `NativeOwner.layer`와 `NativePublication.layer`를 제공하고 두 서비스를 yield해 사용한다.
 
 ## Interface
 
-- `makeNativeOwner` — `(setup: OwnerSetup, workerFile, connect = rpcTransport)`로 scoped native owner를 만드는 Effect.fn이다. `SecureRandom.SecureRandom`과 `Scope`가 필요하다. 반환 객체는 `NativeOwner` 서비스의 형태가 된다(주석상 `startRead`, `inspect` 등 포함).
+- `makeNativeOwner` — `(setup: OwnerSetup, workerFile, connect = rpcTransport)`로 scoped native owner를 만드는 Effect.fn이다. `SecureRandom.SecureRandom`과 `Scope`가 필요하다. 반환 객체는 `NativeOwner` 서비스의 형태가 된다(`execute`, `cancel`, `inspect` 등).
 - `NativeOwner` — `Context.Service` 클래스(`"memory-agent/memory/native-search/client/NativeOwner"`)다. `static layer(setup, workerFile)`이 `Layer.effect(makeNativeOwner)`에 `NodeCrypto.layer`를 제공한다. 컴포지션 루트용 Layer다.
 - `rpcTransport` — 기본 `OwnerConnect`다. `node:worker_threads` Worker와 `RpcClient.layerProtocolWorker({ size: 1, concurrency: 1 })`로 worker를 띄우고 `Open`으로 준비를 기다린다(15초 startup-timeout).
 - `OwnerTransport` / `OwnerConnect` / `OwnerWorker` — 시작된 owner worker를 호스트가 다루는 인터페이스(`ready`, `send`, `exited`, `terminate`)와 연결 함수 타입이다. 테스트가 transport를 감쌀 때 쓴다.
-- `ReadAdmission` — 읽기 진입 결과 TaggedEnum(`pinned` | `completed{reply}`)이다.
 - `OwnerInspection` — `inspect` 결과 TaggedEnum(`open{queued, active}` | `failed{reason}`)이다.
 - `OwnerSetup` — owner worker 설정 Schema(`epoch`, `dimensions`, `bits`, `cacheDirectory`, 선택 `ownerKey`/`databasePath`/`lexicalDirectory`/`recover`)다.
 - `ReaderSetup` / `WorkerSetup` — reader worker 설정 Schema(`kind: "reader"`, `epoch`, `dimensions`, `ownerKey`, `databasePath`, `lexical`)와 둘의 union이다. 호스트가 owner를 연 뒤 같은 `ownerKey`로 reader를 띄운다.
@@ -30,9 +29,9 @@
 - `NativeSearchClient` — 프레임워크 중립 비동기 전송 인터페이스(`search(request, signal) => Promise<NativeSearchOutcome>`, `close`)다.
 - `nativeSearchBounds` — 고정 한도 상수(admittedSearches 32, activeSearches 1, workBudgetMs 2000, queuedAbortMs 50, activeAbortAcknowledgeMs 100, input/output 1 MiB)다.
 - `QueryVectorChannel` / `MorphTermsChannel` / `TextTermsChannel` / `PublishedGeneration` / `ChannelBudgets` / `RankedChannels` / `RankedVectorHit` / `SearchCoverage` / `NativeStageMetrics` / `NativeSearchFailureCode` — `contracts.ts`의 채널별 TaggedEnum과 결과·지표 타입이다.
-- `makePublication` — `(epoch)`로 세대 게이트를 만든다. `{ withMutation, admitSnapshot, read, inspect }`를 반환한다.
+- `makePublication` — `(epoch)`로 세대 게이트를 만든다. `{ withMutation, read, inspect }`를 반환한다.
 - `NativePublication` — 세대 게이트 `Context.Service` 클래스(`"memory-agent/memory/native-search/publication/NativePublication"`)다. `static layer`가 context의 `NativeOwner` epoch으로 `makePublication`을 호출하므로, 게이트는 소유자 하나에 하나씩 그 소유자와 함께 생긴다.
-- `PublicationFailed` / `PublicationState` — 게이트 오류(`stopped` | `owner-mismatch`)와 상태 TaggedEnum(`ready{generation}` | `stopped{generation}`)이다. `stopped`(멈춤)는 갱신이 실패해 색인이 DB와 어긋났을 수 있는 상태다.
+- `PublicationFailed` / `PublicationState` — 게이트 오류(`stopped`)와 상태 TaggedEnum(`ready{generation}` | `stopped{generation}`)이다. `stopped`(멈춤)는 갱신이 실패해 색인이 DB와 어긋났을 수 있는 상태다.
 - `worker.ts` (worker 진입점) — 최상위 `await runNativeEffect(Layer.launch(server))`로 `RpcServer.layer(NativeOwnerRpcs, { concurrency: 1 })`를 `NodeWorkerRunner` 위에서 실행한다. `workerData`의 `kind`에 따라 owner(`setup`)나 reader(`reader`)로 연다.
 - 하위 디렉터리 없음.
 
@@ -62,7 +61,7 @@
 - worker는 명령마다 `NativeWorker.<명령>` span을 열고, native 호출(`VectorIndex.*`, `LexicalIndex.*`, `MemoryReadSession.search`)마다 하위 span을 둔다. 건수는 숫자 속성으로 단다(수집기는 문자열 속성을 버린다). addon이 돌려준 단계 시간(`LexicalApplied`)은 그 native span 아래 `LexicalIndex.apply.analyze`/`.write`/`.commit`/`.reload` span으로 시작 시각부터 이어 붙인다. 이 span은 `workerObservabilityLayer`가 OTLP로 내보낸다(`OTEL_*`가 있을 때). 인덱스는 GC가 아니라 worker Scope가 닫힐 때 `close`된다. `reset`은 색인을 바꿔 끼우지 않고 그 자리에서 비우므로 reader도 빈 색인을 본다. 읽기 세션은 인덱스보다 먼저 닫힌다.
 - `TransferredVector`는 버퍼를 복사하지 않고 transfer한다. 호스트 명령은 소유한 복사본을 실어 보낸다.
 - Publication: 모델/임베딩 작업은 `withMutation` 밖에서 해야 한다. `withMutation`은 gate permit 1개를 잡고 uninterruptible로 돈다. 실패하면 상태가 `stopped`(멈춤)가 된다. 게이트는 그 실패를 로그로 남기지 않는다. 오류 타입을 아는 mutation 소유자(`embedding/native-vector-index.ts`)가 남긴다. 성공하면 generation이 +1 된다. 멈춘 게이트는 명시적 owner recovery가 새 gate/epoch를 만들기 전까지 읽을 수 없다.
-- `admitSnapshot`은 native 스냅샷 pin 확인 동안에만 gate를 잡는다. 큐 진입 동안이나 검색 전체 동안은 잡지 않는다. `read`는 handle의 epoch가 publication epoch와 다르면 `owner-mismatch`로 실패한다. `mapAdmissionError`는 게이트 자신의 admission 오류만 바꾼다.
+- `read`는 gate permit을 잡지 않는다. 게이트가 멈췄으면 `stopped`로 실패하고, 아니면 그때까지 게시된 generation과 함께 읽기를 돌린다. 읽기는 hit을 자기 SQLite snapshot으로 확인하므로 진행 중인 갱신을 기다리지 않는다(`docs/vector-index-design.md` 6번). `mapAdmissionError`는 게이트 자신의 admission 오류만 바꾼다.
 - `nativeReadInputLogicalBytes`는 문자열을 스캔하기 전에 항목당 고정 오버헤드를 먼저 부과한다. 빈 항목으로 무한 배열을 숨기지 못하게 하려는 것이다.
 - `PublishedGeneration.generation`은 canonical 비음수 10진 문자열이다. 런타임 간 정수 정밀도 손실을 피하기 위해서다.
 

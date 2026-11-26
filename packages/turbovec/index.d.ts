@@ -9,8 +9,6 @@ export declare class SearchControl {
   );
   /** Fresh issued capability, not the constructor's entropy seed; never reused. */
   token(): string;
-  /** Monotonic actual SQLite pin event, NOT an ongoing lease; track completion separately. */
-  snapshotWasPinned(): boolean;
   cancel(): void;
   close(): void;
   static count(): number;

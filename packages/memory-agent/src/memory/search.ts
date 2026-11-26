@@ -665,7 +665,7 @@ const make = (tuning: SearchTuning) =>
       allowed: readonly string[],
       limit: number,
     ) {
-      // Model/network stays in the host, outside the publication admission permit.
+      // Model/network stays in the host, before the native read.
       const embedded = yield* withinWait(
         embedder.embed([input.query], "query"),
         queryEmbedWait,

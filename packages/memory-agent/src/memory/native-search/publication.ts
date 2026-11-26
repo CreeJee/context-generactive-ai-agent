@@ -1,11 +1,11 @@
-import { Context, Data, Effect, Exit, Layer, Ref, Schema, Scope, Semaphore } from "effect";
-import { NativeOwner, type ReadAdmission } from "./client.ts";
+import { Context, Data, Effect, Exit, Layer, Ref, Schema, Semaphore } from "effect";
+import { NativeOwner } from "./client.ts";
 
 export class PublicationFailed extends Schema.TaggedError<
   PublicationFailed,
   { readonly brand: unique symbol }
 >()("PublicationFailed", {
-  reason: Schema.Literals(["stopped", "owner-mismatch"]),
+  reason: Schema.Literals(["stopped"]),
 }) {}
 
 /**
@@ -24,9 +24,9 @@ export const PublicationState = Data.taggedEnum<PublicationState>();
  * be read until explicit owner recovery creates a new gate/epoch. The gate does not log the
  * failure: the mutation's owner names it, since only it knows its errors.
  *
- * admitSnapshot holds the gate only for an actual native BEGIN/read-snapshot pin
- * acknowledgement, NOT queue enqueue or the complete search. The opt-in backend
- * binds read to NativeOwner.startRead; public MemorySearch integration is separate.
+ * Only updates take the gate, so they run one at a time. A read takes no permit: it checks every
+ * hit against its own SQLite snapshot, so a vector added before its rows are committed is dropped
+ * there, and a read never waits for an update (docs/vector-index-design.md, 6).
  */
 export const makePublication = Effect.fn("NativePublication.make")(function* (epoch: string) {
   const gate = yield* Semaphore.make(1);
@@ -78,51 +78,11 @@ export const makePublication = Effect.fn("NativePublication.make")(function* (ep
     );
   }
 
-  const admitSnapshot = <A, E, R>(
-    pin: (publication: {
-      readonly epoch: string;
-      readonly generation: number;
-    }) => Effect.Effect<A, E, R>,
-  ) =>
-    gate.withPermits(1)(
-      Effect.gen(function* () {
-        const publication = yield* current;
-        return yield* pin(publication);
-      }),
-    );
+  /** Runs `run` unless the gate stopped, with the generation published when it started. */
+  const read = <A, E, R>(run: Effect.Effect<A, E, R>) =>
+    Effect.zipWith(current, run, (publication, result) => ({ publication, result }));
 
-  const read = <A, E, R>(
-    start: (publication: { readonly epoch: string; readonly generation: number }) => Effect.Effect<
-      {
-        readonly epoch: string;
-        readonly admission: Effect.Effect<ReadAdmission, E, R>;
-        readonly result: Effect.Effect<A, E, R>;
-      },
-      E,
-      R | Scope.Scope
-    >,
-  ) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const admitted = yield* admitSnapshot((publication) =>
-          Effect.gen(function* () {
-            const handle = yield* start(publication).pipe(
-              Effect.filterOrFail(
-                (handle) => handle.epoch === publication.epoch,
-                () => PublicationFailed.make({ reason: "owner-mismatch" }),
-              ),
-            );
-            const admission = yield* handle.admission;
-            return { publication, handle, admission };
-          }),
-        );
-        // The permit has been released, but the actual read remains owned by this Scope.
-        const result = yield* admitted.handle.result;
-        return { publication: admitted.publication, admission: admitted.admission, result };
-      }),
-    );
-
-  return { withMutation, admitSnapshot, read, inspect: Ref.get(state) };
+  return { withMutation, read, inspect: Ref.get(state) };
 });
 
 /** The gate of the native owner in context: made with that owner, for its epoch only. */

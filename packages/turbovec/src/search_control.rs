@@ -66,7 +66,6 @@ pub(crate) struct RequestState {
     token: String,
     cancelled: AtomicBool,
     claimed: AtomicBool,
-    snapshot_pinned: AtomicBool,
     registered: Instant,
     deadline: Instant,
     owner_key: String,
@@ -76,9 +75,6 @@ pub(crate) struct RequestState {
 impl RequestState {
     pub(crate) fn cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
-    }
-    pub(crate) fn mark_snapshot_pinned(&self) {
-        self.snapshot_pinned.store(true, Ordering::Release);
     }
     /// Time since the host registered the request, which starts its budget.
     pub(crate) fn since_registered(&self) -> Duration {
@@ -118,12 +114,6 @@ impl SearchControl {
     #[napi]
     pub fn token(&self) -> String {
         self.token.clone()
-    }
-    /// Request-local monotonic event, NOT proof the snapshot is still alive.
-    /// Host must separately observe actual completion/cancellation and owner order.
-    #[napi]
-    pub fn snapshot_was_pinned(&self) -> bool {
-        self.state.snapshot_pinned.load(Ordering::Acquire)
     }
     #[napi]
     pub fn cancel(&self) {
@@ -175,7 +165,6 @@ fn register(
         token: token.clone(),
         cancelled: AtomicBool::new(false),
         claimed: AtomicBool::new(false),
-        snapshot_pinned: AtomicBool::new(false),
         registered,
         deadline: registered + Duration::from_secs_f64(remaining_ms / 1000.0),
         owner_key,

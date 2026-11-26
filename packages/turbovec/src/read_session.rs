@@ -510,10 +510,6 @@ impl MemoryReadSession {
                 })
                 .map_err(|_| Outcome::ReadFailed)?;
             out.sqlite_executions += 1;
-            // Publish only after BEGIN and a successful real read pinned SQLite's snapshot.
-            // The owning worker still runs this call synchronously: queued index writes
-            // cannot overtake the read. Host must track completion separately.
-            cell.mark_snapshot_pinned();
             // The lexical searcher is fixed here too. Its hits are checked against the snapshot.
             let lexical = lexical
                 .as_ref()

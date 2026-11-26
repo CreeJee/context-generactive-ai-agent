@@ -11,7 +11,6 @@ import {
   Duration,
   Effect,
   Exit,
-  Fiber,
   FiberMap,
   HashMap,
   Layer,
@@ -36,11 +35,6 @@ import {
 } from "./worker-protocol.ts";
 import { nativeReadInputLogicalBytes } from "./read-protocol.ts";
 
-export type ReadAdmission = Data.TaggedEnum<{
-  pinned: {};
-  completed: { readonly reply: OwnerReply };
-}>;
-export const ReadAdmission = Data.taggedEnum<ReadAdmission>();
 /** What `inspect` reports: the open owner's queued and active jobs, or why it failed. */
 export type OwnerInspection = Data.TaggedEnum<{
   open: { readonly queued: number; readonly active: number };
@@ -52,14 +46,9 @@ type ControlledCommand = (typeof OwnerCommand.cases)[
   | "vector-search-controlled"]["Type"];
 type RequestControl = {
   readonly token: string;
-  snapshotWasPinned(): boolean;
   cancel(): void;
   close(): void;
 };
-/** A native SearchControl whose prototype reports whether a read pinned its snapshot. */
-const SnapshotPinningControl = Schema.Struct({
-  snapshotWasPinned: Schema.declare(Predicate.isFunction),
-});
 /**
  * One worker as the host drives it: its one slot, and the signal that the job holding the slot
  * is past its reply deadline.
@@ -427,7 +416,6 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
   const executeRegistered = Effect.fnUntraced(function* (
     command: OwnerCommand,
     control: Option.Option<RequestControl>,
-    admission?: Deferred.Deferred<ReadAdmission, NativeOwnerFailed>,
   ) {
     // Typed caller preflight must precede Schema's array decoding and owned copies.
     if (
@@ -519,33 +507,6 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
               }),
           ).pipe(Effect.flatten);
           yield* FiberMap.run(jobs, input.requestId, run(job));
-          if (admission !== undefined && Option.isSome(control)) {
-            const observed = control.value;
-            yield* Effect.forkScoped(
-              restore(
-                Effect.gen(function* () {
-                  while (true) {
-                    const terminal = yield* Deferred.poll(result);
-                    if (Option.isSome(terminal)) {
-                      const outcome = yield* Effect.exit(terminal.value);
-                      yield* Exit.match(outcome, {
-                        onSuccess: (reply) =>
-                          Deferred.succeed(admission, ReadAdmission.completed({ reply })),
-                        onFailure: (cause) => Deferred.failCause(admission, cause),
-                      });
-                      return;
-                    }
-                    if (yield* Effect.sync(() => observed.snapshotWasPinned())) {
-                      yield* Deferred.succeed(admission, ReadAdmission.pinned());
-                      return;
-                    }
-                    // Bounded Effect sleep, not busy spin or same-worker callback.
-                    yield* Effect.sleep("1 millis");
-                  }
-                }),
-              ),
-            );
-          }
           return yield* restore(
             Deferred.await(result).pipe(
               Effect.onInterrupt(() =>
@@ -576,10 +537,7 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
       ),
     );
   });
-  const execute = Effect.fn("NativeOwner.execute")(function* (
-    command: OwnerCommand,
-    admission?: Deferred.Deferred<ReadAdmission, NativeOwnerFailed>,
-  ) {
+  const execute = Effect.fn("NativeOwner.execute")(function* (command: OwnerCommand) {
     const token = yield* crypto.uuidV4();
     const controlled = (budget: number) =>
       requireRuntime("turbovec").pipe(
@@ -590,12 +548,6 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
               const binding = turbovec.loadTurbovec();
               if (!Predicate.isFunction(binding.SearchControl))
                 throw NativeOwnerFailed.make({ reason: "native-incompatible" });
-              // ABI capability inspection only; the method is never invoked without its receiver.
-              if (
-                admission !== undefined &&
-                !Schema.is(SnapshotPinningControl)(binding.SearchControl.prototype)
-              )
-                throw NativeOwnerFailed.make({ reason: "native-incompatible" });
               const control = new binding.SearchControl(
                 token,
                 ownerKey,
@@ -605,7 +557,6 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
               );
               return Option.some<RequestControl>({
                 token: control.token(),
-                snapshotWasPinned: () => control.snapshotWasPinned(),
                 cancel: () => control.cancel(),
                 close: () => control.close(),
               });
@@ -631,7 +582,7 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
         "lexical-apply": () => Effect.succeedNone,
         "lexical-reset": () => Effect.succeedNone,
       }),
-      (control) => executeRegistered(command, control, admission),
+      (control) => executeRegistered(command, control),
       (control) =>
         Effect.transposeOption(Option.map(control, (opened) => Effect.sync(() => opened.close()))),
     );
@@ -646,28 +597,8 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
     // Direct main-thread native atomic store, never a message to the blocked worker.
     yield* Effect.sync(() => control.cancel());
   });
-  const startRead = Effect.fn("NativeOwner.startRead")(function* (
-    command: (typeof OwnerCommand.cases)["memory-search"]["Type"],
-  ) {
-    const admission = yield* Deferred.make<ReadAdmission, NativeOwnerFailed>();
-    const fiber = yield* Effect.forkScoped(
-      execute(command, admission).pipe(
-        Effect.onExit((exit) =>
-          Exit.isFailure(exit)
-            ? Deferred.failCause(admission, exit.cause)
-            : Deferred.succeed(admission, ReadAdmission.completed({ reply: exit.value })),
-        ),
-      ),
-    );
-    return {
-      epoch: validated.epoch,
-      admission: Deferred.await(admission),
-      result: Fiber.join(fiber),
-    };
-  });
   return {
     execute,
-    startRead,
     cancel,
     epoch: validated.epoch,
     threadId: transport.ready.threadId,
