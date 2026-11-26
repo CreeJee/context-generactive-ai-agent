@@ -12,18 +12,24 @@ import { finishedRun, type RunEnd } from "../loop/store.ts";
 import { optionalProperty } from "../optional-property.ts";
 import type { SessionDispatch } from "../sessions/dispatches.ts";
 import type { BackgroundEnd } from "../tools/background.ts";
-import type { ParentNotificationView } from "../work-trace/store.ts";
+import type { TaskStatusNotification } from "../work-trace/task-status.ts";
 
 /**
  * What a parent run has not been told yet: the status notifications of its Work Trace tasks, and
  * the ends of its background tasks.
  */
 export interface TaskNotifications {
-  readonly tasks: ReadonlyArray<ParentNotificationView>;
+  readonly tasks: ReadonlyArray<TaskStatusNotification>;
   readonly background: ReadonlyArray<BackgroundEnd>;
 }
 
 export const noTaskNotifications: TaskNotifications = { tasks: [], background: [] };
+
+/** The ids of the orchestrator notifications that `notifications` tells. */
+export const toldIds = ({ tasks, background }: TaskNotifications) => [
+  ...tasks.map((change) => change.id),
+  ...background.map((end) => end.taskId),
+];
 
 export const hasTaskNotifications = ({ tasks, background }: TaskNotifications) =>
   tasks.length > 0 || background.length > 0;
@@ -51,7 +57,7 @@ export const endedTasks = ({
 export const notificationLines = ({ tasks, background }: TaskNotifications) => [
   ...tasks.map(
     (notification) =>
-      `Notification ${notification.id}; task ${notification.taskId}; ${notification.kind}: ${notification.summary}; ${JSON.stringify(notification.payload)}`,
+      `Notification ${notification.id}; task ${notification.taskId}; ${notification.kind}: ${notification.summary}; ${JSON.stringify(notification.detail)}`,
   ),
   ...background.map(
     (end) =>
@@ -155,7 +161,7 @@ function notificationsMessageBody(id: string, notifications: TaskNotifications) 
         ...notificationLines(notifications),
       ].join("\n"),
     ]),
-    telling(notifications.background.map((end) => end.taskId)),
+    telling(toldIds(notifications)),
   );
 }
 

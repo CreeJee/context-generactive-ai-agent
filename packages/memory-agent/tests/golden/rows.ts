@@ -252,8 +252,13 @@ const conversationRows = Effect.fnUntraced(function* (sessionId: string) {
       sessionId,
     ),
     notifications: yield* rows(
-      `SELECT task_id, parent_run_id, kind, summary, payload, delivered_to_run_id
-       FROM parent_notifications WHERE origin_session_id = ? ORDER BY seq`,
+      `SELECT json_extract(payload, '$.taskId') AS task_id,
+         json_extract(payload, '$.parentRunId') AS parent_run_id,
+         json_extract(payload, '$.kind') AS kind, json_extract(payload, '$.summary') AS summary,
+         json_extract(payload, '$.detail') AS payload, delivered_run_id AS delivered_to_run_id
+       FROM orchestrator_notifications
+       WHERE session_id = ? AND sender = 'task' AND json_extract(payload, '$._tag') = 'TaskStatus'
+       ORDER BY rowid`,
       sessionId,
     ),
     // `seq` counts across conversations, so only its order is compared.

@@ -137,6 +137,7 @@ import {
   notificationLines,
   orchestratorMessage,
   telling,
+  toldIds,
 } from "./orchestrator-message.ts";
 import { taskNotifications } from "./task-notifications.ts";
 import { dispatchNotifications } from "./dispatch-notifications.ts";
@@ -694,7 +695,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const runStore = yield* RunStore;
   const crypto = yield* SecureRandom.SecureRandom;
   const notifications = taskNotifications({
-    trace: workTrace,
     notifications: orchestratorNotifications,
     crypto,
   });
@@ -1303,18 +1303,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         ? internalFollowup
         : null;
       return Effect.gen(function* () {
-        // What an early end must undo. The run takes over the cancellation, the steering and the
-        // Work Trace notifications it took once it is following its log.
+        // What an early end must undo. The run takes over the cancellation and the steering once it
+        // is following its log.
         const claimedNext = yield* Ref.make<string | null>(null);
         const cancellationToRelease = yield* Ref.make<Effect.Effect<void>>(Effect.void);
         const stopSteeringOnExit = yield* Ref.make<Effect.Effect<void>>(Effect.void);
-        const notificationsToRelease = yield* Ref.make<Effect.Effect<void>>(Effect.void);
         yield* Effect.addFinalizer(() =>
           Effect.flatMap(Ref.get(claimedNext), (next) =>
             isTruthy(next) ? queue.releaseNext(sessionId, next) : Effect.void,
           ).pipe(Effect.catch(logFailure("Queued next turn was not released"))),
         );
-        yield* Effect.addFinalizer(() => Effect.flatten(Ref.get(notificationsToRelease)));
         yield* Effect.addFinalizer(() => Effect.flatten(Ref.get(stopSteeringOnExit)));
         yield* Effect.addFinalizer(() => Effect.flatten(Ref.get(cancellationToRelease)));
         const { projectId, agent: external, title } = yield* sessions.get(sessionId);
@@ -1759,8 +1757,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         /**
          * The run's context prompts, the same on either loop: report evidence, skills, delegation,
          * workspace and workflow, the subagent notifications since the last run and why an
-         * automatic run started. Taking the Work Trace notifications marks them delivered to this
-         * run; a background end waits until the model answers the message that tells it.
+         * automatic run started. A notification waits until the model answers the message that
+         * tells it.
          */
         const runContext = Effect.fn("AgentChat.runContext")(function* (
           skillset: Omit<SkillToolset, "tools">,
@@ -1832,18 +1830,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           const parentNotifications = yield* EffectArray.match(followup, {
             onEmpty: () => Effect.succeed(noTaskNotifications),
             onNonEmpty: () =>
-              Ref.set(
-                notificationsToRelease,
-                notifications
-                  .release(sessionId, runId)
-                  .pipe(
-                    Effect.catch(
-                      logFailure("Notifications of a run that did not start not given back"),
-                    ),
-                  ),
-              ).pipe(
-                Effect.andThen(runStore.thread(sessionId)),
-                Effect.flatMap((stored) => notifications.consume(sessionId, runId, stored)),
+              Effect.flatMap(runStore.thread(sessionId), (stored) =>
+                notifications.consume(sessionId, stored),
               ),
           });
           const toldLines = hasTaskNotifications(parentNotifications)
@@ -1867,7 +1855,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                     [...texts, ...(toldLines.length === 0 ? [] : [toldLines.join("\n")])],
                   ),
                 ),
-                telling(parentNotifications.background.map((end) => end.taskId)),
+                telling(toldIds(parentNotifications)),
               ),
           });
           const prompts = [
@@ -2383,7 +2371,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         });
         yield* Ref.set(cancellationToRelease, Effect.void);
         yield* Ref.set(stopSteeringOnExit, Effect.void);
-        yield* Ref.set(notificationsToRelease, Effect.void);
         return ChatStart.Following({ log, after: "-1" });
       }).pipe(
         Effect.scoped,

@@ -2,9 +2,8 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { Array as EffectArray } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { isBoardRun } from "../kanban/board-run.ts";
-import { deliveryFor } from "../agent/notification-delivery.ts";
+import { deliveryFor, NotificationDelivery } from "../agent/notification-delivery.ts";
 import { logFailure } from "../runtime/logged-failures.ts";
-import { optionalProperty } from "../optional-property.ts";
 import {
   DateTime,
   Clock,
@@ -20,6 +19,8 @@ import {
 import { SecureRandom } from "effect/crypto";
 import { SqlClient, type Statement } from "effect/sql";
 import { JsonValue } from "../json.ts";
+import { taskStatusWrites } from "../sessions/orchestrator-notifications.ts";
+import type { TaskStatusKind } from "./task-status.ts";
 import {
   ArtifactKind,
   ArtifactLocator,
@@ -101,6 +102,7 @@ const RecoveryRow = Schema.Struct({
   origin_session_id: Schema.NullOr(Schema.String),
   agent_id: Schema.NullOr(Schema.String),
   parent_run_id: Schema.String,
+  delivery: NotificationDelivery,
 });
 const PendingToolsRow = Schema.Array(Schema.Struct({ tool_call_id: Schema.String }));
 
@@ -124,19 +126,9 @@ const LostAttemptRow = Schema.Struct({
   origin_session_id: Schema.NullOr(Schema.String),
 });
 const NotificationTaskRow = Schema.Struct({
-  project_id: Schema.String,
   origin_session_id: Schema.NullOr(Schema.String),
   parent_run_id: Schema.String,
-});
-const ParentNotificationRow = Schema.Struct({
-  id: Schema.String,
-  task_id: Schema.String,
-  parent_run_id: Schema.String,
-  agent_name: Schema.NullOr(Schema.String),
-  kind: Schema.String,
-  summary: Schema.String,
-  payload: Schema.String,
-  created_at: Schema.Finite,
+  delivery: NotificationDelivery,
 });
 const SequenceRow = Schema.Struct({ sequence: Schema.Finite });
 const CursorRow = Schema.Struct({ seq: Schema.Finite });
@@ -285,9 +277,6 @@ const decodeStringArray = Schema.decodeUnknownEffect(
 const decodeFailure = Schema.decodeUnknownEffect(Schema.fromJsonString(AttemptFailure));
 const encodeFailure = Schema.encodeEffect(Schema.fromJsonString(AttemptFailure));
 const decodeNotificationTask = Schema.decodeUnknownEffect(NotificationTaskRow);
-const decodeParentNotificationRows = Schema.decodeUnknownEffect(
-  Schema.Array(ParentNotificationRow),
-);
 const decodeSequence = Schema.decodeUnknownEffect(SequenceRow);
 const decodeCursor = Schema.decodeUnknownEffect(CursorRow);
 const decodeId = Schema.decodeUnknownEffect(IdRow);
@@ -306,9 +295,6 @@ const decodeRunIds = Schema.decodeUnknownEffect(
   Schema.Array(Schema.Struct({ run_id: Schema.String })),
 );
 const decodePendingLifecycleRows = Schema.decodeUnknownEffect(Schema.Array(PendingLifecycleRow));
-const decodeOriginSessions = Schema.decodeUnknownEffect(
-  Schema.Array(Schema.Struct({ origin_session_id: Schema.String })),
-);
 const decodeArtifactLocator = Schema.decodeUnknownEffect(Schema.fromJsonString(ArtifactLocator));
 const decodeRunResult = Schema.decodeUnknownEffect(
   Schema.Struct({
@@ -329,19 +315,6 @@ export type {
   TraceTaskView,
   TraceTreeSnapshot,
 } from "./contracts.ts";
-
-export interface ParentNotificationView {
-  readonly id: string;
-  readonly taskId: string;
-  /** The run that started the task: a chat run, or one of the kanban board's (`isBoardRun`). */
-  readonly parentRunId: string;
-  /** The task's agent, such as a named helper; null once the task is gone. */
-  readonly agentName: string | null;
-  readonly kind: string;
-  readonly summary: string;
-  readonly payload: JsonValue;
-  readonly createdAt: number;
-}
 
 /** What a retry tells the new attempt. The child's own transcript shows what already ran. */
 export interface ResumeContext {
@@ -532,11 +505,7 @@ const make = Effect.gen(function* () {
   /** What a write changed, as the connection reports it. */
   const run = <A>(statement: Statement.Statement<A>) =>
     Effect.flatMap(statement.raw, decodeRunResult);
-  // A crash after prompt delivery but before parent completion must not lose operational
-  // notifications. No current-process runs exist while this singleton is being constructed.
-  yield* run(sql`UPDATE parent_notifications SET delivered_to_run_id = NULL, delivered_at = NULL
-    WHERE delivered_to_run_id IS NOT NULL AND NOT EXISTS
-      (SELECT 1 FROM chat_runs WHERE run_id = delivered_to_run_id AND status = 'completed')`);
+  const taskStatus = taskStatusWrites(sql);
 
   const assertHandle = Effect.fnUntraced(function* (handle: AttemptHandle) {
     const found = yield* first(sql`SELECT 1 FROM agent_run_attempts
@@ -680,7 +649,7 @@ const make = Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     const attempts = yield* decodeRecoveryRows(
       yield* sql`SELECT a.id, a.task_id, t.project_id, t.origin_session_id, t.agent_id,
-          t.parent_run_id
+          t.parent_run_id, t.delivery
         FROM agent_run_attempts a JOIN work_tasks t ON t.id = a.task_id
         WHERE a.status IN ('queued', 'running', 'waiting', 'blocked')`,
     );
@@ -728,14 +697,23 @@ const make = Effect.gen(function* () {
           yield* run(sql`UPDATE work_tasks
             SET status = ${status}, active_attempt_id = NULL, updated_at = ${now}
             WHERE id = ${row.task_id}`);
-          yield* run(sql`INSERT INTO parent_notifications
-            (id, project_id, task_id, origin_session_id, parent_run_id, kind, summary, payload,
-             idempotency_key, created_at)
-            VALUES (${yield* crypto.uuidV4()}, ${row.project_id}, ${row.task_id},
-              ${row.origin_session_id}, ${row.parent_run_id}, 'interrupted', ${summary},
-              ${yield* encodeJson({ attemptId: row.id, failure })},
-              ${`recovery:${row.id}:interrupted`}, ${now})
-            ON CONFLICT(idempotency_key) DO NOTHING`);
+          yield* Option.match(Option.fromNullishOr(row.origin_session_id), {
+            onNone: () => Effect.void,
+            onSome: (sessionId) =>
+              taskStatus.putOnce({
+                id: `recovery:${row.id}:interrupted`,
+                sessionId,
+                delivery: row.delivery,
+                payload: {
+                  _tag: "TaskStatus",
+                  taskId: row.task_id,
+                  parentRunId: row.parent_run_id,
+                  kind: "interrupted",
+                  summary,
+                  detail: { attemptId: row.id, failure },
+                },
+              }),
+          });
         }),
       { discard: true },
     );
@@ -849,80 +827,44 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  /**
+   * Leaves a task's status change for its conversation's model in the orchestrator's notifications,
+   * once per `idempotencyKey`: the key is the notification's id, and a key left before stays as it
+   * is. A task whose conversation is gone has no one to tell. Returns the id, or null when the
+   * conversation is gone.
+   */
   const notifyParent = (input: {
     readonly taskId: string;
-    readonly kind:
-      | "stopped"
-      | "interrupted"
-      | "archived"
-      | "deleted"
-      | "resume_blocked"
-      | "resumed"
-      | "completed"
-      | "failed";
+    readonly kind: TaskStatusKind;
     readonly summary: string;
     readonly idempotencyKey: string;
     readonly payload?: Readonly<Record<string, JsonValue>>;
-    readonly deliveredImmediately?: boolean;
-    readonly deliveredToRunId?: string;
   }) =>
     Effect.gen(function* () {
       const task = yield* decodeNotificationTask(
-        yield* first(sql`SELECT project_id, origin_session_id, parent_run_id FROM work_tasks
+        yield* first(sql`SELECT origin_session_id, parent_run_id, delivery FROM work_tasks
           WHERE id = ${input.taskId}`),
       );
-      const now = yield* Clock.currentTimeMillis;
-      const id = yield* crypto.uuidV4();
-      const payload = yield* encodeJson(input.payload ?? {});
-      const deliveredToRunId =
-        input.deliveredImmediately === true ? (input.deliveredToRunId ?? task.parent_run_id) : null;
-      const result = yield* run(sql`INSERT INTO parent_notifications
-        (id, project_id, task_id, origin_session_id, parent_run_id, kind, summary, payload,
-         idempotency_key, delivered_to_run_id, delivered_at, created_at)
-        VALUES (${id}, ${task.project_id}, ${input.taskId}, ${task.origin_session_id},
-          ${task.parent_run_id}, ${input.kind}, ${input.summary}, ${payload},
-          ${input.idempotencyKey}, ${deliveredToRunId},
-          ${input.deliveredImmediately === true ? now : null}, ${now})
-        ON CONFLICT(idempotency_key) DO NOTHING`);
-      return result.changes === 1 ? id : null;
-    }).pipe(sql.withTransaction);
-
-  const releaseParentNotifications = (sessionId: string, deliveredToRunId: string) =>
-    Effect.map(
-      run(sql`UPDATE parent_notifications SET delivered_to_run_id = NULL, delivered_at = NULL
-        WHERE origin_session_id = ${sessionId} AND delivered_to_run_id = ${deliveredToRunId}`),
-      (result) => result.changes,
-    );
-
-  const consumeParentNotifications = (sessionId: string, deliveredToRunId: string) =>
-    Effect.gen(function* () {
-      const rows = yield* decodeParentNotificationRows(
-        yield* sql`SELECT n.id, n.task_id, n.parent_run_id, t.agent_name, n.kind, n.summary, n.payload,
-          n.created_at
-          FROM parent_notifications n LEFT JOIN work_tasks t ON t.id = n.task_id
-          WHERE n.origin_session_id = ${sessionId} AND n.delivered_at IS NULL ORDER BY n.seq`,
-      );
-      const now = yield* Clock.currentTimeMillis;
-      const claimed = yield* Effect.filter(rows, (row) =>
-        Effect.map(
-          run(sql`UPDATE parent_notifications
-            SET delivered_to_run_id = ${deliveredToRunId}, delivered_at = ${now}
-            WHERE id = ${row.id} AND delivered_at IS NULL`),
-          (result) => result.changes === 1,
-        ),
-      );
-      return yield* Effect.forEach(claimed, (row) =>
-        Effect.map(decodePayload(row.payload), (payload): ParentNotificationView => ({
-          id: row.id,
-          taskId: row.task_id,
-          parentRunId: row.parent_run_id,
-          agentName: row.agent_name,
-          kind: row.kind,
-          summary: row.summary,
-          payload,
-          createdAt: row.created_at,
-        })),
-      );
+      return yield* Option.match(Option.fromNullishOr(task.origin_session_id), {
+        onNone: () => Effect.succeed(null),
+        onSome: (sessionId) =>
+          Effect.as(
+            taskStatus.putOnce({
+              id: input.idempotencyKey,
+              sessionId,
+              delivery: task.delivery,
+              payload: {
+                _tag: "TaskStatus",
+                taskId: input.taskId,
+                parentRunId: task.parent_run_id,
+                kind: input.kind,
+                summary: input.summary,
+                detail: input.payload ?? {},
+              },
+            }),
+            input.idempotencyKey,
+          ),
+      });
     }).pipe(sql.withTransaction);
 
   const startAttempt = (input: StartAttemptInput) =>
@@ -1024,8 +966,11 @@ const make = Effect.gen(function* () {
       readonly reason: AttemptFailureReason;
       readonly stage?: AttemptFailureStage;
     } | null,
+    /**
+     * Whether the tool result of the call that made the change tells the parent already. Then no
+     * notification is left for it.
+     */
     deliveredImmediately = true,
-    deliveredToRunId?: string,
     detail: Readonly<Record<string, JsonValue>> = {},
   ) =>
     Effect.gen(function* () {
@@ -1067,7 +1012,7 @@ const make = Effect.gen(function* () {
       });
       const notificationKind = Option.filter(
         Option.fromNullishOr(notificationForAttempt[status]),
-        (kind) => kind !== "resumed" || handle.attemptNumber > 1,
+        (kind) => !deliveredImmediately && (kind !== "resumed" || handle.attemptNumber > 1),
       );
       yield* Option.match(notificationKind, {
         onNone: () => Effect.void,
@@ -1081,8 +1026,6 @@ const make = Effect.gen(function* () {
               recorded === null
                 ? { attemptId: handle.id }
                 : { attemptId: handle.id, failure: recorded },
-            deliveredImmediately,
-            ...optionalProperty("deliveredToRunId", deliveredToRunId),
           }),
       });
       return appended;
@@ -1440,8 +1383,8 @@ const make = Effect.gen(function* () {
     const nodes = (yield* run(sql`DELETE FROM nodes WHERE session_id IN (${tree})`)).changes;
     yield* run(sql`DELETE FROM background_tasks WHERE session_id = ${sessionId}`);
     // Its Work Trace goes with it, also the tombstones of the tasks deleted above: no page shows a
-    // deleted conversation's tasks. Their attempts, events, artifacts and notifications cascade, and
-    // so do the receipts of their lifecycle operations.
+    // deleted conversation's tasks. Their attempts, events and artifacts cascade, and so do the
+    // receipts of their lifecycle operations. Their notifications go with the session's row.
     const tasks = (yield* run(sql`DELETE FROM work_tasks WHERE origin_session_id = ${sessionId}`))
       .changes;
     yield* run(sql`DELETE FROM lifecycle_operations
@@ -1671,9 +1614,7 @@ const make = Effect.gen(function* () {
       WHERE task_id = ${taskId}`)).changes;
     const events = (yield* run(sql`DELETE FROM run_events WHERE task_id = ${taskId}`)).changes;
     yield* run(sql`UPDATE agent_invocations SET message = '' WHERE task_id = ${taskId}`);
-    yield* run(sql`UPDATE parent_notifications
-      SET summary = 'Deleted task lifecycle notification', payload = '{}'
-      WHERE task_id = ${taskId}`);
+    yield* taskStatus.redact(taskId);
     const receiptId = yield* crypto.uuidV4();
     const purgedCounts = yield* encodeJson({ artifacts, events });
     const retainedKinds = yield* encodeJson(["task_tombstone", "attempt_lineage"]);
@@ -2061,7 +2002,6 @@ const make = Effect.gen(function* () {
     recordSteer,
     appendEvent,
     notifyParent,
-    consumeParentNotifications,
     holdParentNotifications: (sessionId: string) =>
       Effect.flatMap(Clock.currentTimeMillis, (now) =>
         run(sql`INSERT INTO parent_notification_holds (session_id, held_at)
@@ -2077,21 +2017,6 @@ const make = Effect.gen(function* () {
         first(sql`SELECT 1 FROM parent_notification_holds WHERE session_id = ${sessionId}`),
         (row) => row !== undefined,
       ),
-    /**
-     * Durable wake-up source: sessions with a notification of a `wake` task. Reading does not mark
-     * a notification delivered.
-     */
-    wakingParentNotificationSessions:
-      sql`SELECT DISTINCT n.origin_session_id FROM parent_notifications n
-        JOIN work_tasks t ON t.id = n.task_id AND t.delivery = 'wake'
-        WHERE n.delivered_at IS NULL AND n.origin_session_id IS NOT NULL
-          AND NOT EXISTS (
-            SELECT 1 FROM parent_notification_holds h WHERE h.session_id = n.origin_session_id
-          )`.pipe(
-        Effect.flatMap(decodeOriginSessions),
-        Effect.map((rows) => rows.map((row) => row.origin_session_id)),
-      ),
-    releaseParentNotifications,
     transitionAttempt,
     beat,
     toolStarted,

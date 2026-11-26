@@ -324,10 +324,9 @@ const settled = (sessionId: string) =>
          WHERE t.origin_session_id = ${sessionId}
            AND a.status IN ('queued', 'running', 'waiting', 'blocked'))
         + (SELECT count(*) FROM chat_runs WHERE thread_id = ${sessionId} AND status = 'running')
-        + (SELECT count(*) FROM parent_notifications n
-           WHERE n.origin_session_id = ${sessionId} AND NOT EXISTS (
-             SELECT 1 FROM chat_runs r
-             WHERE r.run_id = n.delivered_to_run_id AND r.status <> 'running')) AS busy`.pipe(
+        + (SELECT count(*) FROM orchestrator_notifications n
+           WHERE n.session_id = ${sessionId} AND n.sender = 'task'
+             AND json_extract(n.payload, '$._tag') = 'TaskStatus' AND n.state = 'waiting') AS busy`.pipe(
       Effect.flatMap((rows) => Schema.decodeUnknownEffect(Busy)(rows[0])),
       Effect.repeat({ schedule: Schedule.spaced("1 second"), while: ({ busy }) => busy > 0 }),
     ),

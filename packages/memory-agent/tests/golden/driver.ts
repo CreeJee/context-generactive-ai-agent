@@ -89,9 +89,9 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
     ),
   );
   /**
-   * No run of the conversation or of its subagents is going, no child attempt is going, every
-   * child's notification reached a run that ended, no steered message waits for the server to send
-   * it, and the agent agrees.
+   * No run of the conversation or of its subagents is going, no child attempt is going, no child's
+   * status change waits to be told, no steered message waits for the server to send it, and the
+   * agent agrees.
    */
   const settled = waitUntil(
     Effect.zipWith(
@@ -101,10 +101,9 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
               OR thread_id IN (SELECT 'subagent-' || id FROM subagents WHERE session_id = ?)))
            + (SELECT count(*) FROM agent_run_attempts a JOIN work_tasks t ON t.id = a.task_id
               WHERE t.origin_session_id = ? AND a.status IN ('queued', 'running', 'waiting', 'blocked'))
-           + (SELECT count(*) FROM parent_notifications n
-              WHERE n.origin_session_id = ? AND NOT EXISTS (
-                SELECT 1 FROM chat_runs r
-                WHERE r.run_id = n.delivered_to_run_id AND r.status <> 'running'))
+           + (SELECT count(*) FROM orchestrator_notifications n
+              WHERE n.session_id = ? AND n.sender = 'task'
+                AND json_extract(n.payload, '$._tag') = 'TaskStatus' AND n.state = 'waiting')
            + (SELECT count(*) FROM queued_messages
               WHERE session_id = ? AND state = 'waiting' AND steered = 1) AS busy`,
         sessionId,

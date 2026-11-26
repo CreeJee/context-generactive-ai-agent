@@ -4,6 +4,7 @@ import { AgentChat } from "../../src/agent/chat.ts";
 import { RunStore } from "../../src/loop/store.ts";
 import type { JsonValue } from "../../src/json.ts";
 import { messageText } from "../../src/agent/compaction.ts";
+import { OrchestratorNotifications } from "../../src/sessions/orchestrator-notifications.ts";
 import { Subagents } from "../../src/subagents/subagents.ts";
 import type { ScriptedInvocation, ScriptedTurn } from "../../src/testing/scripted-model.ts";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
@@ -161,8 +162,9 @@ const runningRuns = (sessionId: string) =>
 
 const deliveredCompletions = (sessionId: string) =>
   count(
-    `SELECT count(*) AS count FROM parent_notifications
-     WHERE origin_session_id = ? AND kind = 'completed' AND delivered_at IS NOT NULL`,
+    `SELECT count(*) AS count FROM orchestrator_notifications
+     WHERE session_id = ? AND sender = 'task' AND json_extract(payload, '$._tag') = 'TaskStatus'
+       AND json_extract(payload, '$.kind') = 'completed' AND state = 'delivered'`,
     sessionId,
   );
 
@@ -249,8 +251,9 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         Effect.zipWith(
           children.list(sessionId),
           count(
-            `SELECT count(*) AS count FROM parent_notifications
-             WHERE origin_session_id = ? AND delivered_at IS NULL`,
+            `SELECT count(*) AS count FROM orchestrator_notifications
+             WHERE session_id = ? AND sender = 'task' AND json_extract(payload, '$._tag') = 'TaskStatus'
+               AND state = 'waiting'`,
             sessionId,
           ),
           (listed, pending) => listed[0]?.status === "completed" && pending === 1,
@@ -290,7 +293,11 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
           Effect.map(runningRuns(sessionId), (running) => followUp() && running === 0),
           "idle follow-up",
         );
-        expect(yield* deliveredCompletions(sessionId)).toBe(1);
+        // The run's record ends before the run marks what it delivered.
+        yield* until(
+          Effect.map(deliveredCompletions(sessionId), (delivered) => delivered === 1),
+          "the follow-up delivers the completion",
+        );
         expect(yield* userNodes(sessionId)).toBe(2);
         const messages = yield* (yield* current(RunStore)).thread(sessionId);
         expect(
@@ -347,7 +354,11 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         "follow-up on a running board",
       );
       expect((yield* children.list(sessionId))[0]?.status).toBe("completed");
-      expect(yield* deliveredCompletions(sessionId)).toBe(1);
+      // The run's record ends before the run marks what it delivered.
+      yield* until(
+        Effect.map(deliveredCompletions(sessionId), (delivered) => delivered === 1),
+        "the follow-up delivers the completion",
+      );
     }),
   );
 
@@ -443,7 +454,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         ),
       ).toBe(0);
       // Follow-ups start only from notifications the session does not hold; cancel holds them.
-      expect(yield* trace.wakingParentNotificationSessions).not.toContain(sessionId);
+      expect(yield* (yield* current(OrchestratorNotifications)).wakes(sessionId)).toBe(false);
       expect((yield* agent.status(sessionId)).running).toBeNull();
       expect(
         yield* count("SELECT count(*) AS count FROM chat_runs WHERE thread_id = ?", sessionId),
@@ -520,40 +531,46 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
     }),
   );
 
-  it.effect("reports survive restart and incomplete notification deliveries are replayable", () =>
-    Effect.gen(function* () {
-      const env = yield* TestEnv;
-      const { sessionId, turns } = yield* parentSession;
-      const trace = yield* current(WorkTraceStore);
-      const receipt = yield* receiptFrom(yield* send(sessionId, "dispatch only"));
-      yield* turns.release("nap");
-      yield* settled(sessionId);
-      const before = yield* reportFrom(
-        yield* callTool(sessionId, "get_subagent_reports", oneAttempt(receipt)),
-      );
-      const notificationId = yield* trace.notifyParent({
-        taskId: receipt.taskId,
-        kind: "completed",
-        summary: "Undelivered after crash",
-        idempotencyKey: `${sessionId}:crash-delivery`,
-      });
-      expect(
-        (yield* trace.consumeParentNotifications(
-          sessionId,
-          `${sessionId}:crashed-before-run-persisted`,
-        )).map((entry) => entry.id),
-      ).toContain(notificationId);
-      yield* env.reopen;
-      expect(
-        (yield* (yield* env.use(WorkTraceStore)).consumeParentNotifications(
-          sessionId,
-          `${sessionId}:retry-parent`,
-        )).map((entry) => entry.id),
-      ).toContain(notificationId);
-      expect(
-        yield* reportFrom(yield* callTool(sessionId, "get_subagent_reports", oneAttempt(receipt))),
-      ).toEqual(before);
-    }),
+  it.effect(
+    "reports survive restart and a notification no conversation tells yet is still given after it",
+    () =>
+      Effect.gen(function* () {
+        const env = yield* TestEnv;
+        const { sessionId, turns } = yield* parentSession;
+        const trace = yield* current(WorkTraceStore);
+        const receipt = yield* receiptFrom(yield* send(sessionId, "dispatch only"));
+        yield* turns.release("nap");
+        yield* settled(sessionId);
+        const before = yield* reportFrom(
+          yield* callTool(sessionId, "get_subagent_reports", oneAttempt(receipt)),
+        );
+        const notificationId = yield* trace.notifyParent({
+          taskId: receipt.taskId,
+          kind: "completed",
+          summary: "Undelivered after crash",
+          idempotencyKey: `${sessionId}:crash-delivery`,
+        });
+        expect(
+          (yield* (yield* current(OrchestratorNotifications)).untold(
+            sessionId,
+            "task",
+            HashSet.empty(),
+          )).map((entry) => entry.id),
+        ).toContain(notificationId);
+        yield* env.reopen;
+        expect(
+          (yield* (yield* env.use(OrchestratorNotifications)).untold(
+            sessionId,
+            "task",
+            HashSet.empty(),
+          )).map((entry) => entry.id),
+        ).toContain(notificationId);
+        expect(
+          yield* reportFrom(
+            yield* callTool(sessionId, "get_subagent_reports", oneAttempt(receipt)),
+          ),
+        ).toEqual(before);
+      }),
   );
 
   it.effect("a held parent notification stays out of automatic follow-up after restart", () =>
@@ -570,13 +587,14 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         idempotencyKey: `${sessionId}:held-notification`,
       });
       expect(notificationId).not.toBeNull();
-      expect(yield* trace.wakingParentNotificationSessions).not.toContain(sessionId);
+      expect(yield* (yield* current(OrchestratorNotifications)).wakes(sessionId)).toBe(false);
       yield* env.reopen;
       const reopened = yield* env.use(WorkTraceStore);
+      const told = yield* env.use(OrchestratorNotifications);
       expect(yield* reopened.parentNotificationsHeld(sessionId)).toBe(true);
-      expect(yield* reopened.wakingParentNotificationSessions).not.toContain(sessionId);
+      expect(yield* told.wakes(sessionId)).toBe(false);
       yield* reopened.resumeParentNotifications(sessionId);
-      expect(yield* reopened.wakingParentNotificationSessions).toContain(sessionId);
+      expect(yield* told.wakes(sessionId)).toBe(true);
     }),
   );
 

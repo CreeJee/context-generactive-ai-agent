@@ -1,8 +1,9 @@
 import { SqlClient } from "effect/sql";
-import { DateTime, Schema, Effect, Layer } from "effect";
+import { DateTime, HashSet, Schema, Effect, Layer } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { Database } from "../src/db/database.ts";
+import { OrchestratorNotifications } from "../src/sessions/orchestrator-notifications.ts";
 import { ArtifactLocator } from "../src/work-trace/contracts.ts";
 import {
   LifecycleOutcome,
@@ -16,10 +17,14 @@ const stringifyJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))
 
 const testLayer = () => {
   const database = Database.layer(":memory:");
-  return Layer.merge(database, WorkTraceStore.layer.pipe(Layer.provide(database)));
+  return Layer.mergeAll(
+    database,
+    WorkTraceStore.layer.pipe(Layer.provide(database)),
+    OrchestratorNotifications.layer.pipe(Layer.provide(database)),
+  );
 };
 const run = Effect.fnUntraced(function* <A, E>(
-  program: Effect.Effect<A, E, SqlClient.SqlClient | WorkTraceStore>,
+  program: Effect.Effect<A, E, SqlClient.SqlClient | WorkTraceStore | OrchestratorNotifications>,
 ) {
   const services = yield* Layer.build(testLayer());
   return yield* Effect.provideContext(program, services);
@@ -187,7 +192,10 @@ describe("Work Trace task lifecycle", () => {
           expect((yield* trace.taskTree("s1"))[0]?.status).toBe("archived");
           expect(
             yield* sqlGet(
-              "SELECT kind FROM parent_notifications WHERE task_id = ? ORDER BY seq DESC LIMIT 1",
+              `SELECT json_extract(payload, '$.kind') AS kind FROM orchestrator_notifications
+               WHERE sender = 'task' AND json_extract(payload, '$._tag') = 'TaskStatus'
+                 AND json_extract(payload, '$.taskId') = ?
+               ORDER BY rowid DESC LIMIT 1`,
               handle.taskId,
             ),
           ).toEqual({ kind: "archived" });
@@ -240,16 +248,31 @@ describe("Work Trace task lifecycle", () => {
                 ),
               ),
             );
+        const told = yield* OrchestratorNotifications;
         yield* finish(yield* startFrom("kanban:g:S1:1"));
-        expect(yield* trace.wakingParentNotificationSessions).toEqual([]);
+        expect(yield* told.wakes("s1")).toBe(false);
         yield* finish(yield* startFrom("parent-1"));
-        expect(yield* trace.wakingParentNotificationSessions).toEqual(["s1"]);
-        // A run that starts anyway tells both.
+        expect(yield* told.wakes("s1")).toBe(true);
+        // A run that starts anyway is given both.
         expect(
-          (yield* trace.consumeParentNotifications("s1", "next-run")).map(
-            ({ parentRunId }) => parentRunId,
-          ),
+          (yield* told.untold("s1", "task", HashSet.empty()))
+            .map(({ payload }) => payload.parentRunId)
+            .toSorted(),
         ).toEqual(["kanban:g:S1:1", "parent-1"]);
+      }),
+    ),
+  );
+
+  it.effect("a change the caller's tool result tells leaves no notification", () =>
+    run(
+      Effect.gen(function* () {
+        const trace = yield* WorkTraceStore;
+        yield* seed();
+        const handle = yield* start(trace);
+        yield* trace.transitionAttempt(handle, "s1", "completed", "attempt_completed", "Done");
+        expect(yield* sqlGet("SELECT count(*) AS count FROM orchestrator_notifications")).toEqual({
+          count: 0,
+        });
       }),
     ),
   );
@@ -336,7 +359,10 @@ describe("Work Trace task lifecycle", () => {
           expect(receipt).not.toContain("secret.txt");
           expect(
             yield* sqlGet(
-              "SELECT kind FROM parent_notifications WHERE task_id = ? ORDER BY seq DESC LIMIT 1",
+              `SELECT json_extract(payload, '$.kind') AS kind FROM orchestrator_notifications
+               WHERE sender = 'task' AND json_extract(payload, '$._tag') = 'TaskStatus'
+                 AND json_extract(payload, '$.taskId') = ?
+               ORDER BY rowid DESC LIMIT 1`,
               handle.taskId,
             ),
           ).toEqual({ kind: "deleted" });
@@ -374,7 +400,9 @@ describe("Work Trace task lifecycle", () => {
         });
         expect(
           yield* sqlGet(
-            "SELECT count(*) AS count FROM parent_notifications WHERE kind = 'deleted'",
+            `SELECT count(*) AS count FROM orchestrator_notifications
+             WHERE sender = 'task' AND json_extract(payload, '$._tag') = 'TaskStatus'
+               AND json_extract(payload, '$.kind') = 'deleted'`,
           ),
         ).toEqual({ count: 1 });
       }),
@@ -500,7 +528,7 @@ describe("Work Trace task lifecycle", () => {
             yield* sqlGet(
               `SELECT (SELECT count(*) FROM work_tasks) + (SELECT count(*) FROM agent_run_attempts)
                  + (SELECT count(*) FROM agent_invocations) + (SELECT count(*) FROM run_events)
-                 + (SELECT count(*) FROM parent_notifications) AS count`,
+                 + (SELECT count(*) FROM orchestrator_notifications) AS count`,
             ),
           ).toEqual({ count: 0 });
           // Only the conversation's own count-only receipt stays.

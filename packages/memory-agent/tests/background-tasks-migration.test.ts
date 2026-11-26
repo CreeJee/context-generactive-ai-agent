@@ -107,7 +107,7 @@ it.effect("background work leaves Work Trace with its saved results, told alread
     expect(
       db
         .prepare(
-          `SELECT (SELECT count(*) FROM parent_notifications)
+          `SELECT (SELECT count(*) FROM orchestrator_notifications WHERE json_extract(payload, '$._tag') = 'TaskStatus')
              + (SELECT count(*) FROM lifecycle_operations)
              + (SELECT count(*) FROM purge_receipts) AS n`,
         )

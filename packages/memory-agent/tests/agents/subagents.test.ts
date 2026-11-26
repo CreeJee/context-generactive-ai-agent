@@ -535,8 +535,10 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })(
           // The parent hears why the child stopped; nothing reruns it on its own.
           expect(
             yield* sqlGet(
-              `SELECT json_extract(payload, '$.failure.reason._tag') AS reason
-             FROM parent_notifications WHERE task_id = ? AND kind = 'interrupted'`,
+              `SELECT json_extract(payload, '$.detail.failure.reason._tag') AS reason
+             FROM orchestrator_notifications
+             WHERE json_extract(payload, '$.taskId') = ?
+               AND json_extract(payload, '$.kind') = 'interrupted'`,
               ids.task_id,
             ),
           ).toEqual({ reason: "ServerRestarted" });

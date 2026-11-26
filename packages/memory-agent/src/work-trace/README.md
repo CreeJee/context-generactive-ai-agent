@@ -10,13 +10,14 @@
 - `WorkTraceStore` attempt 메서드 — `startAttempt`, `recordSteer`, `transitionAttempt`, `attemptHandle`, `activeAttemptForAgent`, `recoveredAttempts`, `claimRetries`
 - `WorkTraceStore` heartbeat·도구 메서드 — `beat`, `toolStarted`, `toolSettled`, `keepAlive`
 - `WorkTraceStore` 이벤트·조회 메서드 — `appendEvent`, `events`, `snapshot`, `snapshotEffect`, `latestCursor`, `waitForChangeEffect`, `taskTree`, `taskDetail`
-- `WorkTraceStore` 부모 알림 메서드 — `notifyParent`, `consumeParentNotifications`, `holdParentNotifications`, `resumeParentNotifications`, `parentNotificationsHeld`, `wakingParentNotificationSessions`, `releaseParentNotifications`
+- `WorkTraceStore` 부모 알림 메서드 — `notifyParent`, `holdParentNotifications`, `resumeParentNotifications`, `parentNotificationsHeld`. `notifyParent`는 task의 상태 알림을 `orchestrator_notifications`에 넣는다(보낸 쪽은 task, payload의 태그는 `TaskStatus`)
 - `WorkTraceStore` 산출물·최종 답변 메서드 — `recordArtifact`, `artifactsForTask`, `finalizeAnswerClaim`
 - `WorkTraceStore` resume·lifecycle 메서드 — `claimResume`, `requestResume`, `requestSessionLifecycle`, `finalizeSessionLifecycle`, `requestTaskLifecycle`, `finalizeTaskLifecycle`, `pendingSessionDeletes`, `recoverLifecycleOperations`, `archiveTask`
 - `WorkTraceRejected` — store가 거부한 쓰기 TaggedError. reason은 `handle_mismatch`, `unsafe_file_path`, `invalid_transition`, `foreign_session`, `attempt_not_found` 등이다. `message`는 모델에 보여도 안전하다
 - `WorkTraceReadFailed` — `latest_cursor`/`snapshot` 읽기 실패 TaggedError
 - `heartbeatIntervalMs` / `heartbeatLostMs` — live attempt는 10_000ms마다 beat한다. 60_000ms 동안 beat가 없으면 lost로 본다
-- store 입력·뷰 타입 — `AttemptHandle`, `StartAttemptInput`, `AppendEventInput`, `RecordArtifactInput`, `ParentNotificationView`, `ResumeContext`
+- store 입력·뷰 타입 — `AttemptHandle`, `StartAttemptInput`, `AppendEventInput`, `RecordArtifactInput`, `ResumeContext`
+- `TaskStatusKind` / `TaskStatusChange` / `TaskStatusNotification` (`task-status.ts`) — 상태 알림의 종류, `orchestrator_notifications`에 두는 상태 변화 payload, 그 payload에 알림의 id를 붙인 타입
 - store 요청·결과 union — `ResumeClaim`, `ResumeRequest`(타입은 `ResumeTaskResult`), `TaskArchive`, `LifecycleIntent`, `LifecycleRequest`, `LifecycleOutcome`, `LifecycleOperationView`, `PendingOperation`
 - `LifecycleIntent` / `LifecycleResult` — 보관·복원·삭제 의도와, 페이지가 읽는 수명주기 결과(`completed`·`waiting_for_stop`·`blocked` TaggedUnion)의 Schema다(`contracts.ts`). 앱 API 계약과 브라우저 번들이 쓴다.
 - `TraceTaskView` / `TraceAttemptView` / `TraceHeartbeatView` / `TraceTreeSnapshot` / `TraceTaskDetail` / `TraceArtifactView` / `TraceEventView` / `ResumeBlocker` / `ResumeTaskResult` — trace 뷰와 재시도 결과의 Schema다(`contracts.ts`). `TraceEventPage`·`TraceStreamEvent`·`TraceEventsLost`는 trace SSE의 `snapshot`·`trace`·`progress`·`heartbeat` 이벤트와 스트림 실패다. `store.ts`는 같은 이름의 타입을 다시 내보내고, 앱 API 계약과 브라우저 번들이 Schema를 쓴다.

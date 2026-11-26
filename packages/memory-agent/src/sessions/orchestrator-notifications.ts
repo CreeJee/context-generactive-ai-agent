@@ -14,6 +14,7 @@ import { SecureRandom } from "effect/crypto";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { NodeCrypto } from "@effect/platform-node";
 import { BackgroundTaskEnd } from "../tools/background-end.ts";
+import { TaskStatusChange } from "../work-trace/task-status.ts";
 import { MessageDelivery } from "./message-delivery.ts";
 
 /**
@@ -42,12 +43,12 @@ export type ConversationMessage = typeof ConversationMessage.Type;
 
 /**
  * What each sender's message carries. Only the senders listed here are stored and read; a sender
- * that moves to the table adds its key. `task` carries the end of a background task; its payload
- * is tagged because the ends of other kinds of task join the same sender later.
+ * that moves to the table adds its key. `task` carries the end of a background task or the status
+ * change of a Work Trace task; the payload's tag says which.
  */
 export const notificationPayloads = {
   conversation: ConversationMessage,
-  task: BackgroundTaskEnd,
+  task: Schema.Union([BackgroundTaskEnd, TaskStatusChange]),
 } as const;
 type StoredSender = keyof typeof notificationPayloads;
 type PayloadOf<Sender extends StoredSender> = (typeof notificationPayloads)[Sender]["Type"];
@@ -116,6 +117,68 @@ const toEntry = ({
   deliveredAt: delivered_at,
 });
 
+const isoNow = Effect.map(Clock.currentTimeMillis, (millis) =>
+  DateTime.formatIso(DateTime.makeUnsafe(millis)),
+);
+
+/** The statement that stores a row unless a row with its id is there already; that row stays as it is. */
+const insertOnceWith = (sql: SqlClient.SqlClient) =>
+  SqlSchema.void({
+    Request: NotificationRow,
+    execute: (row) => sql`
+      INSERT INTO orchestrator_notifications (id, session_id, sender, delivery, payload, state,
+        delivered_run_id, created_at, delivered_at)
+      VALUES (${row.id}, ${row.session_id}, ${row.sender}, ${row.delivery}, ${row.payload},
+        ${row.state}, ${row.delivered_run_id}, ${row.created_at}, ${row.delivered_at})
+      ON CONFLICT(id) DO NOTHING`,
+  });
+
+/**
+ * The writes the Work Trace store makes for its tasks' status changes, with its own connection, so
+ * a change and its notification are stored in one transaction. They fail as the connection fails.
+ */
+export const taskStatusWrites = (sql: SqlClient.SqlClient) => {
+  const insertOnce = insertOnceWith(sql);
+  return {
+    /**
+     * Stores one waiting status change under `id` unless a row with that id is there already: that
+     * row stays as it is, waiting or delivered.
+     */
+    putOnce: (entry: {
+      readonly id: string;
+      readonly sessionId: string;
+      readonly delivery: MessageDelivery;
+      readonly payload: TaskStatusChange;
+    }) =>
+      Effect.flatMap(isoNow, (now) =>
+        insertOnce({
+          id: entry.id,
+          session_id: entry.sessionId,
+          sender: "task",
+          delivery: entry.delivery,
+          payload: entry.payload,
+          state: "waiting",
+          delivered_run_id: null,
+          created_at: now,
+          delivered_at: null,
+        }),
+      ),
+    /**
+     * Takes the words out of a deleted task's status changes: their summary and detail. The rows
+     * stay, so a change the model was not told yet is still told.
+     */
+    redact: SqlSchema.void({
+      Request: Schema.String,
+      execute: (taskId) => sql`
+        UPDATE orchestrator_notifications
+        SET payload = json_set(payload, '$.summary', 'Deleted task lifecycle notification',
+          '$.detail', json('{}'))
+        WHERE sender = 'task' AND json_extract(payload, '$._tag') = 'TaskStatus'
+          AND json_extract(payload, '$.taskId') = ${taskId}`,
+    }),
+  };
+};
+
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const crypto = yield* SecureRandom.SecureRandom;
@@ -129,16 +192,7 @@ const make = Effect.gen(function* () {
         ${row.state}, ${row.delivered_run_id}, ${row.created_at}, ${row.delivered_at})
       RETURNING *`,
   });
-  /** Stores the row unless a row with its id is there already; that row stays as it is. */
-  const insertOnce = SqlSchema.void({
-    Request: NotificationRow,
-    execute: (row) => sql`
-      INSERT INTO orchestrator_notifications (id, session_id, sender, delivery, payload, state,
-        delivered_run_id, created_at, delivered_at)
-      VALUES (${row.id}, ${row.session_id}, ${row.sender}, ${row.delivery}, ${row.payload},
-        ${row.state}, ${row.delivered_run_id}, ${row.created_at}, ${row.delivered_at})
-      ON CONFLICT(id) DO NOTHING`,
-  });
+  const insertOnce = insertOnceWith(sql);
   /** The rows of a conversation that wait, oldest first. */
   const waiting = SqlSchema.findAll({
     Request: Schema.String,
@@ -185,9 +239,6 @@ const make = Effect.gen(function* () {
       WHERE session_id = ${sessionId} AND state = 'waiting' AND id IN ${sql.in(ids)}
       RETURNING id`,
   });
-  const isoNow = Effect.map(Clock.currentTimeMillis, (millis) =>
-    DateTime.formatIso(DateTime.makeUnsafe(millis)),
-  );
   /** Whether the user stopped the session's notifications (decisions.md "대상 세션의 다음 run에 전달한다"). */
   const notificationsHeld = SqlSchema.findOneOption({
     Request: Schema.String,
