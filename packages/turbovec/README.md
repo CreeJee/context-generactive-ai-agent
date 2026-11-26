@@ -9,13 +9,12 @@
 - `loadTurbovec()` — `createRequire`로 `memory-turbovec.node`를 불러 `TurbovecAddon`을 돌려준다. `vp run build`로 바이너리를 만들지 않았으면 throw한다
 - `addonPath` — 로컬 빌드된 애드온(`memory-turbovec.node`)의 절대 경로 문자열
 - `TurbovecAddon` — `{ VectorIndex, CacheLease, MemoryReadSession, SearchControl, LexicalIndex }` 클래스 묶음 타입
-- `VectorIndex` — 정규화된 u64 10진 문자열 id로 키를 거는 양자화 inner-product 인덱스. `new(dimensions, bits)`, static `load(path)`, `add(vectors: Float32Array, ids)`, `search(query, k, allowedIds?)`, `searchControlled(query, k, token, ownerKey, epoch, requestId, allowedIds?)`, `remove(id)`, `attachOwners(session, ids?)`(벡터마다 부모 node와 그 대화·프로젝트를 읽기 세션으로 읽어 둔다. 읽기의 허용 목록이 여기서 나온다), `save(path) -> SaveTimings`, `dimensions()`, `bits()`, `size()`, `validateIds(ids)`, `close()`
+- `VectorIndex` — 정규화된 u64 10진 문자열 id로 키를 거는 양자화 inner-product 인덱스. `new(dimensions, bits)`, static `load(path)`, `add(vectors: Float32Array, ids)`, `search(query, k, allowedIds?)`, `searchControlled(query, k, token, ownerKey, epoch, requestId, allowedIds?)`, `remove(id)`, `attachOwners(session, ids?)`(벡터마다 부모 node와 그 대화·프로젝트를 읽기 세션으로 읽어 둔다. 읽기의 허용 목록이 여기서 나온다), `save(path) -> number`(바뀐 것만 쓰고 걸린 ms를 돌려준다), `dimensions()`, `bits()`, `size()`, `validateIds(ids)`, `close()`
 - `SearchResult` — `{ ids: string[], scores: number[] }`. `VectorIndex.search` 결과
 - `ControlledSearchResult` — `{ kind: "success"|"cancelled"|"budget-exceeded"|"invalid-input"|"index-failed", ids, scores, nativeWindow: "whole-call", nativeMs }`
 - `SearchControl` — Rust가 소유한 일회성 요청 제어. `new(token, ownerKey, epoch, requestId, remainingMs)`, `token()`(새로 발급한 capability), `snapshotWasPinned()`, `cancel()`, `close()`, static `count()`
 - `CacheLease` — 벡터 캐시 디렉터리에 한 프로세스만 쓰도록 OS 파일 락을 잡는 클래스. `new(path)`, `close()`
 - `LexicalIndex` — 노드 원문의 Tantivy 색인(위치 있는 3글자 `ngram`, Lindera 형태소를 Kiwi 규칙으로 고른 `lindera`). factory `open(dir, recover)`·`openReadOnly(dir)`, `instance()`, `reset(instance)`, `apply(documents, removed) -> LexicalApplied`, `size()`, `morphTerms(text)`, `close()`
-- `SaveTimings` — `{ writeMs, syncMs }`. `VectorIndex.save`의 쓰기와 `fsync`(macOS는 `F_FULLFSYNC`) 시간
 - `LexicalApplied` — `{ size, analyzeMs, writeMs, commitMs, reloadMs }`. `LexicalIndex.apply`가 남긴 크기와 단계별 시간
 - `LexicalDocument` — `{ seq, project, text }`. `LexicalIndex.apply`가 받는 노드
 - `MemoryReadSession` — 읽기 전용 SQLite 세션. `new(databasePath)`, `close()`, `search(index, lexical, input, token, ownerKey, epoch, requestId) -> NativeReadOutput`. text·morph 채널은 `lexical`(`LexicalIndex`)에서 찾는다
@@ -55,7 +54,7 @@
 - `build-turbovec.ts`가 `target/release/<libmemory_turbovec.dylib|.so|memory_turbovec.dll>`을 `memory-turbovec.node.<pid>.tmp`로 복사한 뒤 `memory-turbovec.node`로 rename한다(파일 시스템 쓰기).
 - `build-turbovec.ts`가 완료 메시지를 콘솔에 출력한다.
 - `CacheLease` 생성 시 경로의 파일을 열거나 만들고 OS 파일 락을 잡으며, `close()`로 락을 놓는다(구현은 `src`).
-- `VectorIndex.save(path)`/`load(path)`가 인덱스 파일을 쓰고 읽는다(구현은 `src`).
+- `VectorIndex.save(path)`/`load(path)`가 인덱스 파일을 쓰고 읽는다(구현은 `src`). save는 그 경로에 처음이면 전체를 임시 파일에 써서 rename하고, 그다음부터는 바뀐 행과 지움만 붙인다.
 - `MemoryReadSession`이 `databasePath`의 SQLite DB를 읽기 전용으로 연다(구현은 `src`). 연결에 `PRAGMA query_only=ON`, `PRAGMA cache_size=-262144`(256MiB), `PRAGMA mmap_size=1073741824`(1GiB 상한)을 건다.
 - `SearchControl`이 전역 레지스트리에 요청별 취소·deadline 상태를 등록하고 해제한다(구현은 `src`).
 

@@ -21,14 +21,6 @@ export interface SearchResult {
   scores: number[];
 }
 
-/** How long each step of `VectorIndex.save` took: the addon cannot reach the host's tracer. */
-export interface SaveTimings {
-  /** Serializing the index into the file, through its buffer. */
-  writeMs: number;
-  /** `fsync` of the written file (`F_FULLFSYNC` on macOS). */
-  syncMs: number;
-}
-
 export interface ControlledSearchResult {
   kind: "success" | "cancelled" | "budget-exceeded" | "invalid-input" | "index-failed";
   ids: string[];
@@ -72,8 +64,11 @@ export declare class VectorIndex {
    * are owned.
    */
   attachOwners(session: MemoryReadSession, ids?: string[]): number;
-  /** Writes and syncs the index at `path` (the caller renames it into place), timing each step. */
-  save(path: string): SaveTimings;
+  /**
+   * Persists the index at `path`: the whole index on the first save to a path, then only what
+   * changed since, durable and crash-safe. Returns the milliseconds it took.
+   */
+  save(path: string): number;
   dimensions(): number;
   bits(): number;
   size(): number;

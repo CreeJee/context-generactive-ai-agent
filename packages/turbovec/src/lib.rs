@@ -41,15 +41,6 @@ pub struct SearchResult {
     pub scores: Vec<f64>,
 }
 
-/// How long each step of a save took: the addon cannot reach the host's tracer.
-#[napi(object)]
-pub struct SaveTimings {
-    /// Serializing the index into the file, through its buffer.
-    pub write_ms: f64,
-    /// `fsync` of the written file (`F_FULLFSYNC` on macOS).
-    pub sync_ms: f64,
-}
-
 pub(crate) fn ms(start: std::time::Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.
 }
@@ -229,26 +220,17 @@ impl VectorIndex {
         }
         Ok(self.owners.len() as u32)
     }
-    /// Writes the index to `path` and syncs it, timing each step. The caller renames the file into
-    /// place, so this does not stage its own temporary file the way `IdMapIndex::write` does; the
-    /// bytes are the same (`write_to_writer`).
+    /// Persists the index to `path` and returns how many milliseconds it took: the addon cannot
+    /// reach the host's tracer. The first save to a path (and the first after `load` of a file
+    /// another writer made) writes the whole index through a temporary file and a rename; every
+    /// later save appends only the rows added since and a record per removal, then flips a
+    /// checksummed commit header with one `fsync` (turbovec `IdMapIndex::sync`). A crash at any
+    /// byte loads as the previous save. One writer per path: the caller holds `CacheLease`.
     #[napi]
-    pub fn save(&self, path: String) -> Result<SaveTimings> {
-        use std::io::Write;
-        let index = self.index()?;
+    pub fn save(&mut self, path: String) -> Result<f64> {
         let started = std::time::Instant::now();
-        let file = File::create(path).map_err(js_error)?;
-        let mut writer = std::io::BufWriter::with_capacity(1 << 20, &file);
-        index.write_to_writer(&mut writer).map_err(js_error)?;
-        writer.flush().map_err(js_error)?;
-        drop(writer);
-        let write_ms = ms(started);
-        let syncing = std::time::Instant::now();
-        file.sync_all().map_err(js_error)?;
-        Ok(SaveTimings {
-            write_ms,
-            sync_ms: ms(syncing),
-        })
+        self.index_mut()?.sync(path).map_err(js_error)?;
+        Ok(ms(started))
     }
     #[napi(factory)]
     pub fn load(path: String) -> Result<Self> {

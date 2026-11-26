@@ -55,8 +55,8 @@
 - add는 `vectors.length === ids.length * dimensions`이고 모든 값이 finite여야 한다. add한 뒤 읽기 세션으로 그 벡터들의 소유(부모 node, 대화나 프로젝트)를 읽어 색인에 둔다(`attachOwners`). 청크 행은 add 전에 commit되므로 읽힌다. worker가 열릴 때도 색인의 모든 벡터에 대해 한 번 읽는다. 읽기는 이 소유로 허용 목록을 만들고 hit만 SQLite로 확인한다(`docs/vector-index-design.md` 1단계). vector-search 계열은 `query.length === dimensions`이고 `0 < k ≤ 4294967295`여야 한다. memory read의 `vectorK`는 `maxVectorK`(48) 이하여야 하며, 넘으면 read 전체가 실패한다.
 - lexical 색인은 `lexicalDirectory`가 있을 때만 연다. 없으면 `lexical-apply`/`lexical-reset`은 `invalid-input`이다. `lexical-apply`의 seq가 음수여도 `invalid-input`이다. 두 명령의 reply 기한은 2초이고, native 실패는 다른 명령처럼 `index-failed`(fatal)다.
 - 저장된 인덱스의 dimensions/bits가 setup과 다를 때 `recover !== true`이면 `index-failed`다. 재구축은 명시적 호스트 recovery로만 한다. 조용히 빈 owner로 바꾸지 않는다(`needsReset` 보고).
-- save는 `index.tvim.tmp`에 쓰고 fsync한 뒤 `index.tvim`으로 rename한다.
-- worker는 명령마다 `NativeWorker.<명령>` span을 열고, native 호출(`VectorIndex.*`, `LexicalIndex.*`, `MemoryReadSession.search`)과 rename(`FileSystem.rename`)마다 하위 span을 둔다. 건수는 숫자 속성으로 단다(수집기는 문자열 속성을 버린다). addon이 돌려준 단계 시간(`SaveTimings`, `LexicalApplied`)은 그 native span 아래 `VectorIndex.save.write`/`.fsync`, `LexicalIndex.apply.analyze`/`.write`/`.commit`/`.reload` span으로 시작 시각부터 이어 붙인다. 이 span은 `workerObservabilityLayer`가 OTLP로 내보낸다(`OTEL_*`가 있을 때). 인덱스는 GC가 아니라 교체될 때나 worker Scope가 닫힐 때 `close`된다. 읽기 세션은 인덱스보다 먼저 닫힌다.
+- save는 `index.tvim`에 바뀐 것만 붙인다(`VectorIndex.save`, turbovec `IdMapIndex::sync`). 그 경로에 처음 save할 때만 색인 전체를 임시 파일에 쓰고 rename한다. 어느 바이트에서 멈춰도 다음 load는 앞 save를 읽는다.
+- worker는 명령마다 `NativeWorker.<명령>` span을 열고, native 호출(`VectorIndex.*`, `LexicalIndex.*`, `MemoryReadSession.search`)마다 하위 span을 둔다. 건수는 숫자 속성으로 단다(수집기는 문자열 속성을 버린다). addon이 돌려준 단계 시간(`LexicalApplied`)은 그 native span 아래 `LexicalIndex.apply.analyze`/`.write`/`.commit`/`.reload` span으로 시작 시각부터 이어 붙인다. 이 span은 `workerObservabilityLayer`가 OTLP로 내보낸다(`OTEL_*`가 있을 때). 인덱스는 GC가 아니라 교체될 때나 worker Scope가 닫힐 때 `close`된다. 읽기 세션은 인덱스보다 먼저 닫힌다.
 - `TransferredVector`는 버퍼를 복사하지 않고 transfer한다. 호스트 명령은 소유한 복사본을 실어 보낸다.
 - Publication: 모델/임베딩 작업은 `withMutation` 밖에서 해야 한다. `withMutation`은 gate permit 1개를 잡고 uninterruptible로 돈다. 실패하면 상태가 `stopped`(멈춤)가 된다. 게이트는 그 실패를 로그로 남기지 않는다. 오류 타입을 아는 mutation 소유자(`embedding/native-vector-index.ts`)가 남긴다. 성공하면 generation이 +1 된다. 멈춘 게이트는 명시적 owner recovery가 새 gate/epoch를 만들기 전까지 읽을 수 없다.
 - `admitSnapshot`은 native 스냅샷 pin 확인 동안에만 gate를 잡는다. 큐 진입 동안이나 검색 전체 동안은 잡지 않는다. `read`는 handle의 epoch가 publication epoch와 다르면 `owner-mismatch`로 실패한다. `mapAdmissionError`는 게이트 자신의 admission 오류만 바꾼다.
@@ -68,7 +68,7 @@
 - `node:worker_threads` `Worker`를 생성하고 `terminate`한다(`rpcTransport`). worker 쪽은 최상위 `await runNativeEffect(Layer.launch(server))`로 RPC 서버를 실행한다.
 - `requireRuntime("turbovec")`로 native 애드온을 로드하고 `initializeNodeSqlite(addon.addonPath)`를 호출한다(worker). `runtimeWorkerOptions(setup)`로 worker 옵션을 얻는다(호스트).
 - `setup.databasePath`가 있으면 `node:sqlite` `DatabaseSync`를 read-only로 Scope 동안 열어 둔다. 먼저 `assertDatabaseSchema`를 실행하고, 이후 `memory-coverage` 명령마다 coverage를 센다. 이어서 `binding.MemoryReadSession`으로 read-only SQLite 세션을 Scope 동안 연다.
-- 파일시스템: `cacheDirectory`를 `mkdir -p`(mode `0o700`)로 만든다. `index.tvim`의 존재를 확인하고 load한다. save는 `index.tvim.tmp`에 쓴 뒤 rename한다.
+- 파일시스템: `cacheDirectory`를 `mkdir -p`(mode `0o700`)로 만든다. `index.tvim`의 존재를 확인하고 load한다. save는 `index.tvim`에 바뀐 것만 붙인다. 처음 save할 때만 turbovec이 임시 파일에 쓴 뒤 rename한다.
 - `setup.lexicalDirectory`가 있으면 `binding.LexicalIndex.open`으로 Tantivy 색인을 Scope 동안 연다(writer lock 포함).
 - `binding.CacheLease`로 `cacheDirectory/writer.lock` 프로세스 간 lease(lock)를 Scope 동안 잡는다. 실패하면 `lease-unavailable`다.
 - native `VectorIndex`의 add/remove/search/searchControlled/validateIds/save/close를 동기 호출한다. 인메모리 인덱스 상태가 바뀐다.

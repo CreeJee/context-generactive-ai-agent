@@ -31,6 +31,8 @@ const LEXICAL_DEPTH: usize = 2;
 const CHUNK_VECTOR_ID_FLOOR: u64 = 1 << 52;
 /// Ids per statement when reading owners: well below SQLite's bound on variables.
 const OWNER_IDS_PER_STATEMENT: usize = 1000;
+/// Past this many ids, owners are read by scanning instead of by id lists.
+const OWNER_IDS_LISTED: usize = 10 * OWNER_IDS_PER_STATEMENT;
 #[napi(object)]
 pub struct NativeReadInput {
     pub allowed_projects: Vec<String>,
@@ -360,7 +362,9 @@ impl MemoryReadSession {
         })
     }
     /// The parent node seq and holder of each of `ids` the database has: a chunk through its
-    /// mapping row, a one-vector node through its seq.
+    /// mapping row, a one-vector node through its seq. Many ids are read by scanning the mapping
+    /// table and the conversation index in order: looking each node up by seq reads one table page
+    /// per node, seconds on a cold multi-GB database.
     pub(crate) fn owners_of(
         &self,
         ids: &[u64],
@@ -372,35 +376,11 @@ impl MemoryReadSession {
         if self.unusable.get() {
             return Err("Read session is unusable".into());
         }
-        let (chunks, seqs): (Vec<u64>, Vec<u64>) =
-            ids.iter().partition(|id| **id >= CHUNK_VECTOR_ID_FLOOR);
-        let mut found = Vec::with_capacity(ids.len());
-        let mut read = |sql: &str, batch: &[u64]| -> std::result::Result<(), String> {
-            let sql = sql.replace("{ids}", &vec!["?"; batch.len()].join(","));
-            let mut statement = connection.prepare(&sql).map_err(|e| e.to_string())?;
-            let mut rows = statement
-                .query(params_from_iter(batch.iter().map(|id| *id as i64)))
-                .map_err(|e| e.to_string())?;
-            while let Some(row) = rows.next().map_err(|e| e.to_string())? {
-                let id: i64 = row.get(0).map_err(|e| e.to_string())?;
-                let parent: i64 = row.get(1).map_err(|e| e.to_string())?;
-                let session: Option<String> = row.get(2).map_err(|e| e.to_string())?;
-                let project: String = row.get(3).map_err(|e| e.to_string())?;
-                let holder = match session {
-                    Some(session) => Holder::Session(session),
-                    None => Holder::Project(project),
-                };
-                found.push((id as u64, parent as u64, holder));
-            }
-            Ok(())
-        };
-        for batch in chunks.chunks(OWNER_IDS_PER_STATEMENT) {
-            read("SELECT c.vector_id, c.node_seq, n.session_id, n.project_id FROM node_vector_chunks c JOIN nodes n ON n.seq=c.node_seq WHERE c.vector_id IN ({ids})", batch)?;
+        if ids.len() > OWNER_IDS_LISTED {
+            owners_scanned(connection, ids).map_err(|e| e.to_string())
+        } else {
+            owners_listed(connection, ids).map_err(|e| e.to_string())
         }
-        for batch in seqs.chunks(OWNER_IDS_PER_STATEMENT) {
-            read("SELECT n.seq, n.seq, n.session_id, n.project_id FROM nodes n WHERE n.seq IN ({ids})", batch)?;
-        }
-        Ok(found)
     }
     /// Close SQLite before worker teardown; a later N-API GC must not retain WAL mappings.
     #[napi]
@@ -835,6 +815,95 @@ impl MemoryReadSession {
         out
     }
 }
+/// [`MemoryReadSession::owners_of`] by one statement per batch of ids.
+fn owners_listed(
+    connection: &Connection,
+    ids: &[u64],
+) -> rusqlite::Result<Vec<(u64, u64, Holder)>> {
+    let (chunks, seqs): (Vec<u64>, Vec<u64>) =
+        ids.iter().partition(|id| **id >= CHUNK_VECTOR_ID_FLOOR);
+    let mut found = Vec::with_capacity(ids.len());
+    let mut read = |sql: &str, batch: &[u64]| -> rusqlite::Result<()> {
+        let sql = sql.replace("{ids}", &vec!["?"; batch.len()].join(","));
+        let mut statement = connection.prepare(&sql)?;
+        let mut rows = statement.query(params_from_iter(batch.iter().map(|id| *id as i64)))?;
+        while let Some(row) = rows.next()? {
+            let id: i64 = row.get(0)?;
+            let parent: i64 = row.get(1)?;
+            let session: Option<String> = row.get(2)?;
+            let project: String = row.get(3)?;
+            let holder = match session {
+                Some(session) => Holder::Session(session),
+                None => Holder::Project(project),
+            };
+            found.push((id as u64, parent as u64, holder));
+        }
+        Ok(())
+    };
+    for batch in chunks.chunks(OWNER_IDS_PER_STATEMENT) {
+        read("SELECT c.vector_id, c.node_seq, n.session_id, n.project_id FROM node_vector_chunks c JOIN nodes n ON n.seq=c.node_seq WHERE c.vector_id IN ({ids})", batch)?;
+    }
+    for batch in seqs.chunks(OWNER_IDS_PER_STATEMENT) {
+        read(
+            "SELECT n.seq, n.seq, n.session_id, n.project_id FROM nodes n WHERE n.seq IN ({ids})",
+            batch,
+        )?;
+    }
+    Ok(found)
+}
+
+/// [`MemoryReadSession::owners_of`] by scanning: the chunk mappings (a covering index), the
+/// conversation of every node (`nodes_session`, covering), and the project of the few nodes outside
+/// a conversation.
+fn owners_scanned(
+    connection: &Connection,
+    ids: &[u64],
+) -> rusqlite::Result<Vec<(u64, u64, Holder)>> {
+    let wanted: HashSet<u64> = ids.iter().copied().collect();
+    let mut parent_of: HashMap<u64, u64> = ids
+        .iter()
+        .filter(|id| **id < CHUNK_VECTOR_ID_FLOOR)
+        .map(|id| (*id, *id))
+        .collect();
+    let mut statement = connection.prepare("SELECT vector_id, node_seq FROM node_vector_chunks")?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let id = row.get::<_, i64>(0)? as u64;
+        if wanted.contains(&id) {
+            parent_of.insert(id, row.get::<_, i64>(1)? as u64);
+        }
+    }
+    let parents: HashSet<u64> = parent_of.values().copied().collect();
+    let mut holder_of: HashMap<u64, Holder> = HashMap::with_capacity(parents.len());
+    for (sql, holder) in [
+        (
+            "SELECT seq, session_id FROM nodes WHERE session_id IS NOT NULL",
+            Holder::Session as fn(String) -> Holder,
+        ),
+        (
+            "SELECT seq, project_id FROM nodes WHERE session_id IS NULL",
+            Holder::Project,
+        ),
+    ] {
+        let mut statement = connection.prepare(sql)?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            let seq = row.get::<_, i64>(0)? as u64;
+            if parents.contains(&seq) {
+                holder_of.insert(seq, holder(row.get(1)?));
+            }
+        }
+    }
+    Ok(parent_of
+        .into_iter()
+        .filter_map(|(id, parent)| {
+            holder_of
+                .get(&parent)
+                .map(|holder| (id, parent, holder.clone()))
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -925,6 +994,13 @@ mod tests {
                 (7, 7, Holder::Project("p".into())),
             ]
         );
+        let connection = reader.connection.as_ref().unwrap();
+        let ids = [1, 7, 4503599627370496, 4503599627370497];
+        let mut listed = owners_listed(connection, &ids).unwrap();
+        let mut scanned = owners_scanned(connection, &ids).unwrap();
+        listed.sort_by_key(|(id, _, _)| *id);
+        scanned.sort_by_key(|(id, _, _)| *id);
+        assert_eq!(scanned, listed);
     }
     #[test]
     #[cfg(feature = "test-sqlite")]

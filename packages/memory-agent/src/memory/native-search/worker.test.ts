@@ -55,8 +55,46 @@ it("owns the native index and lease in a real worker, persists, and releases on 
               ).toEqual(OwnerReply.cases.ack.make({ requestId: "save", epoch: "test", size: 1 }));
             }),
           );
-          const reopened = yield* rpcTransport({ setup, workerFile });
-          expect(reopened.ready.size).toBe(1);
+          // A later save appends what changed to the same file instead of writing a new one.
+          const file = `${directory}/index.tvim`;
+          const before = yield* fs.stat(file);
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const reopened = yield* rpcTransport({ setup, workerFile });
+              expect(reopened.ready.size).toBe(1);
+              yield* reopened.send(
+                OwnerCommand.cases.add.make({
+                  requestId: "add-2",
+                  epoch: "test",
+                  ids: ["2"],
+                  vectors: new Float32Array([0, 1, 0, 0, 0, 0, 0, 0]),
+                }),
+              );
+              yield* reopened.send(
+                OwnerCommand.cases.remove.make({
+                  requestId: "remove-1",
+                  epoch: "test",
+                  ids: ["1"],
+                }),
+              );
+              yield* reopened.send(
+                OwnerCommand.cases.save.make({ requestId: "save-2", epoch: "test" }),
+              );
+            }),
+          );
+          expect((yield* fs.stat(file)).ino).toEqual(before.ino);
+          const last = yield* rpcTransport({ setup, workerFile });
+          expect(last.ready.size).toBe(1);
+          expect(
+            yield* last.send(
+              OwnerCommand.cases["vector-search"].make({
+                requestId: "search-2",
+                epoch: "test",
+                query: new Float32Array([0, 1, 0, 0, 0, 0, 0, 0]),
+                k: 1,
+              }),
+            ),
+          ).toMatchObject({ ids: ["2"] });
         }),
       ),
     ),

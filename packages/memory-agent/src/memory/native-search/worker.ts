@@ -266,16 +266,10 @@ const owner = Effect.gen(function* () {
       save: () =>
         Effect.gen(function* () {
           const vectors = yield* native(() => index.size());
-          yield* timedNative(
-            "VectorIndex.save",
-            { vectors },
-            native(() => index.save(`${file}.tmp`)),
-            (took) => [
-              ["VectorIndex.save.write", took.writeMs],
-              ["VectorIndex.save.fsync", took.syncMs],
-            ],
+          // Only the rows and removals since the last save reach the file, not the whole index.
+          yield* native(() => index.save(file)).pipe(
+            Effect.withSpan("VectorIndex.save", { attributes: { vectors } }),
           );
-          yield* files(fs.rename(`${file}.tmp`, file)).pipe(Effect.withSpan("FileSystem.rename"));
           return yield* native(ack);
         }),
       validate: (command) =>

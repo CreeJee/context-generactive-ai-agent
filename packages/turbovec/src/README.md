@@ -6,7 +6,7 @@
 
 ## Interface
 
-- `VectorIndex` — napi 클래스. `new(dimensions, bits)`, `add(vectors, ids)`, `search(query, k, allowedIds?)`, `searchControlled(query, k, token, ownerKey, epoch, requestId, allowedIds?)`, `remove(id)`, `attachOwners(session, ids?)`, `save(path)`(단계별 시간 `SaveTimings` 반환), 팩토리 `load(path)`, `dimensions()`, `bits()`, `size()`, `close()`, `validateIds(ids)`를 제공한다. `attachOwners`는 `ids`(생략하면 색인의 모든 벡터)의 부모 node seq와 그 node를 가진 것(대화, 대화 밖 node면 프로젝트)을 읽기 세션으로 읽어 들고 있고, 소유가 있는 벡터 수를 돌려준다. `remove`는 그 소유도 지운다
+- `VectorIndex` — napi 클래스. `new(dimensions, bits)`, `add(vectors, ids)`, `search(query, k, allowedIds?)`, `searchControlled(query, k, token, ownerKey, epoch, requestId, allowedIds?)`, `remove(id)`, `attachOwners(session, ids?)`, `save(path)`(걸린 ms 반환), 팩토리 `load(path)`, `dimensions()`, `bits()`, `size()`, `close()`, `validateIds(ids)`를 제공한다. `attachOwners`는 `ids`(생략하면 색인의 모든 벡터)의 부모 node seq와 그 node를 가진 것(대화, 대화 밖 node면 프로젝트)을 읽기 세션으로 읽어 들고 있고, 소유가 있는 벡터 수를 돌려준다. id가 1만 개를 넘으면 `node_vector_chunks`와 `nodes`의 대화 색인(`nodes_session`)을 차례로 훑어 읽는다. node를 seq로 하나씩 찾으면 node마다 표 page를 하나씩 읽어 큰 DB에서 몇 초가 걸리기 때문이다. `remove`는 그 소유도 지운다
 - `SearchResult` — napi 객체 `{ ids: string[], scores: f64[] }`. `VectorIndex.search`의 결과다
 - `CacheLease` — napi 클래스. 생성자는 경로의 파일을 열거나 만들고(0o600) 배타적 non-blocking 락을 잡는다. `close()`로 락을 놓는다
 - `SearchControl` — napi 클래스. `new(token, ownerKey, epoch, requestId, remainingMs)`, `token()`, `snapshotWasPinned()`, `cancel()`, `close()`, static `count()`를 제공한다. 요청별 취소와 deadline 상태를 전역 레지스트리에 등록한다
@@ -57,7 +57,7 @@
 
 - `LexicalIndex`: `open`은 폴더를 만들고(`recover`면 지우고 다시 만들고) Tantivy segment·meta 파일과 writer lock 파일을 쓴다. `openReadOnly`는 아무것도 쓰지 않는다. writer thread 2개(메모리 128MiB)와 Tantivy merge thread를 띄운다. 내장 ko-dic 사전을 불러온다
 - `CacheLease`: 경로의 파일을 read/write/create로 연다. truncate하지 않고, unix에서는 0o600 권한이다. close나 drop 전까지 OS 배타 파일 락을 잡고 있다
-- `VectorIndex.save`는 인덱스 파일을 디스크에 쓰고 `fsync`한 뒤 쓰기·fsync 시간(`SaveTimings`)을 돌려준다. 자체 임시 파일과 rename은 하지 않는다. 바이트는 `IdMapIndex::write`와 같고(`write_to_writer`), 제자리 rename은 호출자가 한다. addon은 호스트 tracer에 닿지 못하므로 단계 시간을 값으로 돌려준다. `VectorIndex.load`는 디스크에서 읽는다 `VectorIndex.load`는 디스크에서 읽는다
+- `VectorIndex.save`는 `IdMapIndex::sync`로 인덱스 파일에 바뀐 것만 붙이고 `fsync`한 뒤 걸린 ms를 돌려준다. 그 경로에 처음 save하거나 다른 writer가 만든 파일을 load한 뒤 처음 save하면, turbovec이 전체를 임시 파일에 써서 rename한다. 그다음부터는 더한 행, 지움마다 작은 기록, checksum이 든 commit header만 쓴다. 쓰는 쪽은 경로마다 하나다(`CacheLease`). addon은 호스트 tracer에 닿지 못하므로 시간을 값으로 돌려준다. `VectorIndex.load`는 디스크에서 읽는다
 - `MemoryReadSession`: SQLite 파일을 읽기 전용으로 연다. 요청마다 `BEGIN DEFERRED`/`ROLLBACK`을 실행하고, 1000 VM op마다 취소와 deadline을 확인해 중단하는 progress handler를 건다
 - SQLite에서 읽는 테이블: `nodes`, `sessions`, `node_vectors`, `node_vector_chunks`, `memory_graph_vector_removals`, `lexical_changes`, `sqlite_schema`
 - 프로세스 전역 상태: `REGISTRY`(`OnceLock<Mutex<HashMap<String, Arc<RequestState>>>>`), `NEXT_TOKEN`(`AtomicU64`), `INITIALIZED`(`OnceLock<i32>`)
