@@ -25,7 +25,9 @@
   사용자의 말로 다시 움직이지 않는다), tech-debt (같은 것을 기억하는 메모리 상태 둘을 표 하나로 합친다)
 - **Planned at**: commit `dee087bc`, 2026-11-26. `chat.ts`의 `runContext`와 `orchestrator-notifications.ts`,
   `task-notifications.ts`의 발췌는 039의 branch(`t3/task-status-orchestrator-notifications`, `f24b691e`)의
-  모습이다. 그 diff와 대조했다.
+  모습이다. 그 diff와 대조했다. 2026-11-27에 `main`의 hash가 rebase로 바뀌었다(tree는 같다). `dee087bc`는
+  지금 `main`의 `5a19cee7`이고, 039는 `main`에 `21153713`으로 merge되었다(039의 끝 commit `f24b691e`는
+  `c97de2f7`이 되었다).
 
 ## Why this matters
 
