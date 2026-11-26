@@ -108,16 +108,24 @@ alone("a failed index save resumes targeted removals without rebuilding valid ve
       Digest.sha256,
       new TextEncoder().encode(embedder.identity),
     );
-    const directory = Buffer.from(digest).toString("hex").slice(0, 16);
-    const blocker = (yield* Path.Path).join(env.storage, "vectors", directory, "index.tvim.tmp");
-    yield* fs.makeDirectory(blocker);
+    const paths = yield* Path.Path;
+    const directory = paths.join(
+      env.storage,
+      "vectors",
+      Buffer.from(digest).toString("hex").slice(0, 16),
+    );
+    const file = paths.join(directory, "index.tvim");
+    // A save either appends to the file or rewrites it through a new file beside it: both fail.
+    yield* fs.chmod(file, 0o400);
+    yield* fs.chmod(directory, 0o500);
     yield* asOlderStore;
     yield* run;
     expect(yield* overview).toMatchObject({ status: "failed" });
     expect(yield* sqlAll("SELECT node_seq FROM memory_graph_vector_removals")).toEqual([
       { node_seq: c.topic.seq },
     ]);
-    yield* fs.remove(blocker, { recursive: true });
+    yield* fs.chmod(directory, 0o700);
+    yield* fs.chmod(file, 0o600);
     yield* env.reopen;
     yield* env.use(run);
     expect(yield* env.use(vectorCount)).toBe(before - 1);
