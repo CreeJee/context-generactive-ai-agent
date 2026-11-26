@@ -2,7 +2,7 @@
 
 ## Overview
 
-`native-search`는 Rust/N-API 애드온 `turbovec`의 벡터 인덱스와 SQLite 읽기 세션을 전용 worker thread 하나에 가두는 계층이다. 호스트 쪽 `client.ts`의 `makeNativeOwner`/`NativeOwner`는 Effect RPC(`NativeOwnerRpcs`)로 worker를 띄운다. 호스트는 요청을 슬롯 1개와 대기 상한 32개로 직렬화하고, 취소·타임아웃·치명 실패를 관리한다.
+`native-search`는 Rust/N-API 애드온 `turbovec`의 벡터 인덱스와 SQLite 읽기 세션을 전용 worker thread에 가두는 계층이다. 색인을 쓰는 owner worker 하나와, DB가 있으면 읽기만 하는 reader worker 둘이 있다(`docs/vector-index-design.md` 3단계). reader는 owner가 공유한 색인을 같은 프로세스 안에서 그대로 읽으므로, 읽기가 owner의 쓰기나 다른 읽기 뒤에 줄 서지 않는다. 호스트 쪽 `client.ts`의 `makeNativeOwner`/`NativeOwner`는 Effect RPC(`NativeOwnerRpcs`)로 worker들을 띄운다. 호스트는 worker마다 슬롯 1개를 두고 모두 합쳐 대기 상한 32개로 요청을 받으며, 취소·타임아웃·치명 실패를 관리한다.
 
 `worker.ts`는 worker 진입점이다. 인덱스 add/remove/save/reset/validate/vector-search와 controlled memory-search를 실행한다. `contracts.ts`·`read-protocol.ts`·`worker-protocol.ts`는 전송 계약과 스키마를 제공한다. `publication.ts`는 인덱스 변경과 읽기 스냅샷 pin을 묶는 세대(generation) 게이트를 제공한다. 이 계층은 `packages/memory-agent/src/memory/embedding/native-vector-index.ts`의 `nativeVectorIndexLayer`가 `NativeOwner.layer`와 `NativePublication.layer`를 제공하고 두 서비스를 yield해 사용한다.
 
@@ -14,7 +14,8 @@
 - `OwnerTransport` / `OwnerConnect` / `OwnerWorker` — 시작된 owner worker를 호스트가 다루는 인터페이스(`ready`, `send`, `exited`, `terminate`)와 연결 함수 타입이다. 테스트가 transport를 감쌀 때 쓴다.
 - `ReadAdmission` — 읽기 진입 결과 TaggedEnum(`pinned` | `completed{reply}`)이다.
 - `OwnerInspection` — `inspect` 결과 TaggedEnum(`open{queued, active}` | `failed{reason}`)이다.
-- `OwnerSetup` — worker 설정 Schema(`epoch`, `dimensions`, `bits`, `cacheDirectory`, 선택 `ownerKey`/`databasePath`/`lexicalDirectory`/`recover`)다.
+- `OwnerSetup` — owner worker 설정 Schema(`epoch`, `dimensions`, `bits`, `cacheDirectory`, 선택 `ownerKey`/`databasePath`/`lexicalDirectory`/`recover`)다.
+- `ReaderSetup` / `WorkerSetup` — reader worker 설정 Schema(`kind: "reader"`, `epoch`, `dimensions`, `ownerKey`, `databasePath`, `lexical`)와 둘의 union이다. 호스트가 owner를 연 뒤 같은 `ownerKey`로 reader를 띄운다.
 - `OwnerCommand` — owner 명령 TaggedUnion(`add`, `remove`, `save`, `reset`, `validate`, `vector-search`, `vector-search-controlled`, `memory-search`, `memory-coverage`, `lexical-apply`, `lexical-reset`)이다. 모든 명령에 `requestId`·`epoch`가 붙는다.
 - `OwnerReply` — owner 응답 TaggedUnion(`ack`, `removed`, `vector-hits`, `controlled-result`, `memory-result`, `coverage-result`, `lexical-ack`)이다.
 - `LexicalDocument` — lexical 색인이 받는 노드 Schema(`seq`, `project`, `text`)다.
@@ -32,17 +33,19 @@
 - `makePublication` — `(epoch)`로 세대 게이트를 만든다. `{ withMutation, admitSnapshot, read, inspect }`를 반환한다.
 - `NativePublication` — 세대 게이트 `Context.Service` 클래스(`"memory-agent/memory/native-search/publication/NativePublication"`)다. `static layer`가 context의 `NativeOwner` epoch으로 `makePublication`을 호출하므로, 게이트는 소유자 하나에 하나씩 그 소유자와 함께 생긴다.
 - `PublicationFailed` / `PublicationState` — 게이트 오류(`stopped` | `owner-mismatch`)와 상태 TaggedEnum(`ready{generation}` | `stopped{generation}`)이다. `stopped`(멈춤)는 갱신이 실패해 색인이 DB와 어긋났을 수 있는 상태다.
-- `worker.ts` (worker 진입점) — 최상위 `await runNativeEffect(Layer.launch(server))`로 `RpcServer.layer(NativeOwnerRpcs, { concurrency: 1 })`를 `NodeWorkerRunner` 위에서 실행한다.
+- `worker.ts` (worker 진입점) — 최상위 `await runNativeEffect(Layer.launch(server))`로 `RpcServer.layer(NativeOwnerRpcs, { concurrency: 1 })`를 `NodeWorkerRunner` 위에서 실행한다. `workerData`의 `kind`에 따라 owner(`setup`)나 reader(`reader`)로 연다.
 - 하위 디렉터리 없음.
 
 ## Invariants
 
-- owner는 한 번에 활성 작업 1개만 실행한다. 근거는 호스트 `Semaphore.make(1)` 슬롯, `RpcClient` `size: 1, concurrency: 1`, `RpcServer` `concurrency: 1`이다. 대기와 활성을 합친 요청 수는 `capacity = 32`를 넘지 않는다.
+- worker마다 한 번에 활성 작업 1개만 실행한다. 근거는 worker마다 둔 호스트 `Semaphore.make(1)` 슬롯, `RpcClient` `size: 1, concurrency: 1`, `RpcServer` `concurrency: 1`이다. 대기와 활성을 합친 요청 수는 모든 worker를 합쳐 `capacity = 32`를 넘지 않는다.
+- `memory-search`와 `memory-coverage`는 맡은 작업이 가장 적은 reader로 가고, 나머지 명령은 owner로 간다. reader가 없으면(DB가 없는 owner) 모두 owner로 간다. reader는 다른 명령을 `invalid-input`으로 거부한다. reader 하나가 치명 실패하거나 끝나면 owner 전체가 실패한다. 다시 열기는 지금처럼 owner 단위다.
+- reader는 owner의 `VectorIndex`·`LexicalIndex`를 `ownerKey`로 `attach`해 읽는다. owner는 색인을 다 열고 소유를 읽은 뒤에 `share`한다. 벡터 색인은 Rust 쪽 읽기·쓰기 잠금 하나를 같이 쓴다. 읽기는 허용 목록을 만들고 벡터를 찾는 동안만 잠금을 쥐고, owner의 add·remove·save·reset은 그동안 기다린다. lexical 색인은 같은 reader를 같이 쓰므로 owner의 commit 뒤 읽기가 바로 그 commit을 본다. reader마다 SQLite 연결이 따로 있고, 메모리를 약 100MB 더 쓴다(2026-11-27, checkout에서 잰 값).
 - 호출자가 떠나면 queued 작업은 dispatch 전에 멈춘다. 이미 active인 작업은 worker가 답할 때까지 슬롯을 놓지 않는다. 시작된 native 호출은 호출자가 떠나도 끝나지 않기 때문이다.
 - `forget`은 `result` Deferred가 같은 작업만 지운다. 같은 requestId를 나중 작업이 재사용할 수 있기 때문이다.
 - `cachedSize`의 유일한 writer는 reply ingress다. command waiter를 풀기 전에 갱신된다.
 - reply 기한: `memory-search`는 `input.remainingMs`+2초, `vector-search-controlled`는 `budgetMs`+2초, 파일을 쓰는 `save`·`lexical-apply`·`lexical-reset`과 임베딩 가능한 노드를 모두 훑는 `memory-coverage`는 15초, 나머지 명령은 2초다. `memory-coverage`는 혼자 0.2–0.3초지만 바쁜 머신에서 2.9초가 걸렸다(2026-11-23). 검색은 그보다 훨씬 먼저 기다리기를 멈추므로(`MemorySearch`) 이 기한도 응답하지 않는 worker만 가린다. 이 기한 덕에 typed `budget-exceeded`가 `request-timeout`보다 먼저 도착한다. 파일 쓰기는 디스크가 바쁘면 2초를 넘기고(부하 중 32MB `save` 3.9초), 시간 초과는 벡터 색인을 owner를 다시 열 때까지 멈추므로, 그 기한은 응답하지 않는 worker만 가린다.
-- 기한은 dispatch 시점부터 잰다. 앞 작업 뒤에서 기다린 시간은 넣지 않는다. 앞 작업도 각자 기한이 있기 때문이다. 슬롯을 쥔 작업이 기한을 넘기면 owner의 `overdue` 신호가 완료되고, 그 작업과 대기 중인 호출이 모두 `request-timeout`으로 끝난다. 그 작업의 reply가 오면 신호를 새로 만든다.
+- 기한은 dispatch 시점부터 잰다. 앞 작업 뒤에서 기다린 시간은 넣지 않는다. 앞 작업도 각자 기한이 있기 때문이다. 슬롯을 쥔 작업이 기한을 넘기면 그 worker의 `overdue` 신호가 완료되고, 그 작업과 그 worker를 기다리는 호출이 모두 `request-timeout`으로 끝난다. 그 작업의 reply가 오면 신호를 새로 만든다.
 - `index-failed`, `read-failed`, `native-incompatible`, `worker-exit`, `worker-error`는 `fatal`이다. 주석상 이후 아무것도 신뢰할 수 없다. worker 종료나 Scope 종료 시 `failAll`이 모든 대기 작업을 실패시키고 control을 닫는다.
 - `controlToken`은 호스트 dispatch만 설정한다. 사용자 값은 채택하지 않는다. controlled 명령에 control이 없거나, worker에 `controlToken`/`ownerKey`가 없으면 `invalid-input`이다.
 - `ownerKey`는 호스트가 `SecureRandom.uuidV4`로 만드는 private binding이다. `databasePath`는 호스트 소유의 신뢰된 경로이며, 검색 요청에서 오지 않는다. 공개 검색은 후보 allowlist를 보내지 않는다.
@@ -56,7 +59,7 @@
 - lexical 색인은 `lexicalDirectory`가 있을 때만 연다. 없으면 `lexical-apply`/`lexical-reset`은 `invalid-input`이다. `lexical-apply`의 seq가 음수여도 `invalid-input`이다. 두 명령의 reply 기한은 2초이고, native 실패는 다른 명령처럼 `index-failed`(fatal)다.
 - 저장된 인덱스의 dimensions/bits가 setup과 다를 때 `recover !== true`이면 `index-failed`다. 재구축은 명시적 호스트 recovery로만 한다. 조용히 빈 owner로 바꾸지 않는다(`needsReset` 보고).
 - save는 `index.tvim`에 바뀐 것만 붙인다(`VectorIndex.save`, turbovec `IdMapIndex::sync`). 그 경로에 처음 save할 때만 색인 전체를 임시 파일에 쓰고 rename한다. 어느 바이트에서 멈춰도 다음 load는 앞 save를 읽는다.
-- worker는 명령마다 `NativeWorker.<명령>` span을 열고, native 호출(`VectorIndex.*`, `LexicalIndex.*`, `MemoryReadSession.search`)마다 하위 span을 둔다. 건수는 숫자 속성으로 단다(수집기는 문자열 속성을 버린다). addon이 돌려준 단계 시간(`LexicalApplied`)은 그 native span 아래 `LexicalIndex.apply.analyze`/`.write`/`.commit`/`.reload` span으로 시작 시각부터 이어 붙인다. 이 span은 `workerObservabilityLayer`가 OTLP로 내보낸다(`OTEL_*`가 있을 때). 인덱스는 GC가 아니라 교체될 때나 worker Scope가 닫힐 때 `close`된다. 읽기 세션은 인덱스보다 먼저 닫힌다.
+- worker는 명령마다 `NativeWorker.<명령>` span을 열고, native 호출(`VectorIndex.*`, `LexicalIndex.*`, `MemoryReadSession.search`)마다 하위 span을 둔다. 건수는 숫자 속성으로 단다(수집기는 문자열 속성을 버린다). addon이 돌려준 단계 시간(`LexicalApplied`)은 그 native span 아래 `LexicalIndex.apply.analyze`/`.write`/`.commit`/`.reload` span으로 시작 시각부터 이어 붙인다. 이 span은 `workerObservabilityLayer`가 OTLP로 내보낸다(`OTEL_*`가 있을 때). 인덱스는 GC가 아니라 worker Scope가 닫힐 때 `close`된다. `reset`은 색인을 바꿔 끼우지 않고 그 자리에서 비우므로 reader도 빈 색인을 본다. 읽기 세션은 인덱스보다 먼저 닫힌다.
 - `TransferredVector`는 버퍼를 복사하지 않고 transfer한다. 호스트 명령은 소유한 복사본을 실어 보낸다.
 - Publication: 모델/임베딩 작업은 `withMutation` 밖에서 해야 한다. `withMutation`은 gate permit 1개를 잡고 uninterruptible로 돈다. 실패하면 상태가 `stopped`(멈춤)가 된다. 게이트는 그 실패를 로그로 남기지 않는다. 오류 타입을 아는 mutation 소유자(`embedding/native-vector-index.ts`)가 남긴다. 성공하면 generation이 +1 된다. 멈춘 게이트는 명시적 owner recovery가 새 gate/epoch를 만들기 전까지 읽을 수 없다.
 - `admitSnapshot`은 native 스냅샷 pin 확인 동안에만 gate를 잡는다. 큐 진입 동안이나 검색 전체 동안은 잡지 않는다. `read`는 handle의 epoch가 publication epoch와 다르면 `owner-mismatch`로 실패한다. `mapAdmissionError`는 게이트 자신의 admission 오류만 바꾼다.

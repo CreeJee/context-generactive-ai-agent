@@ -21,6 +21,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet};
 use std::path::Path;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 use tantivy::query::{
     BooleanQuery, EnableScoring, Occur, PhraseQuery, Query, RegexQuery, TermQuery, Weight,
@@ -381,14 +382,16 @@ impl Best {
     }
 }
 
+/// Searches share the reader and need no lock: a commit reloads the reader for every search after
+/// it, the reader workers' searches included.
 struct Lexical {
     /// `None` for an index opened to read only: it holds no writer lock, and writes fail.
-    writer: Option<IndexWriter>,
+    writer: Mutex<Option<IndexWriter>>,
     reader: IndexReader,
     fields: Fields,
     morphology: Morphology,
     /// Which build of the index this is; the host keeps the same value beside its journal.
-    instance: Option<String>,
+    instance: Mutex<Option<String>>,
 }
 
 fn register(index: &Index) {
@@ -413,6 +416,12 @@ fn open_index(dir: &Path, recover: bool) -> Failed<Index> {
 
 fn read_only() -> String {
     "Lexical index is open read-only".to_string()
+}
+
+fn locked<T>(mutex: &Mutex<T>) -> Failed<MutexGuard<'_, T>> {
+    mutex
+        .lock()
+        .map_err(|_| "Lexical index is unusable".to_string())
 }
 
 impl Lexical {
@@ -449,21 +458,20 @@ impl Lexical {
             .try_into()
             .map_err(failed)?;
         Ok(Lexical {
-            writer,
+            writer: Mutex::new(writer),
             reader,
             fields: schema().1,
             morphology: Morphology::new()?,
-            instance,
+            instance: Mutex::new(instance),
         })
     }
 
     /// Commits with the instance as the payload, which every commit replaces, and makes the
     /// commit visible to the next search.
-    fn commit(&mut self) -> Failed<Committed> {
-        let writer = self.writer.as_mut().ok_or_else(read_only)?;
+    fn commit(&self, writer: &mut IndexWriter) -> Failed<Committed> {
         let committing = Instant::now();
         let mut prepared = writer.prepare_commit().map_err(failed)?;
-        if let Some(instance) = &self.instance {
+        if let Some(instance) = locked(&self.instance)?.as_ref() {
             prepared.set_payload(instance);
         }
         prepared.commit().map_err(failed)?;
@@ -476,18 +484,15 @@ impl Lexical {
         })
     }
 
-    fn reset(&mut self, instance: String) -> Failed<()> {
-        let writer = self.writer.as_mut().ok_or_else(read_only)?;
+    fn reset(&self, instance: String) -> Failed<()> {
+        let mut writer = locked(&self.writer)?;
+        let writer = writer.as_mut().ok_or_else(read_only)?;
         writer.delete_all_documents().map_err(failed)?;
-        self.instance = Some(instance);
-        self.commit().map(|_| ())
+        *locked(&self.instance)? = Some(instance);
+        self.commit(writer).map(|_| ())
     }
 
-    fn apply(
-        &mut self,
-        documents: &[LexicalDocument],
-        removed: &[i64],
-    ) -> Failed<LexicalApplied> {
+    fn apply(&self, documents: &[LexicalDocument], removed: &[i64]) -> Failed<LexicalApplied> {
         let analyzing = Instant::now();
         let built = documents
             .iter()
@@ -495,7 +500,8 @@ impl Lexical {
             .collect::<Failed<Vec<_>>>()?;
         let analyze_ms = ms(analyzing);
         let writing = Instant::now();
-        let writer = self.writer.as_mut().ok_or_else(read_only)?;
+        let mut writer = locked(&self.writer)?;
+        let writer = writer.as_mut().ok_or_else(read_only)?;
         for value in removed.iter().chain(documents.iter().map(|node| &node.seq)) {
             writer.delete_term(Term::from_field_u64(self.fields.seq, seq(*value)?));
         }
@@ -506,7 +512,7 @@ impl Lexical {
         let Committed {
             commit_ms,
             reload_ms,
-        } = self.commit()?;
+        } = self.commit(writer)?;
         Ok(LexicalApplied {
             size: self.searcher().num_docs() as u32,
             analyze_ms,
@@ -731,24 +737,29 @@ impl LexicalSearch<'_> {
     }
 }
 
-/// The lexical index, owned by the native search worker like the vector index. Its synchronous
-/// methods are called only inside that worker.
+static SHARED: crate::shared::Registry<Lexical> = crate::shared::Registry::new();
+
+/// The lexical index, owned by the native search worker like the vector index. Reader workers of
+/// the same process search it through `attach` while the owner writes it.
 #[napi]
 pub struct LexicalIndex {
     /// `None` after `close`: later calls fail instead of reaching the released index.
-    inner: Option<Lexical>,
+    inner: Option<Arc<Lexical>>,
+    /// False for a reader's view: it searches the owner's index and never writes it.
+    writable: bool,
 }
 
 impl LexicalIndex {
     fn lexical(&self) -> Failed<&Lexical> {
         self.inner
-            .as_ref()
+            .as_deref()
             .ok_or_else(|| "Lexical index is closed".to_string())
     }
-    fn lexical_mut(&mut self) -> Failed<&mut Lexical> {
-        self.inner
-            .as_mut()
-            .ok_or_else(|| "Lexical index is closed".to_string())
+    fn writer(&self) -> Failed<&Lexical> {
+        if !self.writable {
+            return Err(read_only());
+        }
+        self.lexical()
     }
     pub(crate) fn search(&self) -> Failed<LexicalSearch<'_>> {
         let lexical = self.lexical()?;
@@ -766,7 +777,10 @@ impl LexicalIndex {
     #[napi(factory)]
     pub fn open(dir: String, recover: bool) -> Result<Self> {
         Ok(Self {
-            inner: Some(Lexical::open(Path::new(&dir), recover).map_err(js_error)?),
+            inner: Some(Arc::new(
+                Lexical::open(Path::new(&dir), recover).map_err(js_error)?,
+            )),
+            writable: true,
         })
     }
     /// Opens the existing index in `dir` to read only, while another process may hold its writer:
@@ -775,18 +789,48 @@ impl LexicalIndex {
     #[napi(factory)]
     pub fn open_read_only(dir: String) -> Result<Self> {
         Ok(Self {
-            inner: Some(Lexical::open_read_only(Path::new(&dir)).map_err(js_error)?),
+            inner: Some(Arc::new(
+                Lexical::open_read_only(Path::new(&dir)).map_err(js_error)?,
+            )),
+            writable: false,
+        })
+    }
+    /// Lets reader workers of this process `attach` to this index by `key` while it is open.
+    #[napi]
+    pub fn share(&self, key: String) -> Result<()> {
+        if !self.writable {
+            return Err(js_error("Only the owner shares its index".into()));
+        }
+        let inner = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| js_error("Lexical index is closed".into()))?;
+        SHARED.share(&key, inner).map_err(js_error)
+    }
+    /// A view of the index the owner shared by `key` that searches every commit the owner makes;
+    /// `reset` and `apply` on it fail. Fails when the owner has not shared it or has closed it.
+    #[napi(factory)]
+    pub fn attach(key: String) -> Result<Self> {
+        Ok(Self {
+            inner: Some(
+                SHARED
+                    .find(&key)
+                    .ok_or_else(|| js_error("No shared lexical index".into()))?,
+            ),
+            writable: false,
         })
     }
     /// The build the index holds, as `reset` named it; none for a new or replaced index.
     #[napi]
     pub fn instance(&self) -> Result<Option<String>> {
-        Ok(self.lexical().map_err(js_error)?.instance.clone())
+        self.lexical()
+            .and_then(|lexical| Ok(locked(&lexical.instance)?.clone()))
+            .map_err(js_error)
     }
     /// Empties the index and names the new build.
     #[napi]
-    pub fn reset(&mut self, instance: String) -> Result<()> {
-        self.lexical_mut()
+    pub fn reset(&self, instance: String) -> Result<()> {
+        self.writer()
             .and_then(|lexical| lexical.reset(instance))
             .map_err(js_error)
     }
@@ -794,11 +838,11 @@ impl LexicalIndex {
     /// commit. Removing a seq the index does not hold does nothing.
     #[napi]
     pub fn apply(
-        &mut self,
+        &self,
         documents: Vec<LexicalDocument>,
         removed: Vec<i64>,
     ) -> Result<LexicalApplied> {
-        self.lexical_mut()
+        self.writer()
             .and_then(|lexical| lexical.apply(&documents, &removed))
             .map_err(js_error)
     }
@@ -808,10 +852,16 @@ impl LexicalIndex {
         Ok(self.lexical().map_err(js_error)?.searcher().num_docs() as u32)
     }
     /// Releases the index and its writer lock now rather than at garbage collection, after any
-    /// merge still writing segment files has finished. Idempotent.
+    /// merge still writing segment files has finished. Idempotent. A reader's view releases only
+    /// itself: the owner keeps the index.
     #[napi]
     pub fn close(&mut self) {
-        if let Some(writer) = self.inner.take().and_then(|lexical| lexical.writer) {
+        let writer = self
+            .inner
+            .take()
+            .filter(|_| self.writable)
+            .and_then(|lexical| lexical.writer.lock().ok()?.take());
+        if let Some(writer) = writer {
             // Dropping the writer stops its indexing threads but not a running merge, which
             // would go on writing into the folder after close.
             let _ = writer.wait_merging_threads();
@@ -892,8 +942,8 @@ mod tests {
     #[test]
     fn apply_replaces_and_searches_filter_by_project() {
         let dir = temp_dir("apply");
-        let mut lexical = Lexical::open(&dir, false).unwrap();
-        assert_eq!(lexical.instance, None);
+        let lexical = Lexical::open(&dir, false).unwrap();
+        assert_eq!(*lexical.instance.lock().unwrap(), None);
         lexical.reset("first".into()).unwrap();
         lexical
             .apply(
@@ -955,7 +1005,7 @@ mod tests {
         }
         drop(lexical);
         let reopened = Lexical::open(&dir, false).unwrap();
-        assert_eq!(reopened.instance.as_deref(), Some("first"));
+        assert_eq!(reopened.instance.lock().unwrap().as_deref(), Some("first"));
         assert_eq!(size(&reopened), 3);
         drop(reopened);
         std::fs::remove_dir_all(dir).unwrap();
@@ -973,13 +1023,13 @@ mod tests {
     #[test]
     fn a_read_only_open_reads_beside_the_held_writer() {
         let dir = temp_dir("read-only");
-        let mut writer = Lexical::open(&dir, false).unwrap();
+        let writer = Lexical::open(&dir, false).unwrap();
         writer.reset("first".into()).unwrap();
         writer
             .apply(&[node(1, "p", "검색엔진을 바꿨다")], &[])
             .unwrap();
-        let mut reader = Lexical::open_read_only(&dir).unwrap();
-        assert_eq!(reader.instance.as_deref(), Some("first"));
+        let reader = Lexical::open_read_only(&dir).unwrap();
+        assert_eq!(reader.instance.lock().unwrap().as_deref(), Some("first"));
         assert_eq!(size(&reader), 1);
         let projects = ["p".to_string()];
         let scope = Scope {

@@ -9,7 +9,7 @@
 - `loadTurbovec()` — `createRequire`로 `memory-turbovec.node`를 불러 `TurbovecAddon`을 돌려준다. `vp run build`로 바이너리를 만들지 않았으면 throw한다
 - `addonPath` — 로컬 빌드된 애드온(`memory-turbovec.node`)의 절대 경로 문자열
 - `TurbovecAddon` — `{ VectorIndex, CacheLease, MemoryReadSession, SearchControl, LexicalIndex }` 클래스 묶음 타입
-- `VectorIndex` — 정규화된 u64 10진 문자열 id로 키를 거는 양자화 inner-product 인덱스. `new(dimensions, bits)`, static `load(path)`, `add(vectors: Float32Array, ids)`, `search(query, k, allowedIds?)`, `searchControlled(query, k, token, ownerKey, epoch, requestId, allowedIds?)`, `remove(id)`, `attachOwners(session, ids?)`(벡터마다 부모 node와 그 대화·프로젝트를 읽기 세션으로 읽어 둔다. 읽기의 허용 목록이 여기서 나온다), `save(path) -> number`(바뀐 것만 쓰고 걸린 ms를 돌려준다), `dimensions()`, `bits()`, `size()`, `validateIds(ids)`, `close()`
+- `VectorIndex` — 정규화된 u64 10진 문자열 id로 키를 거는 양자화 inner-product 인덱스. `new(dimensions, bits)`, static `load(path)`, static `attach(key)`(owner가 `share(key)`한 색인을 읽기만 하는 view), `share(key)`, `reset(dimensions, bits)`(그 자리에서 비운다), `add(vectors: Float32Array, ids)`, `search(query, k, allowedIds?)`, `searchControlled(query, k, token, ownerKey, epoch, requestId, allowedIds?)`, `remove(id)`, `attachOwners(session, ids?)`(벡터마다 부모 node와 그 대화·프로젝트를 읽기 세션으로 읽어 둔다. 읽기의 허용 목록이 여기서 나온다), `save(path) -> number`(바뀐 것만 쓰고 걸린 ms를 돌려준다), `dimensions()`, `bits()`, `size()`, `validateIds(ids)`, `close()`
 - `SearchResult` — `{ ids: string[], scores: number[] }`. `VectorIndex.search` 결과
 - `ControlledSearchResult` — `{ kind: "success"|"cancelled"|"budget-exceeded"|"invalid-input"|"index-failed", ids, scores, nativeWindow: "whole-call", nativeMs }`
 - `SearchControl` — Rust가 소유한 일회성 요청 제어. `new(token, ownerKey, epoch, requestId, remainingMs)`, `token()`(새로 발급한 capability), `snapshotWasPinned()`, `cancel()`, `close()`, static `count()`
@@ -36,7 +36,7 @@
 - `SearchControl.token()`은 생성자에 준 엔트로피 seed가 아니라 새로 발급한 capability이며 재사용하지 않는다.
 - `snapshotWasPinned()`는 실제 SQLite pin이 일어났는지를 나타내는 단조 이벤트이고 진행 중인 lease가 아니다. 완료 여부는 따로 추적해야 한다.
 - `NativeReadInput.remainingMs`는 호환용 DTO 필드일 뿐이고, 등록된 `SearchControl`의 deadline이 기준이다.
-- `MemoryReadSession`은 빌려 쓰는 `VectorIndex`·`LexicalIndex`와 같은 worker가 소유해야 한다.
+- `MemoryReadSession`은 worker마다 하나다. 빌려 쓰는 `VectorIndex`·`LexicalIndex`는 그 worker가 연 것이거나, 같은 프로세스의 owner가 `share`한 것을 `attach`한 view다. view로는 쓰지 못한다.
 - `NativeReadOutput.vectorUnavailable`이 true여도 text/morph 결과는 같은 깨끗한 스냅샷에서 나온 값이다. text 단계가 자기 몫의 시간(남은 예산에서 600ms을 남긴 시점, `TEXT_RESERVE`)을 넘으면 그때까지의 text 결과를 버리고 `textUnavailable=true`로 표시한 뒤 읽기를 계속한다 — 실패가 아니라 성공의 일부다. `failedStage`는 읽기 도중 실패한 단계만 표시하고, 성공했거나 읽기 전에 실패하면 없다.
 - `VectorIndex.close()`는 멱등이며 이후 호출은 throw한다.
 - 빌드는 이미 실행 중인 서버가 mmap한 라이브러리를 truncate하지 않도록 `memory-turbovec.node.<pid>.tmp`로 복사한 뒤 rename으로 교체해야 한다.

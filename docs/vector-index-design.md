@@ -143,8 +143,9 @@
 2. **바뀐 것만 저장하기.** (2026-11-26에 바꿈, 아래 "2단계를 바꾼 이유") 저장은 turbovec의 `IdMapIndex::sync`로
    바뀐 행과 지움만 붙인다. 시작할 때 소유를 id마다 찾지 않고 표를 훑어 읽는다. 프로젝트 partition과 seq
    segment는 미룬다.
-3. **동시 읽기.** 읽기가 worker의 한 줄을 기다리지 않고 segment snapshot 위에서 돈다. 다른 프로젝트를 기한
-   안에서 병렬로 읽고, 일부 결과를 돌려준다.
+3. **동시 읽기.** (2026-11-27에 바꿈, 아래 "3단계를 바꾼 이유") 읽기는 owner worker 옆의 reader worker 둘이
+   맡는다. reader는 owner의 색인을 같은 프로세스 안에서 읽기·쓰기 잠금 하나로 같이 쓴다. 읽기가 쓰기, coverage
+   count, 다른 읽기 뒤에 한 줄로 서지 않는다. 기한 안에서 일부만 읽고 돌려주는 것은 4단계로 옮긴다.
 4. **후보 좁히기.** 봉인 때 segment 요약을 만들고, 점수 순으로 읽다 멈춘다. 여유값은 전부 읽기와 비교해
    정한다. 전부 읽기는 정답 비교용으로 남긴다.
 5. **IVF**: partition이 백만 개 근처가 될 때.
@@ -173,6 +174,33 @@
 - **시작할 때 소유 읽기.** 1단계는 벡터마다 node를 seq로 찾았다. node 행은 원문과 함께 있어 node마다 표 page를
   하나씩 읽는다. 3.3GB DB에서 캐시가 비면 3.6–7.9초 걸렸다. 2단계는 `node_vector_chunks`와 `nodes_session`
   색인을 차례로 훑는다. 같은 조건에서 처음 1.4초, 다시 읽으면 145ms였다.
+
+### 3단계를 바꾼 이유 (2026-11-27)
+
+원래 3단계는 segment snapshot 위에서 읽고, 다른 프로젝트를 기한 안에서 병렬로 읽어 일부 결과를 돌려주는
+것이었다. 2단계가 segment를 미뤘으므로 snapshot 대신 잠금을 쓴다.
+
+- **무엇이 읽기를 막았나.** native worker 하나가 명령을 한 번에 하나씩 돌렸다. 읽기는 add, save, lexical
+  commit, coverage count(혼자 0.1–0.3초, 바쁜 머신에서 2.9초), 다른 읽기 뒤에서 기다렸다. 카드 여러 개가 동시에
+  돌면 읽기가 한 줄로 쌓인다.
+- **reader worker.** owner는 색인을 다 열고 소유를 읽은 뒤 private owner key로 색인을 공유한다. reader worker는
+  같은 key로 그 색인을 붙잡고(`VectorIndex.attach`, `LexicalIndex.attach`), 자기 SQLite 연결로 읽는다. 복사본이
+  아니라 owner가 쓰는 바로 그 색인이라 늦게 따라가는 일이 없다. 호스트는 `memory-search`와 `memory-coverage`를
+  일이 적은 reader에 보낸다.
+- **잠금.** 벡터 색인과 소유 표는 `RwLock` 하나에 있다. 읽기는 허용 목록을 만들고 벡터를 찾는 동안만 쥔다.
+  turbovec은 허용 목록에 색인에 없는 id가 있으면 실패하므로(`UnknownId`), 허용 목록과 검색이 같은 잠금 안에
+  있어야 한다. owner의 쓰기는 그동안 기다리고, 읽기는 진행 중인 쓰기만 기다린다. 쓰기는 add와 약 5ms의
+  저장이다. Tantivy는 reader를 같이 쓰므로 잠금이 필요 없다.
+- **thread pool 대신 worker.** 읽기를 Rust thread로 비동기 실행하는 방법도 있다. Node의 libuv thread pool은
+  프로세스 전체의 파일 I/O와 같이 쓰므로 2초까지 걸리는 읽기가 그것을 막는다. 따로 thread를 두면 읽기
+  코드(SQLite 연결, 진행 handler, 취소)를 다시 짜야 하고 JS로 된 coverage count는 옮길 수 없다. reader worker는
+  지금의 동기 읽기 코드를 그대로 쓴다.
+- **reader 수.** 둘이다. reader마다 Node worker와 SQLite 연결이라 메모리를 약 100MB 더 쓴다(checkout에서 잰 값).
+  실제 DB 사본(벡터 99,507개)에서 벡터·글자·형태소를 다 쓰는 읽기 하나가 26–37ms, 8개를 한꺼번에 보내면 전부
+  112ms에 끝났다. 한 줄이면 약 230ms다. coverage count 옆의 읽기는 25ms였다. 전에는 count가 끝날 때까지
+  기다렸다.
+- **기한 안 일부 결과는 4단계로.** 한 프로젝트 읽기는 이미 그 프로젝트 크기만큼만 읽는다(2단계). 일부만 읽는
+  것은 어디를 먼저 읽을지 고르는 4단계가 있어야 뜻이 있다.
 
 ## 확인할 것
 

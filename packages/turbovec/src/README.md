@@ -6,7 +6,7 @@
 
 ## Interface
 
-- `VectorIndex` — napi 클래스. `new(dimensions, bits)`, `add(vectors, ids)`, `search(query, k, allowedIds?)`, `searchControlled(query, k, token, ownerKey, epoch, requestId, allowedIds?)`, `remove(id)`, `attachOwners(session, ids?)`, `save(path)`(걸린 ms 반환), 팩토리 `load(path)`, `dimensions()`, `bits()`, `size()`, `close()`, `validateIds(ids)`를 제공한다. `attachOwners`는 `ids`(생략하면 색인의 모든 벡터)의 부모 node seq와 그 node를 가진 것(대화, 대화 밖 node면 프로젝트)을 읽기 세션으로 읽어 들고 있고, 소유가 있는 벡터 수를 돌려준다. id가 1만 개를 넘으면 `node_vector_chunks`와 `nodes`의 대화 색인(`nodes_session`)을 차례로 훑어 읽는다. node를 seq로 하나씩 찾으면 node마다 표 page를 하나씩 읽어 큰 DB에서 몇 초가 걸리기 때문이다. `remove`는 그 소유도 지운다
+- `VectorIndex` — napi 클래스. `new(dimensions, bits)`, `share(key)`, 팩토리 `attach(key)`, `reset(dimensions, bits)`, `add(vectors, ids)`, `search(query, k, allowedIds?)`, `searchControlled(query, k, token, ownerKey, epoch, requestId, allowedIds?)`, `remove(id)`, `attachOwners(session, ids?)`, `save(path)`(걸린 ms 반환), 팩토리 `load(path)`, `dimensions()`, `bits()`, `size()`, `close()`, `validateIds(ids)`를 제공한다. `attachOwners`는 `ids`(생략하면 색인의 모든 벡터)의 부모 node seq와 그 node를 가진 것(대화, 대화 밖 node면 프로젝트)을 읽기 세션으로 읽어 들고 있고, 소유가 있는 벡터 수를 돌려준다. id가 1만 개를 넘으면 `node_vector_chunks`와 `nodes`의 대화 색인(`nodes_session`)을 차례로 훑어 읽는다. node를 seq로 하나씩 찾으면 node마다 표 page를 하나씩 읽어 큰 DB에서 몇 초가 걸리기 때문이다. `remove`는 그 소유도 지운다
 - `SearchResult` — napi 객체 `{ ids: string[], scores: f64[] }`. `VectorIndex.search`의 결과다
 - `CacheLease` — napi 클래스. 생성자는 경로의 파일을 열거나 만들고(0o600) 배타적 non-blocking 락을 잡는다. `close()`로 락을 놓는다
 - `SearchControl` — napi 클래스. `new(token, ownerKey, epoch, requestId, remainingMs)`, `token()`, `snapshotWasPinned()`, `cancel()`, `close()`, static `count()`를 제공한다. 요청별 취소와 deadline 상태를 전역 레지스트리에 등록한다
@@ -27,7 +27,7 @@
 
 - 벡터 ID는 정규형 u64 10진 문자열이어야 한다. `parse_id`는 "01"이나 u64 범위를 넘는 값처럼 왕복 문자열이 다른 값을 "Non-canonical vector ID"로 거부한다
 - `validateIds`는 ids 개수가 인덱스 크기와 같고, 모든 ID가 정규형이면서 중복이 없고, 모두 인덱스에 있어야 통과한다. 아니면 "Vector snapshot mapping mismatch"를 낸다
-- `VectorIndex`의 동기 메서드는 소유 Node worker 안에서만 호출된다(주석 근거). `close()` 뒤의 호출은 "Vector index is closed"로 실패하고, `close`는 멱등이다
+- `VectorIndex`는 색인과 소유를 `Arc<RwLock>` 하나에 둔다. owner worker가 쓰고, 같은 프로세스의 reader worker는 `attach`한 view로 동시에 읽는다(`shared.rs`의 registry, 열쇠는 호스트의 private owner key). registry는 약한 참조만 들어 색인을 살려 두지 않는다. view는 바꾸는 메서드에서 "Vector index is shared to read only"로 실패한다. 읽기(`MemoryReadSession.search`)는 허용 목록과 벡터 단계 동안만 읽기 잠금을 쥐고 text 단계 전에 놓는다. `attachOwners`는 DB를 잠금 밖에서 읽고 넣을 때만 쓰기 잠금을 잡는다. `close()` 뒤의 호출은 "Vector index is closed"로 실패하고, `close`는 멱등이다. 색인은 owner와 모든 view가 닫혀야 풀린다
 - `search`의 `allowedIds`가 생략되면 전체 인덱스를 검색하고, 빈 배열이면 결과 없이 반환한다. query 길이는 인덱스 차원과 같아야 한다
 - SQLite는 호스트 Node 프로세스의 것만 쓴다. 두 번째 SQLite를 링크하면 살아 있는 WAL SHM 매핑이 잘릴 수 있다. `node-sqlite`와 `test-sqlite` feature는 함께 켤 수 없고, `test-sqlite`는 Rust 단위 테스트 실행 파일에서만 허용된다(`compile_error`로 강제)
 - `sqlite3_turbovec_init`는 SQL 함수나 DB 효과를 등록하지 않는다. 확장 코드와 API 테이블은 프로세스 수명 동안 상주한다
@@ -37,7 +37,7 @@
 - 소유는 낡을 수 있다(아직 commit하지 않은 벡터, 색인을 떠나기를 기다리는 벡터, 다시 임베딩한 node의 옛 청크). 그래서 매 라운드 부모마다 가장 높은 hit 하나를 이 스냅샷에서 확인한다(`checked`, SQL 한 번). 지금 embedder의 `node_vectors` 행이 있고, 청크면 그 부모에 아직 매핑돼 있고, 허용 프로젝트이고 `beforeSeq` 전이고, `memory_graph_vector_removals`에 없어야 남는다. 떨어진 hit은 허용 목록에서 빼고 다음 라운드를 읽으므로 라운드마다 목록이 줄어든다. 확인 비용은 k에 비례한다. 라운드를 넘어 순서가 바뀔 수 있어 마지막에 점수로 다시 정렬한다
 - 확인과 node id 읽기는 같은 SQL이라 `mappingMs`는 확인에 쓴 시간이고, `vectorMs`는 그것을 뺀 벡터 단계 시간이다. `candidateMs`는 허용 목록을 만든 시간이다
 - lexical 색인은 노드를 마지막으로 반영한 변경 때의 모습으로 들고 있다. 그래서 text·morph 채널은 k의 2배(`LEXICAL_DEPTH`)를 찾고, 이 스냅샷에서 허용 프로젝트이고 `lexical_changes`에 남은 변경이 없는 노드만 순서대로 k개 남긴다(`lexical_ids`, SQL 한 번). 비었거나 숨긴 노드는 indexer가 색인에 넣지 않고, 숨김 추가·해제도 변경으로 기록되므로 따로 검사하지 않는다. 미임베딩·미해석·lexical 미반영 수(coverage)는 읽기가 세지 않는다. 호스트 worker가 자기 연결로 센다
-- `LexicalIndex`의 동기 메서드는 소유 worker 안에서만 호출된다. `open`은 열려 있는 동안 Tantivy writer lock을 잡으므로 같은 폴더를 두 번 열면 "Lexical index is locked by another writer"로 실패한다. `openReadOnly`는 writer lock을 잡지 않으므로 writer가 열려 있는 폴더도 열 수 있다. 모든 commit은 build 이름을 payload로 다시 쓴다(commit마다 payload가 바뀐다). commit 뒤 reader를 바로 reload하므로 다음 검색이 그 commit을 본다
+- `LexicalIndex`는 owner가 쓰고 reader worker는 `attach`한 view로 같은 Tantivy reader를 읽는다. writer와 build 이름은 `Mutex` 안에 있고, 검색은 잠금 없이 reader의 searcher를 잡는다. `open`은 열려 있는 동안 Tantivy writer lock을 잡으므로 같은 폴더를 두 번 열면 "Lexical index is locked by another writer"로 실패한다. `openReadOnly`는 writer lock을 잡지 않으므로 writer가 열려 있는 폴더도 열 수 있다. 모든 commit은 build 이름을 payload로 다시 쓴다(commit마다 payload가 바뀐다). commit 뒤 reader를 바로 reload하므로 다음 검색이 그 commit을 본다
 - `LexicalIndex` 안의 오류는 문자열로 다루고 napi 메서드에서만 JS 오류로 바꾼다. Rust 단위 테스트 실행 파일에는 napi 오류를 만들 Node가 없기 때문이다
 - 두 글자 검색어는 그 두 글자로 시작하거나 끝나는 gram(`(?s:ab.|.ab)`)으로 찾는다. 원문 끝이 아니면 시작하는 gram이 있고, 끝이면 끝나는 gram이 있다. 원문 전체가 두 글자인 노드는 찾지 못한다
 - 검색 수집은 segment의 alive bitset으로 지운 문서를 건너뛴다. `Weight::for_each`는 지운 문서를 거르지 않는다

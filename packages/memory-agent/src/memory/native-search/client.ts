@@ -32,6 +32,7 @@ import {
   type OwnerReady,
   OwnerReply,
   OwnerSetup,
+  type WorkerSetup,
 } from "./worker-protocol.ts";
 import { nativeReadInputLogicalBytes } from "./read-protocol.ts";
 
@@ -59,11 +60,26 @@ type RequestControl = {
 const SnapshotPinningControl = Schema.Struct({
   snapshotWasPinned: Schema.declare(Predicate.isFunction),
 });
+/**
+ * One worker as the host drives it: its one slot, and the signal that the job holding the slot
+ * is past its reply deadline.
+ */
+type Lane = {
+  readonly transport: OwnerTransport;
+  readonly slot: Semaphore.Semaphore;
+  /**
+   * Completed once the job holding the slot is past its reply deadline; replaced by a fresh one
+   * when that job's reply comes. Only the slot holder writes it.
+   */
+  readonly overdue: Ref.Ref<Deferred.Deferred<void>>;
+};
 type Job = {
   readonly command: OwnerCommand;
+  /** The worker the job runs on: a reader for a read when there are readers, else the owner. */
+  readonly lane: Lane;
   readonly control: Option.Option<RequestControl>;
   readonly result: Deferred.Deferred<OwnerReply, NativeOwnerFailed>;
-  /** `queued` until the job holds the owner's one slot; `active` until the worker answers. */
+  /** `queued` until the job holds its worker's one slot; `active` until the worker answers. */
   readonly phase: "queued" | "active";
 };
 type State = Data.TaggedEnum<{
@@ -72,8 +88,15 @@ type State = Data.TaggedEnum<{
 }>;
 const State = Data.taggedEnum<State>();
 
-/** At most this many requests wait for or hold the owner. */
+/** At most this many requests wait for or hold the owner and its readers. */
 const capacity = 32;
+
+/**
+ * Workers that only read, beside the owner, when it has a database to read: reads run beside
+ * the owner's writes and beside each other instead of in one line (docs/vector-index-design.md,
+ * step 3). Each holds its own SQLite connection and searches the owner's indexes in place.
+ */
+const readerCount = 2;
 
 /**
  * How long the host waits for a reply, from the job's dispatch, before it gives up on a hung
@@ -137,7 +160,7 @@ export interface OwnerTransport {
   readonly terminate: Effect.Effect<void>;
 }
 
-export type OwnerWorker = { readonly setup: OwnerSetup; readonly workerFile: string | URL };
+export type OwnerWorker = { readonly setup: WorkerSetup; readonly workerFile: string | URL };
 export type OwnerConnect = (
   worker: OwnerWorker,
 ) => Effect.Effect<OwnerTransport, NativeOwnerFailed, Scope.Scope>;
@@ -218,24 +241,56 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
   );
   const crypto = yield* SecureRandom.SecureRandom;
   const ownerKey = yield* crypto.uuidV4();
+  const lane = Effect.fnUntraced(function* (transport: OwnerTransport) {
+    return {
+      transport,
+      slot: yield* Semaphore.make(1),
+      overdue: yield* Ref.make(yield* Deferred.make<void>()),
+    } satisfies Lane;
+  });
   const transport = yield* connect({ setup: { ...validated, ownerKey }, workerFile });
+  const owner = yield* lane(transport);
+  // Started once the owner has shared its indexes; their Scope closes before the owner's.
+  const readers = yield* Effect.forEach(
+    validated.databasePath === undefined
+      ? []
+      : Arr.makeBy(readerCount, () => validated.databasePath!),
+    (databasePath) =>
+      connect({
+        setup: {
+          kind: "reader",
+          epoch: validated.epoch,
+          dimensions: validated.dimensions,
+          ownerKey,
+          databasePath,
+          lexical: validated.lexicalDirectory !== undefined,
+        },
+        workerFile,
+      }).pipe(Effect.flatMap(lane)),
+    { concurrency: "unbounded" },
+  );
   const state = yield* Ref.make<State>(State.open({ jobs: HashMap.empty() }));
-  const slot = yield* Semaphore.make(1);
   const jobs = yield* FiberMap.make<string>();
   // Sole reply-ingress writer, updated before releasing command waiters.
   const cachedSize = yield* Ref.make(transport.ready.size);
-  /**
-   * Completed once the job holding the slot is past its reply deadline; replaced by a fresh one
-   * when that job's reply comes. Only the slot holder writes it.
-   */
-  const overdue = yield* Ref.make(yield* Deferred.make<void>());
-  const markOverdue = Effect.flatMap(Ref.get(overdue), (signal) =>
-    Deferred.succeed(signal, undefined),
-  );
-  const renewOverdue = Effect.when(
-    Effect.flatMap(Deferred.make<void>(), (fresh) => Ref.set(overdue, fresh)),
-    Effect.flatMap(Ref.get(overdue), Deferred.isDone),
-  );
+  const markOverdue = (lane: Lane) =>
+    Effect.flatMap(Ref.get(lane.overdue), (signal) => Deferred.succeed(signal, undefined));
+  const renewOverdue = (lane: Lane) =>
+    Effect.when(
+      Effect.flatMap(Deferred.make<void>(), (fresh) => Ref.set(lane.overdue, fresh)),
+      Effect.flatMap(Ref.get(lane.overdue), Deferred.isDone),
+    );
+  /** A read goes to the reader with the fewest jobs; anything else, or any read without readers, to the owner. */
+  const laneFor = (command: OwnerCommand, current: HashMap.HashMap<string, Job>) => {
+    const read =
+      OwnerCommand.guards["memory-search"](command) ||
+      OwnerCommand.guards["memory-coverage"](command);
+    const load = (lane: Lane) =>
+      Arr.countBy([...HashMap.values(current)], (job) => job.lane === lane);
+    return read && Arr.isArrayNonEmpty(readers)
+      ? Arr.reduce(readers, readers[0], (least, lane) => (load(lane) < load(least) ? lane : least))
+      : owner;
+  };
 
   const failAll = Effect.fnUntraced(function* (error: NativeOwnerFailed) {
     const previous = yield* Ref.getAndUpdate(state, (current): State =>
@@ -261,10 +316,12 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
     });
   });
   yield* Effect.addFinalizer(() => failAll(NativeOwnerFailed.make({ reason: "closed" })));
-  // Queued waiters must settle when the worker goes, not only the request it was running.
-  yield* Effect.forkScoped(
-    transport.exited.pipe(
-      Effect.andThen(failAll(NativeOwnerFailed.make({ reason: "worker-exit" }))),
+  // Queued waiters must settle when a worker goes, not only the request it was running.
+  yield* Effect.forEach([owner, ...readers], (lane) =>
+    Effect.forkScoped(
+      lane.transport.exited.pipe(
+        Effect.andThen(failAll(NativeOwnerFailed.make({ reason: "worker-exit" }))),
+      ),
     ),
   );
 
@@ -305,16 +362,17 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
 
   /** Holds the slot from dispatch until the worker answers, then settles the caller's wait. */
   const run = (job: Job) =>
-    slot
+    job.lane.slot
       .withPermits(1)(
         setPhase(job.command.requestId, "active").pipe(
           Effect.andThen(
             Effect.forkScoped(
-              Effect.sleep(replyDeadline(job.command)).pipe(Effect.andThen(markOverdue)),
+              Effect.sleep(replyDeadline(job.command)).pipe(Effect.andThen(markOverdue(job.lane))),
             ),
           ),
           Effect.andThen(
             Effect.suspend(() => {
+              const { transport } = job.lane;
               const controlled = (command: ControlledCommand) =>
                 Option.match(job.control, {
                   onNone: () => Effect.fail(NativeOwnerFailed.make({ reason: "invalid-input" })),
@@ -337,7 +395,7 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
           ),
           // Closing the Scope stops the deadline timer as soon as the worker answers.
           Effect.scoped,
-          Effect.ensuring(renewOverdue),
+          Effect.ensuring(renewOverdue(job.lane)),
           Effect.tap((reply) =>
             Option.match(sizeOf(reply), {
               onNone: () => Effect.void,
@@ -432,19 +490,19 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
       reset: (input) => ({ ...input }),
       save: (input) => ({ ...input }),
     });
-    const job: Job = { command: owned, result, control, phase: "queued" };
+    const queued = { command: owned, result, control, phase: "queued" } as const;
     return yield* Effect.scoped(
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
-          yield* Ref.modify(
+          const job = yield* Ref.modify(
             state,
-            (current): readonly [Effect.Effect<void, NativeOwnerFailed>, State] =>
+            (current): readonly [Effect.Effect<Job, NativeOwnerFailed>, State] =>
               State.$match(current, {
-                failed: (current): readonly [Effect.Effect<void, NativeOwnerFailed>, State] => [
+                failed: (current): readonly [Effect.Effect<Job, NativeOwnerFailed>, State] => [
                   Effect.fail(current.error),
                   current,
                 ],
-                open: (current): readonly [Effect.Effect<void, NativeOwnerFailed>, State] => {
+                open: (current): readonly [Effect.Effect<Job, NativeOwnerFailed>, State] => {
                   if (HashMap.has(current.jobs, input.requestId))
                     return [
                       Effect.fail(NativeOwnerFailed.make({ reason: "invalid-input" })),
@@ -452,8 +510,9 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
                     ];
                   if (HashMap.size(current.jobs) >= capacity)
                     return [Effect.fail(NativeOwnerFailed.make({ reason: "queue-full" })), current];
+                  const job: Job = { ...queued, lane: laneFor(owned, current.jobs) };
                   return [
-                    Effect.void,
+                    Effect.succeed(job),
                     State.open({ jobs: HashMap.set(current.jobs, input.requestId, job) }),
                   ];
                 },
@@ -497,7 +556,7 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
               // The deadline runs from dispatch (see `run`). A queued job waits for the jobs
               // ahead, each bounded by its own deadline, so it gives up only on a hung worker.
               Effect.raceFirst(
-                Effect.flatMap(Ref.get(overdue), Deferred.await).pipe(
+                Effect.flatMap(Ref.get(job.lane.overdue), Deferred.await).pipe(
                   Effect.andThen(
                     Effect.fail(NativeOwnerFailed.make({ reason: "request-timeout" })),
                   ),

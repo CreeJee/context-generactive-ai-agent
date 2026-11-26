@@ -11,7 +11,7 @@ import {
   Path,
   Predicate,
   Schema,
-  ScopedRef,
+  type Scope,
 } from "effect";
 import { RpcServer } from "effect/rpc";
 // Synchronous native/filesystem calls are confined to this owning worker.
@@ -31,7 +31,10 @@ import {
   NativeOwnerRpcs,
   OwnerCommand,
   OwnerReply,
-  OwnerSetup,
+  type OwnerReady,
+  type OwnerSetup,
+  type ReaderSetup,
+  WorkerSetup,
 } from "./worker-protocol.ts";
 
 const fail = (reason: NativeOwnerFailed["reason"]) => NativeOwnerFailed.make({ reason });
@@ -91,41 +94,13 @@ const timedNative = <A>(
     return result;
   }).pipe(Effect.withSpan(name, { attributes }));
 
-/** The owner's scoped resources and its command executor; Scope closure releases them. */
-const owner = Effect.gen(function* () {
-  const services = yield* Layer.build(Layer.merge(NodeFileSystem.layer, NodePath.layer));
-  const paths = yield* Effect.provideContext(Path.Path, services);
-  const fs = yield* Effect.provideContext(FileSystem.FileSystem, services);
-  const files = <A>(operation: Effect.Effect<A, import("effect/PlatformError").PlatformError>) =>
-    operation.pipe(
-      Effect.mapError((cause) => NativeOwnerFailed.make({ reason: "index-failed", cause })),
-    );
-  const setup = yield* Schema.decodeUnknownEffect(OwnerSetup)(workerData).pipe(
-    Effect.mapError(() => fail("invalid-input")),
+const files = <A>(operation: Effect.Effect<A, import("effect/PlatformError").PlatformError>) =>
+  operation.pipe(
+    Effect.mapError((cause) => NativeOwnerFailed.make({ reason: "index-failed", cause })),
   );
-  if (
-    setup.dimensions <= 0 ||
-    setup.dimensions % 8 !== 0 ||
-    setup.dimensions > 4294967295 ||
-    ![1, 2, 4, 8].includes(setup.bits)
-  )
-    return yield* fail("invalid-input");
-  // The worker's own read-only connection: the schema check before anything else, then the
-  // coverage counts beside each read. Scope closure closes it.
-  const counter = yield* Effect.transposeOption(
-    Option.map(Option.fromUndefinedOr(setup.databasePath), (databasePath) =>
-      Effect.acquireRelease(
-        native(() => new DatabaseSync(databasePath, { readOnly: true }), "native-incompatible"),
-        (sqlite) => Effect.sync(() => sqlite.close()),
-      ),
-    ),
-  );
-  yield* Effect.transposeOption(
-    Option.map(counter, (sqlite) =>
-      native(() => assertDatabaseSchema(sqlite), "native-incompatible"),
-    ),
-  );
-  yield* files(fs.makeDirectory(setup.cacheDirectory, { recursive: true, mode: 0o700 }));
+
+/** The addon, its node:sqlite bridge set up for this worker. */
+const loadBinding = Effect.gen(function* () {
   const addon = yield* requireRuntime("turbovec").pipe(
     Effect.mapError((cause) => NativeOwnerFailed.make({ reason: "native-incompatible", cause })),
   );
@@ -139,6 +114,164 @@ const owner = Effect.gen(function* () {
     !Predicate.isFunction(binding.SearchControl)
   )
     return yield* fail("native-incompatible");
+  return binding;
+});
+type Binding = Effect.Success<typeof loadBinding>;
+
+/**
+ * The worker's own read-only connection: the schema check before anything else, then the
+ * coverage counts beside each read. Scope closure closes it.
+ */
+const openCounter = (databasePath: string) =>
+  Effect.acquireRelease(
+    native(() => new DatabaseSync(databasePath, { readOnly: true }), "native-incompatible"),
+    (sqlite) => Effect.sync(() => sqlite.close()),
+  ).pipe(Effect.tap((sqlite) => native(() => assertDatabaseSchema(sqlite), "native-incompatible")));
+
+/** The worker's read session; Scope closure closes it before the index it reads. */
+const openReader = (binding: Binding, databasePath: string) =>
+  Effect.acquireRelease(
+    native(() => new binding.MemoryReadSession(databasePath), "read-failed"),
+    (session) => Effect.sync(() => session.close()),
+  );
+
+/**
+ * The reads a worker serves, the owner and a reader alike: a memory read over `index` and
+ * `lexical`, and the coverage count beside it.
+ */
+const reads = (
+  setup: Pick<OwnerSetup, "epoch" | "ownerKey">,
+  index: InstanceType<Binding["VectorIndex"]>,
+  lexical: Option.Option<InstanceType<Binding["LexicalIndex"]>>,
+  reader: Option.Option<InstanceType<Binding["MemoryReadSession"]>>,
+  counter: Option.Option<DatabaseSync>,
+) => ({
+  "memory-search": (command: (typeof OwnerCommand.cases)["memory-search"]["Type"]) =>
+    Effect.gen(function* () {
+      const session = yield* Effect.fromOption(reader, () => fail("read-failed"));
+      if (command.controlToken === undefined || setup.ownerKey === undefined)
+        return yield* fail("invalid-input");
+      const beforeCpu = process.threadCpuUsage();
+      const result = yield* native(
+        () =>
+          session.search(
+            index,
+            Option.getOrNull(lexical),
+            command.input,
+            command.controlToken!,
+            setup.ownerKey!,
+            setup.epoch,
+            command.requestId,
+          ),
+        "read-failed",
+      ).pipe(Effect.withSpan("MemoryReadSession.search"));
+      if (result.kind === "read-failed") return yield* fail("read-failed");
+      const cpu = process.threadCpuUsage(beforeCpu);
+      return OwnerReply.cases["memory-result"].make({
+        workerCpuUs: cpu.user + cpu.system,
+        requestId: command.requestId,
+        epoch: setup.epoch,
+        result,
+      });
+    }),
+  "memory-coverage": (command: (typeof OwnerCommand.cases)["memory-coverage"]["Type"]) =>
+    Effect.gen(function* () {
+      const sqlite = yield* Effect.fromOption(counter, () => fail("read-failed"));
+      const coverage = yield* readCoverage(sqlite, command.input).pipe(
+        Effect.mapError((cause) => NativeOwnerFailed.make({ reason: "read-failed", cause })),
+        Effect.withSpan("NativeWorker.readCoverage"),
+      );
+      return OwnerReply.cases["coverage-result"].make({
+        requestId: command.requestId,
+        epoch: setup.epoch,
+        coverage,
+      });
+    }),
+});
+
+/** A started worker: what it reports to Open, and how it runs each command. */
+type Started = {
+  readonly ready: OwnerReady;
+  readonly execute: (command: OwnerCommand) => Effect.Effect<OwnerReply, NativeOwnerFailed>;
+};
+
+const checkEpoch = (command: OwnerCommand, epoch: string) =>
+  Effect.when(Effect.fail(fail("epoch-mismatch")), Effect.succeed(command.epoch !== epoch));
+
+/**
+ * A reader beside the owner: it searches the indexes the owner shared under its key, in place,
+ * and takes no other command. Scope closure releases its views, never the owner's indexes.
+ */
+const readerWorker = Effect.fnUntraced(function* (
+  setup: ReaderSetup,
+): Effect.fn.Return<Started, NativeOwnerFailed, Scope.Scope> {
+  const counter = yield* openCounter(setup.databasePath);
+  const binding = yield* loadBinding;
+  const index = yield* Effect.acquireRelease(
+    native(() => binding.VectorIndex.attach(setup.ownerKey)),
+    (index) => Effect.sync(() => index.close()),
+  );
+  if ((yield* native(() => index.dimensions())) !== setup.dimensions)
+    return yield* fail("invalid-input");
+  const lexical = setup.lexical
+    ? Option.some(
+        yield* Effect.acquireRelease(
+          native(() => binding.LexicalIndex.attach(setup.ownerKey)),
+          (index) => Effect.sync(() => index.close()),
+        ),
+      )
+    : Option.none();
+  const reader = yield* openReader(binding, setup.databasePath);
+  const served = reads(setup, index, lexical, Option.some(reader), Option.some(counter));
+  const refused = () => Effect.fail(fail("invalid-input"));
+  const execute = Effect.fnUntraced(function* (command: OwnerCommand) {
+    yield* checkEpoch(command, setup.epoch);
+    return yield* OwnerCommand.match(command, {
+      ...served,
+      add: refused,
+      remove: refused,
+      reset: refused,
+      save: refused,
+      validate: refused,
+      "vector-search": refused,
+      "vector-search-controlled": refused,
+      "lexical-apply": refused,
+      "lexical-reset": refused,
+    });
+  });
+  const lexicalReady = yield* Effect.transposeOption(
+    Option.map(lexical, (index) => native(() => ({ instance: index.instance() }))),
+  );
+  return {
+    ready: {
+      threadId,
+      size: yield* native(() => index.size()),
+      needsReset: false,
+      lexical: Option.getOrUndefined(lexicalReady),
+    },
+    execute,
+  };
+});
+
+/** The owner's scoped resources and its command executor; Scope closure releases them. */
+const ownerWorker = Effect.fnUntraced(function* (
+  setup: OwnerSetup,
+): Effect.fn.Return<Started, NativeOwnerFailed, Scope.Scope> {
+  const services = yield* Layer.build(Layer.merge(NodeFileSystem.layer, NodePath.layer));
+  const paths = yield* Effect.provideContext(Path.Path, services);
+  const fs = yield* Effect.provideContext(FileSystem.FileSystem, services);
+  if (
+    setup.dimensions <= 0 ||
+    setup.dimensions % 8 !== 0 ||
+    setup.dimensions > 4294967295 ||
+    ![1, 2, 4, 8].includes(setup.bits)
+  )
+    return yield* fail("invalid-input");
+  const counter = yield* Effect.transposeOption(
+    Option.map(Option.fromUndefinedOr(setup.databasePath), openCounter),
+  );
+  yield* files(fs.makeDirectory(setup.cacheDirectory, { recursive: true, mode: 0o700 }));
+  const binding = yield* loadBinding;
   yield* Effect.acquireRelease(
     native(
       () => new binding.CacheLease(paths.join(setup.cacheDirectory, "writer.lock")),
@@ -148,34 +281,30 @@ const owner = Effect.gen(function* () {
   );
   const file = paths.join(setup.cacheDirectory, "index.tvim");
   const exists = yield* files(fs.exists(file));
-  // The index is released when replaced or when the worker's Scope closes, not at GC.
-  const owned = (create: () => InstanceType<typeof binding.VectorIndex>) =>
-    Effect.acquireRelease(native(create), (index) => Effect.sync(() => index.close()));
-  const empty = owned(() => new binding.VectorIndex(setup.dimensions, setup.bits));
-  const indexRef = yield* ScopedRef.fromAcquire(
-    exists ? owned(() => binding.VectorIndex.load(file)) : empty,
+  // The index is released when the worker's Scope closes, not at GC. Readers attached to it keep
+  // it until they close too.
+  const index = yield* Effect.acquireRelease(
+    native(() =>
+      exists
+        ? binding.VectorIndex.load(file)
+        : new binding.VectorIndex(setup.dimensions, setup.bits),
+    ),
+    (index) => Effect.sync(() => index.close()),
   );
   // Metadata belongs to the snapshot; never silently reuse a different vector layout.
   const compatible =
     exists &&
-    (yield* native(() => {
-      const saved = ScopedRef.getUnsafe(indexRef);
-      return saved.dimensions() === setup.dimensions && saved.bits() === setup.bits;
-    }));
+    (yield* native(() => index.dimensions() === setup.dimensions && index.bits() === setup.bits));
   // Rebuild must be an explicit host recovery/publication, never a clean empty owner.
   if (exists && !compatible && setup.recover !== true) return yield* fail("index-failed");
   const needsReset = !compatible;
-  if (exists && !compatible) yield* ScopedRef.set(indexRef, empty);
+  if (exists && !compatible) yield* native(() => index.reset(setup.dimensions, setup.bits));
   // The worker owns this read-only connection; Scope closure closes it before the index.
-  const reader =
-    setup.databasePath === undefined
-      ? Option.none<InstanceType<typeof binding.MemoryReadSession>>()
-      : Option.some(
-          yield* Effect.acquireRelease(
-            native(() => new binding.MemoryReadSession(setup.databasePath!), "read-failed"),
-            (session) => Effect.sync(() => session.close()),
-          ),
-        );
+  const reader = yield* Effect.transposeOption(
+    Option.map(Option.fromUndefinedOr(setup.databasePath), (databasePath) =>
+      openReader(binding, databasePath),
+    ),
+  );
   // The vector lease above already keeps a second owner of this storage root out; Tantivy's own
   // writer lock guards the folder as well. The index is closed before the worker exits.
   const lexical = yield* Effect.transposeOption(
@@ -190,7 +319,7 @@ const owner = Effect.gen(function* () {
    * Reads which node and conversation each of `ids` (every vector when omitted) belongs to: reads
    * build their allowlist from that instead of from SQLite (docs/vector-index-design.md, step 1).
    */
-  const attachOwners = (index: InstanceType<typeof binding.VectorIndex>, ids?: readonly string[]) =>
+  const attachOwners = (ids?: readonly string[]) =>
     Effect.transposeOption(
       Option.map(reader, (session) =>
         native(() => index.attachOwners(session, ids === undefined ? undefined : [...ids])).pipe(
@@ -200,25 +329,29 @@ const owner = Effect.gen(function* () {
         ),
       ),
     );
-  yield* attachOwners(ScopedRef.getUnsafe(indexRef));
-  const size = yield* native(() => ScopedRef.getUnsafe(indexRef).size());
+  yield* attachOwners();
+  // Readers find the indexes by the owner's private key once they are complete.
+  yield* Effect.transposeOption(
+    Option.map(Option.fromUndefinedOr(setup.ownerKey), (key) =>
+      native(() => {
+        index.share(key);
+        Option.map(lexical, (lexical) => lexical.share(key));
+      }),
+    ),
+  );
+  const size = yield* native(() => index.size());
   const lexicalReady = yield* Effect.transposeOption(
     Option.map(lexical, (index) => native(() => ({ instance: index.instance() }))),
   );
+  const served = reads(setup, index, lexical, reader, counter);
 
   const execute = Effect.fnUntraced(function* (command: OwnerCommand) {
-    yield* Effect.when(
-      Effect.fail(fail("epoch-mismatch")),
-      Effect.succeed(command.epoch !== setup.epoch),
-    );
-    // The single owner loop is the only reader and writer of indexRef, so `index` stays current
-    // for this command; only reset replaces it, and ack then reads the replacement.
-    const index = yield* ScopedRef.get(indexRef);
+    yield* checkEpoch(command, setup.epoch);
     const ack = () =>
       OwnerReply.cases.ack.make({
         requestId: command.requestId,
         epoch: setup.epoch,
-        size: ScopedRef.getUnsafe(indexRef).size(),
+        size: index.size(),
       });
     const ids = (values: readonly string[]) =>
       decodeIds(values).pipe(Effect.mapError(() => fail("invalid-input")));
@@ -242,7 +375,7 @@ const owner = Effect.gen(function* () {
             Effect.withSpan("VectorIndex.add", { attributes: { vectors: command.ids.length } }),
           );
           // The chunk rows are committed before the add, so the reader sees them.
-          yield* attachOwners(index, command.ids);
+          yield* attachOwners(command.ids);
           return yield* native(ack);
         }),
       remove: (command) =>
@@ -262,7 +395,9 @@ const owner = Effect.gen(function* () {
             }),
           );
         }),
-      reset: () => ScopedRef.set(indexRef, empty).pipe(Effect.andThen(native(ack))),
+      // In place, so the readers attached to the index see the empty one too.
+      reset: () =>
+        native(() => index.reset(setup.dimensions, setup.bits)).pipe(Effect.andThen(native(ack))),
       save: () =>
         Effect.gen(function* () {
           const vectors = yield* native(() => index.size());
@@ -346,47 +481,7 @@ const owner = Effect.gen(function* () {
             Effect.withSpan("VectorIndex.searchControlled", { attributes: { k: command.k } }),
           );
         }),
-      "memory-search": (command) =>
-        Effect.gen(function* () {
-          const session = yield* Effect.fromOption(reader, () => fail("read-failed"));
-          if (command.controlToken === undefined || setup.ownerKey === undefined)
-            return yield* fail("invalid-input");
-          const beforeCpu = process.threadCpuUsage();
-          const result = yield* native(
-            () =>
-              session.search(
-                index,
-                Option.getOrNull(lexical),
-                command.input,
-                command.controlToken!,
-                setup.ownerKey!,
-                setup.epoch,
-                command.requestId,
-              ),
-            "read-failed",
-          ).pipe(Effect.withSpan("MemoryReadSession.search"));
-          if (result.kind === "read-failed") return yield* fail("read-failed");
-          const cpu = process.threadCpuUsage(beforeCpu);
-          return OwnerReply.cases["memory-result"].make({
-            workerCpuUs: cpu.user + cpu.system,
-            requestId: command.requestId,
-            epoch: setup.epoch,
-            result,
-          });
-        }),
-      "memory-coverage": (command) =>
-        Effect.gen(function* () {
-          const sqlite = yield* Effect.fromOption(counter, () => fail("read-failed"));
-          const coverage = yield* readCoverage(sqlite, command.input).pipe(
-            Effect.mapError((cause) => NativeOwnerFailed.make({ reason: "read-failed", cause })),
-            Effect.withSpan("NativeWorker.readCoverage"),
-          );
-          return OwnerReply.cases["coverage-result"].make({
-            requestId: command.requestId,
-            epoch: setup.epoch,
-            coverage,
-          });
-        }),
+      ...served,
       "lexical-apply": (command) =>
         Effect.gen(function* () {
           const index = yield* lexicalIndex;
@@ -450,7 +545,14 @@ const reported = (error: NativeOwnerFailed) =>
 const handlers = NativeOwnerRpcs.toLayer(
   Effect.gen(function* () {
     // A failed setup is kept and reported by Open, so the host learns why instead of an exit.
-    const opened = yield* Effect.exit(owner);
+    const opened = yield* Effect.exit(
+      Schema.decodeUnknownEffect(WorkerSetup)(workerData).pipe(
+        Effect.mapError(() => fail("invalid-input")),
+        Effect.flatMap((setup) =>
+          setup.kind === "reader" ? readerWorker(setup) : ownerWorker(setup),
+        ),
+      ),
+    );
     return NativeOwnerRpcs.of({
       Open: () =>
         opened.pipe(

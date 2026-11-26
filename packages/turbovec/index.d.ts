@@ -39,9 +39,23 @@ export declare class CacheLease {
  * Quantized inner-product index keyed by canonical u64 decimal strings.
  * Vectors must be L2-normalized by the caller.
  */
+/**
+ * The owner worker changes the index; reader workers of the same process search the same index
+ * through `attach` meanwhile. A change waits for the reads in progress; a read waits only for a
+ * change in progress.
+ */
 export declare class VectorIndex {
   constructor(dimensions: number, bits: number);
   static load(path: string): VectorIndex;
+  /**
+   * A read-only view of the index the owner shared under `key`: it sees every change the owner
+   * makes, and changing it throws. Throws when no open index was shared under `key`.
+   */
+  static attach(key: string): VectorIndex;
+  /** Lets reader workers of this process `attach` to this index under `key` while it is open. */
+  share(key: string): void;
+  /** Empties the index in place, so the readers attached to it see the empty one too. */
+  reset(dimensions: number, bits: number): void;
   add(vectors: Float32Array, ids: string[]): void;
   /** Omit `allowedIds` to search the whole index; an empty allowlist returns no results. */
   search(query: Float32Array, k: number, allowedIds?: string[]): SearchResult;
@@ -73,7 +87,10 @@ export declare class VectorIndex {
   bits(): number;
   size(): number;
   validateIds(ids: string[]): void;
-  /** Releases the index now rather than at GC; later calls throw. Idempotent. */
+  /**
+   * Releases this handle now rather than at GC; later calls throw. Idempotent. The index goes once
+   * the owner and every attached reader have closed.
+   */
   close(): void;
 }
 
@@ -169,6 +186,13 @@ export declare class LexicalIndex {
    * another layout; `reset` and `apply` on it throw.
    */
   static openReadOnly(dir: string): LexicalIndex;
+  /**
+   * A view of the index the owner shared under `key` that searches every commit the owner makes;
+   * `reset` and `apply` on it throw. Throws when no open index was shared under `key`.
+   */
+  static attach(key: string): LexicalIndex;
+  /** Lets reader workers of this process `attach` to this index under `key` while it is open. */
+  share(key: string): void;
   /** The build its last reset named; null for a new or replaced index. */
   instance(): string | null;
   /** Empties the index and names the new build. */
@@ -178,11 +202,14 @@ export declare class LexicalIndex {
   size(): number;
   /** The morph terms of a text, for tests and evaluations. */
   morphTerms(text: string): string[];
-  /** Releases the index and its writer lock now, after any running merge; later calls throw. Idempotent. */
+  /**
+   * Releases the index and its writer lock now, after any running merge; later calls throw.
+   * Idempotent. A reader's view releases only itself.
+   */
   close(): void;
 }
 
-/** Read-only SQLite session. Must be owned by the same worker as the borrowed index. */
+/** Read-only SQLite session, one per worker. The index it searches may be a reader's view. */
 export declare class MemoryReadSession {
   constructor(databasePath: string);
   close(): void;

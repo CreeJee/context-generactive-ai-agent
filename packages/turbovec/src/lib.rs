@@ -1,10 +1,14 @@
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
-use std::fs::File;
+use std::{
+    fs::File,
+    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
+};
 mod lexical;
 mod owners;
 mod read_session;
 mod search_control;
+mod shared;
 mod sqlite_bridge;
 pub use lexical::{LexicalApplied, LexicalDocument, LexicalIndex};
 pub use read_session::{MemoryReadSession, NativeReadInput, NativeReadOutput};
@@ -76,25 +80,53 @@ impl CacheLease {
     }
 }
 
-// Synchronous methods are called only inside the owning Node worker.
-#[napi]
-pub struct VectorIndex {
-    /// `None` after `close`: later calls fail instead of reaching the released index.
-    inner: Option<IdMapIndex>,
+/// The vectors and which node each belongs to, changed together under one lock so a read's
+/// allowlist always names vectors the index holds.
+pub(crate) struct Vectors {
+    pub(crate) index: IdMapIndex,
     /// The node and holder of each vector `attach_owners` found; reads build their allowlist here.
     pub(crate) owners: owners::Owners,
 }
 
+static SHARED: shared::Registry<RwLock<Vectors>> = shared::Registry::new();
+
+/// The owner worker changes the index; reader workers of the same process search it through
+/// `attach` at the same time. A change waits for the reads holding the lock, and a read waits only
+/// for a change in progress (docs/vector-index-design.md, step 3).
+#[napi]
+pub struct VectorIndex {
+    /// `None` after `close`: later calls fail instead of reaching the released index.
+    inner: Option<Arc<RwLock<Vectors>>>,
+    /// False for a reader's view: it searches the owner's index and never changes it.
+    writable: bool,
+}
+
 impl VectorIndex {
-    pub(crate) fn index(&self) -> Result<&IdMapIndex> {
+    fn owned(index: IdMapIndex) -> Self {
+        Self {
+            inner: Some(Arc::new(RwLock::new(Vectors {
+                index,
+                owners: owners::Owners::default(),
+            }))),
+            writable: true,
+        }
+    }
+    pub(crate) fn read(&self) -> Result<RwLockReadGuard<'_, Vectors>> {
         self.inner
             .as_ref()
-            .ok_or_else(|| js_error("Vector index is closed"))
+            .ok_or_else(|| js_error("Vector index is closed"))?
+            .read()
+            .map_err(|_| js_error("Vector index is unusable"))
     }
-    fn index_mut(&mut self) -> Result<&mut IdMapIndex> {
+    fn write(&self) -> Result<RwLockWriteGuard<'_, Vectors>> {
+        if !self.writable {
+            return Err(js_error("Vector index is shared to read only"));
+        }
         self.inner
-            .as_mut()
-            .ok_or_else(|| js_error("Vector index is closed"))
+            .as_ref()
+            .ok_or_else(|| js_error("Vector index is closed"))?
+            .write()
+            .map_err(|_| js_error("Vector index is unusable"))
     }
 }
 
@@ -102,18 +134,52 @@ impl VectorIndex {
 impl VectorIndex {
     #[napi(constructor)]
     pub fn new(dimensions: u32, bits: u32) -> Result<Self> {
+        Ok(Self::owned(
+            IdMapIndex::new(dimensions as usize, bits as usize).map_err(js_error)?,
+        ))
+    }
+    /// Lets reader workers of this process `attach` to this index by `key` while it is open.
+    #[napi]
+    pub fn share(&self, key: String) -> Result<()> {
+        if !self.writable {
+            return Err(js_error("Only the owner shares its index"));
+        }
+        let inner = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| js_error("Vector index is closed"))?;
+        SHARED.share(&key, inner).map_err(js_error)
+    }
+    /// A read-only view of the index the owner shared by `key`: searches see every change the
+    /// owner makes. Fails when the owner has not shared it or has closed it.
+    #[napi(factory)]
+    pub fn attach(key: String) -> Result<Self> {
         Ok(Self {
-            inner: Some(IdMapIndex::new(dimensions as usize, bits as usize).map_err(js_error)?),
-            owners: owners::Owners::default(),
+            inner: Some(
+                SHARED
+                    .find(&key)
+                    .ok_or_else(|| js_error("No shared vector index"))?,
+            ),
+            writable: false,
         })
     }
+    /// Empties the index in place, so the readers attached to it see the empty one too.
     #[napi]
-    pub fn add(&mut self, vectors: Float32Array, ids: Vec<String>) -> Result<()> {
+    pub fn reset(&self, dimensions: u32, bits: u32) -> Result<()> {
+        let index = IdMapIndex::new(dimensions as usize, bits as usize).map_err(js_error)?;
+        let mut vectors = self.write()?;
+        vectors.index = index;
+        vectors.owners = owners::Owners::default();
+        Ok(())
+    }
+    #[napi]
+    pub fn add(&self, vectors: Float32Array, ids: Vec<String>) -> Result<()> {
         let ids = ids
             .iter()
             .map(|id| parse_id(id))
             .collect::<Result<Vec<_>>>()?;
-        self.index_mut()?
+        self.write()?
+            .index
             .add_with_ids(&vectors, &ids)
             .map_err(js_error)
     }
@@ -125,7 +191,8 @@ impl VectorIndex {
         k: u32,
         allowed_ids: Option<Vec<String>>,
     ) -> Result<SearchResult> {
-        let index = self.index()?;
+        let vectors = self.read()?;
+        let index = &vectors.index;
         if Some(query.len()) != index.dim_opt() {
             return Err(js_error("Expected one query vector"));
         }
@@ -168,14 +235,14 @@ impl VectorIndex {
         request_id: String,
         allowed_ids: Option<Vec<String>>,
     ) -> ControlledSearchResult {
-        let Some(index) = self.inner.as_ref() else {
+        let Ok(vectors) = self.read() else {
             return search_control::outcome(
                 search_control::Outcome::IndexFailed,
                 std::time::Instant::now(),
             );
         };
         search_control::search(
-            index,
+            &vectors.index,
             query,
             k,
             token,
@@ -186,39 +253,39 @@ impl VectorIndex {
         )
     }
     #[napi]
-    pub fn remove(&mut self, id: String) -> Result<bool> {
+    pub fn remove(&self, id: String) -> Result<bool> {
         let id = parse_id(&id)?;
-        let removed = self.index_mut()?.remove(id);
-        self.owners.remove(id);
+        let mut vectors = self.write()?;
+        let removed = vectors.index.remove(id);
+        vectors.owners.remove(id);
         Ok(removed)
     }
     /// Reads from `session` the node and holder of `ids`, or of every vector when omitted, and
     /// keeps them for reads. A vector whose node the database does not have stays unowned: no read
-    /// finds it. Returns how many vectors the index now owns.
+    /// finds it. Returns how many vectors the index now owns. The database is read before the
+    /// lock is taken, so reads go on meanwhile.
     #[napi]
     pub fn attach_owners(
-        &mut self,
+        &self,
         session: ClassInstance<'_, MemoryReadSession>,
         ids: Option<Vec<String>>,
     ) -> Result<u32> {
-        let index = self.index()?;
         let ids = match ids {
             Some(ids) => ids
                 .iter()
                 .map(|id| parse_id(id))
                 .collect::<Result<Vec<_>>>()?,
-            None => index.iter_ids().collect(),
+            None => self.read()?.index.iter_ids().collect(),
         };
         let found = session.owners_of(&ids).map_err(js_error)?;
-        let index = self.index()?;
-        let present: Vec<_> = found
-            .into_iter()
-            .filter(|(id, _, _)| index.contains(*id))
-            .collect();
-        for (id, parent, holder) in present {
-            self.owners.insert(id, parent, holder);
+        let mut vectors = self.write()?;
+        // A vector removed while the database was read stays unowned.
+        for (id, parent, holder) in found {
+            if vectors.index.contains(id) {
+                vectors.owners.insert(id, parent, holder);
+            }
         }
-        Ok(self.owners.len() as u32)
+        Ok(vectors.owners.len() as u32)
     }
     /// Persists the index to `path` and returns how many milliseconds it took: the addon cannot
     /// reach the host's tracer. The first save to a path (and the first after `load` of a file
@@ -227,41 +294,41 @@ impl VectorIndex {
     /// checksummed commit header with one `fsync` (turbovec `IdMapIndex::sync`). A crash at any
     /// byte loads as the previous save. One writer per path: the caller holds `CacheLease`.
     #[napi]
-    pub fn save(&mut self, path: String) -> Result<f64> {
+    pub fn save(&self, path: String) -> Result<f64> {
         let started = std::time::Instant::now();
-        self.index_mut()?.sync(path).map_err(js_error)?;
+        self.write()?.index.sync(path).map_err(js_error)?;
         Ok(ms(started))
     }
     #[napi(factory)]
     pub fn load(path: String) -> Result<Self> {
-        Ok(Self {
-            inner: Some(IdMapIndex::load(path).map_err(js_error)?),
-            owners: owners::Owners::default(),
-        })
+        Ok(Self::owned(IdMapIndex::load(path).map_err(js_error)?))
     }
     #[napi]
     pub fn dimensions(&self) -> Result<u32> {
-        self.index()?
+        self.read()?
+            .index
             .dim_opt()
             .map(|dim| dim as u32)
             .ok_or_else(|| js_error("Index dimension is not initialized"))
     }
     #[napi]
     pub fn bits(&self) -> Result<u32> {
-        Ok(self.index()?.bit_width() as u32)
+        Ok(self.read()?.index.bit_width() as u32)
     }
     #[napi]
     pub fn size(&self) -> Result<u32> {
-        Ok(self.index()?.len() as u32)
+        Ok(self.read()?.index.len() as u32)
     }
-    /// Releases the index now rather than at garbage collection. Idempotent.
+    /// Releases this handle now rather than at garbage collection. Idempotent. The index itself
+    /// goes once the owner and every attached reader have closed.
     #[napi]
     pub fn close(&mut self) {
         self.inner.take();
     }
     #[napi]
     pub fn validate_ids(&self, ids: Vec<String>) -> Result<()> {
-        let index = self.index()?;
+        let vectors = self.read()?;
+        let index = &vectors.index;
         if ids.len() != index.len() {
             return Err(js_error("Vector snapshot mapping mismatch"));
         }

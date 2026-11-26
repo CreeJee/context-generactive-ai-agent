@@ -1,5 +1,6 @@
 import { withTestPlatform } from "../../../tests/support/platform.ts";
-import { Effect, FileSystem, Path } from "effect";
+import { gatedTransport } from "../../../tests/support/native-owner.ts";
+import { Deferred, Effect, Fiber, FileSystem, Path } from "effect";
 import { expect, it } from "vite-plus/test";
 import { makeNativeOwner, OwnerInspection } from "./client.ts";
 import { NativeOwnerFailed, OwnerCommand, OwnerReply } from "./worker-protocol.ts";
@@ -323,3 +324,83 @@ it(
     ),
   10_000,
 );
+
+it("reads beside a write the owner is still doing, from the index the owner wrote", () =>
+  Effect.runPromise(
+    Effect.scoped(
+      withTestPlatform(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const paths = yield* Path.Path;
+          const directory = yield* fs.makeTempDirectoryScoped({ prefix: "native-beside-" });
+          const databasePath = paths.join(directory, "fixture.sqlite");
+          yield* Effect.acquireRelease(createApplicationReadFixture(databasePath), (connection) =>
+            Effect.sync(() => connection.close()),
+          );
+          const saving = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const owner = yield* makeNativeOwner(
+            {
+              kind: "setup",
+              epoch: "beside",
+              dimensions: 384,
+              bits: 4,
+              cacheDirectory: paths.join(directory, "vector"),
+              databasePath,
+            },
+            new URL("./worker.ts", import.meta.url),
+            // The owner's save holds its worker until released; the readers pass straight on.
+            gatedTransport((command, transport) =>
+              OwnerCommand.guards.save(command)
+                ? Deferred.succeed(saving, undefined).pipe(
+                    Effect.andThen(Deferred.await(release)),
+                    Effect.andThen(transport.send(command)),
+                  )
+                : transport.send(command),
+            ),
+          );
+          const query = new Float32Array(384);
+          query[0] = 1;
+          yield* owner.execute(
+            OwnerCommand.cases.add.make({
+              epoch: owner.epoch,
+              requestId: "seed",
+              vectors: query,
+              ids: ["1"],
+            }),
+          );
+          const save = yield* Effect.forkScoped(
+            owner.execute(OwnerCommand.cases.save.make({ epoch: owner.epoch, requestId: "save" })),
+          );
+          yield* Deferred.await(saving);
+          const reply = yield* owner.execute(
+            OwnerCommand.cases["memory-search"].make({
+              epoch: owner.epoch,
+              requestId: "read",
+              input: {
+                allowedProjects: ["allowed"],
+                embedder: "fixture",
+                query,
+                trigramTerms: [],
+                shortTerms: [],
+                morphQuery: "",
+                vectorK: 1,
+                textK: 1,
+                morphK: 1,
+                textEnabled: false,
+                morphEnabled: false,
+                remainingMs: 2_000,
+                inputBudgetBytes: 1_048_576,
+                outputBudgetBytes: 1_048_576,
+              },
+            }),
+          );
+          // The save has not answered: the read ran beside it, over the vector the owner added.
+          expect(yield* Deferred.isDone(release)).toBe(false);
+          expect(reply).toMatchObject({ result: { kind: "success", vectorIds: ["alpha"] } });
+          yield* Deferred.succeed(release, undefined);
+          expect(yield* Fiber.join(save)).toMatchObject({ _tag: "ack", size: 1 });
+        }),
+      ),
+    ).pipe(Effect.timeout("20 seconds")),
+  ));

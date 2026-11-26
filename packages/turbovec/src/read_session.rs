@@ -407,7 +407,7 @@ impl MemoryReadSession {
             }
         };
         out.queue_ms = cell.since_registered().as_secs_f64() * 1000.;
-        let Ok(inner) = index.index() else {
+        let Ok(dimensions) = index.read().map(|vectors| vectors.index.dim_opt()) else {
             out.kind = Outcome::IndexFailed.tag().into();
             return out;
         };
@@ -435,7 +435,7 @@ impl MemoryReadSession {
             || input.input_budget_bytes as usize > MAX_BYTES
             || input.output_budget_bytes as usize > MAX_BYTES
             || input.query.as_ref().is_some_and(|q| {
-                Some(q.len()) != inner.dim_opt()
+                Some(q.len()) != dimensions
                     || q.iter().any(|x| !x.is_finite() || x.abs() >= 1e16)
                     || input.vector_k == 0
             })
@@ -533,6 +533,10 @@ impl MemoryReadSession {
                     .map(Value::Text)
                     .collect::<Vec<_>>()
             };
+            // Held through the vector stage, so the allowlist names only vectors the index holds.
+            // The owner's changes wait for it; the text stages below run without it.
+            let vectors = index.read().map_err(|_| Outcome::IndexFailed)?;
+            let inner = &vectors.index;
             // The allowlist comes from the index's own owners: the vectors of the allowed
             // projects' conversations and of their nodes outside a conversation, before
             // `before_seq`. What is stale there (a vector not committed yet, waiting to be
@@ -540,7 +544,9 @@ impl MemoryReadSession {
             // this snapshot below, so the cost here follows the allowed vectors, not every node.
             let mut allowed = Vec::new();
             let mut parents: HashMap<u64, u64> = HashMap::new();
-            if input.query.is_some() && !input.allowed_projects.is_empty() && index.owners.len() > 0
+            if input.query.is_some()
+                && !input.allowed_projects.is_empty()
+                && vectors.owners.len() > 0
             {
                 let mut holders: Vec<Holder> = input
                     .allowed_projects
@@ -562,7 +568,7 @@ impl MemoryReadSession {
                 }
                 let before = input.before_seq.map(|seq| seq as u64);
                 for holder in &holders {
-                    let Some(group) = index.owners.group(holder) else {
+                    let Some(group) = vectors.owners.group(holder) else {
                         continue;
                     };
                     check()?;
@@ -675,6 +681,7 @@ impl MemoryReadSession {
                     }
                 }
             }
+            drop(vectors);
             out.vector_ms = ms(vector_started) - checking_ms;
             out.mapping_ms = checking_ms;
             running = (Stage::Text, Instant::now());

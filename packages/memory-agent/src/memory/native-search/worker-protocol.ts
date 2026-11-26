@@ -31,6 +31,28 @@ export const OwnerSetup = Schema.Struct({
 });
 export type OwnerSetup = typeof OwnerSetup.Type;
 
+/**
+ * A worker that only reads: it searches the owner's vector and lexical indexes in place, in the
+ * same process, so reads run beside the owner's writes and beside each other
+ * (docs/vector-index-design.md, step 3). It takes only `memory-search` and `memory-coverage`.
+ */
+export const ReaderSetup = Schema.Struct({
+  kind: Schema.Literal("reader"),
+  epoch: Schema.String,
+  dimensions: Schema.Int,
+  /** The owner's private binding, under which it shared its indexes. */
+  ownerKey: Schema.String,
+  /** Host-owned, trusted file path; never supplied by a search request. */
+  databasePath: Schema.String,
+  /** Whether the owner keeps a lexical index to search. */
+  lexical: Schema.Boolean,
+});
+export type ReaderSetup = typeof ReaderSetup.Type;
+
+/** What a native worker starts as: the owner of the indexes, or a reader beside it. */
+export const WorkerSetup = Schema.Union([OwnerSetup, ReaderSetup]);
+export type WorkerSetup = typeof WorkerSetup.Type;
+
 /** A node as the lexical index holds it: its text, searched in its project. */
 export const LexicalDocument = Schema.Struct({
   seq: Schema.Int,
